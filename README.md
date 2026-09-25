@@ -138,26 +138,26 @@ docker build --build-arg GOPROXY=https://goproxy.cn,direct -t cairn:dev .
 
 ### 构建期通用 HTTP 代理（跟 GOPROXY 正交）
 
-如果公司有内网 squid，构建机**直连外网受限**（不只是 Go module，go / curl / git / apt 都不通），可以给 builder stage 配 HTTP 代理。`Dockerfile` 透传 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` build-arg：
+如果构建机**直连外网受限**（不只是 Go module，go / curl / git / apt 都不通），但内网有可用的 HTTP 代理（如 `proxy.example.com:7890`），可以给 builder stage 配 HTTP 代理。`Dockerfile` 透传 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` build-arg：
 
 ```bash
 # docker build 直接覆盖
 docker build \
-  --build-arg HTTP_PROXY=http://proxy.example.com:4433 \
-  --build-arg HTTPS_PROXY=http://proxy.example.com:4433 \
+  --build-arg HTTP_PROXY=http://proxy.example.com:7890 \
+  --build-arg HTTPS_PROXY=http://proxy.example.com:7890 \
   --build-arg NO_PROXY=localhost,127.0.0.1,.local \
   -t cairn:dev .
 
 # docker compose:在 .env 里设 BUILD_HTTP_PROXY 等(避免跟运行时 REGISTRY_PROXY 混淆)
 cat >> .env <<'EOF'
-BUILD_HTTP_PROXY=http://proxy.example.com:4433
-BUILD_HTTPS_PROXY=http://proxy.example.com:4433
+BUILD_HTTP_PROXY=http://proxy.example.com:7890
+BUILD_HTTPS_PROXY=http://proxy.example.com:7890
 BUILD_NO_PROXY=localhost,127.0.0.1,.local
 EOF
 docker compose build --no-cache
 ```
 
-**跟 GOPROXY 的关系**：GOPROXY 控制 Go module 协议本身（决定去哪个 module proxy 拉），HTTP_PROXY 控制底层 HTTP 客户端出口。两者独立可叠加 — 内网 squid 环境下一般两个都要配（Go module 协议层 + 实际网络层）。
+**跟 GOPROXY 的关系**：GOPROXY 控制 Go module 协议本身（决定去哪个 module proxy 拉），HTTP_PROXY 控制底层 HTTP 客户端出口。两者独立可叠加 — 内网代理环境下一般两个都要配（Go module 协议层 + 实际网络层）。
 
 **留空 = 不设代理**：默认行为跟之前完全一致，普通 build 不需要任何额外配置。
 
@@ -166,9 +166,12 @@ docker compose build --no-cache
 ```bash
 cp .env.example .env       # 填好 REGISTRY_URL + REGISTRY_CREDENTIAL_KEY
                            # 受限网络:把 GOPROXY 改成 https://goproxy.cn,direct
-                           # 内网 squid:把 BUILD_HTTP_PROXY/HTTPS_PROXY 设成公司代理
+                           # 内网代理:把 BUILD_HTTP_PROXY/HTTPS_PROXY 设成 http://proxy.example.com:7890
+                           # 访问端口:改 HOST_PORT(示例 80 = http://<宿主机>:80;不设回退 8787)
 docker compose up -d --build
 ```
+
+启动后浏览器访问 `http://<宿主机>:<HOST_PORT>`（容器内固定监听 8787，`HOST_PORT` 只决定宿主机侧的映射端口）。
 
 `.env` 字段含义与 registry-manager 保持一致，方便复用。
 

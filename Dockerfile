@@ -15,8 +15,8 @@
 #
 # 通用 HTTP/HTTPS 代理：跟 GOPROXY 正交,影响 builder stage 内所有网络出口
 # (go / curl / git / apt 等)。默认空 = 不用代理。
-#   docker build --build-arg HTTP_PROXY=http://proxy.example.com:4433 \
-#                --build-arg HTTPS_PROXY=http://proxy.example.com:4433 \
+#   docker build --build-arg HTTP_PROXY=http://proxy.example.com:7890 \
+#                --build-arg HTTPS_PROXY=http://proxy.example.com:7890 \
 #                --build-arg NO_PROXY=localhost,127.0.0.1,.local .
 ARG GO_IMAGE=golang:1.26-alpine
 ARG GOPROXY=https://proxy.golang.org,direct
