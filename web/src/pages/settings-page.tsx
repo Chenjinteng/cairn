@@ -378,11 +378,12 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
           <Form.Item
             label={
               <span>
-                默认上游地址{' '}
-                <SourceTag source={config?.mutable.registryUrlSource} />
+                仓库地址（/前缀）
+                {/* v0.5.9: SourceTag dropped in Stage C — every
+                    field is single-sourced from the panel now. */}
               </span>
             }
-            extra="留空则使用 Docker Hub（pull.DefaultUpstream）。变更对下一个入队的拉取任务立即生效。"
+            extra="配置本仓库对外暴露的地址（docker login / docker push 用）。示例：http://registry.example.com:8787 或 https://devhub..io；写哪个客户端就连哪个，无需重启。"
           >
             <Space.Compact style={{ width: '100%', maxWidth: 560 }}>
               <Input
