@@ -1,0 +1,34 @@
+# Binaries
+/cairn
+/cairn-*
+/cmd/server/server
+*.exe
+*.test
+*.out
+
+# Go workspace
+go.work
+go.work.sum
+
+# Build artifacts
+/dist
+/tmp/
+
+# Env (matches registry-manager convention: never commit secrets)
+/.env
+.env.local
+.env.*.local
+
+# Local config (mirrors registry.config.json convention from registry-manager)
+/registry.config.json
+
+# Frontend (until we wire it in)
+/web/node_modules/
+/web/dist/
+/web/.vite/
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
