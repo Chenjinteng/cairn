@@ -28,6 +28,7 @@
 package events
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -376,56 +377,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if ev.ID == "" {
 			continue
 		}
-		dec := ShouldCount(ev, ignore)
-		self := IsSelfUserAgent(ev.Request.UserAgent)
-
-		h.recordClient(ev.Request.UserAgent, now, dec.Count, self)
-
-		recent := RecentEvent{
-			At:         now,
-			EventAt:    ev.Timestamp.UTC(),
-			ID:         ev.ID,
-			Action:     ev.Action,
-			Method:     ev.Request.Method,
-			MediaType:  ev.Target.MediaType,
-			Repository: ev.Target.Repository,
-			Tag:        ev.Target.Tag,
-			UserAgent:  ev.Request.UserAgent,
-			Addr:       ev.Request.RemoteAddr,
-			Host:       ev.Request.Host,
-			Actor:      ev.Actor.Name,
-			Reason:     dec.Reason,
-			Counted:    dec.Count,
+		if h.processOne(r.Context(), ev, now, ignore) {
+			processed++
 		}
-
-		switch {
-		case dec.Count:
-			// Counted events always enter the ring — including self PUTs,
-			// so "why did heat change" stays answerable.
-			h.accepted.Add(1)
-			h.appendRecent(recent)
-		case dec.Ignored:
-			h.ignoredFold.Add(1) // folded; keeps the ring free for new clients
-		case self:
-			h.selfFolded.Add(1) // self reads (rescans): pure noise, folded
-		default:
-			h.rejected.Add(1)
-			h.appendRecent(recent)
-		}
-
-		if !dec.Count {
-			continue
-		}
-		// No event_seen dedup in v0.4.0: a replayed event.id bumps the
-		// count again. Accepted bias (see package doc).
-		day := ev.Timestamp.UTC().Format("2006-01-02")
-		if h.Store != nil {
-			if err := h.Store.ActivityIncrement(r.Context(), day, dec.Repository, dec.Tag, dec.Action, 1, dec.Bytes); err != nil {
-				slog.Error("activity increment failed", "err", err, "event_id", ev.ID)
-				continue
-			}
-		}
-		processed++
 	}
 	h.writeOK(w, http.StatusAccepted, map[string]any{
 		"received":  len(arr),
@@ -474,6 +428,70 @@ func (h *Handler) RecentEvents() []RecentEvent {
 		out[len(h.recent)-1-i] = ev
 	}
 	return out
+}
+
+// processOne runs the per-event pipeline (ShouldCount → recordClient →
+// ring → ActivityIncrement). Returns true iff the event was counted
+// (heat + ring). Extracted from ServeHTTP in v0.5.8 so registryd can
+// push in-process events through the exact same code path as the
+// webhook (no duplicated filter rules).
+//
+// ctx is the request context from the webhook call (or
+// context.Background from IngestLocal). ignore is a snapshot of the
+// live ignore list taken once at batch start — processOne must NOT
+// re-read h.currentIgnore() so a UA toggle mid-batch behaves the same
+// as in v0.4.x..v0.5.7.
+func (h *Handler) processOne(ctx context.Context, ev Event, now time.Time, ignore []string) bool {
+	dec := ShouldCount(ev, ignore)
+	self := IsSelfUserAgent(ev.Request.UserAgent)
+
+	h.recordClient(ev.Request.UserAgent, now, dec.Count, self)
+
+	recent := RecentEvent{
+		At:         now,
+		EventAt:    ev.Timestamp.UTC(),
+		ID:         ev.ID,
+		Action:     ev.Action,
+		Method:     ev.Request.Method,
+		MediaType:  ev.Target.MediaType,
+		Repository: ev.Target.Repository,
+		Tag:        ev.Target.Tag,
+		UserAgent:  ev.Request.UserAgent,
+		Addr:       ev.Request.RemoteAddr,
+		Host:       ev.Request.Host,
+		Actor:      ev.Actor.Name,
+		Reason:     dec.Reason,
+		Counted:    dec.Count,
+	}
+
+	switch {
+	case dec.Count:
+		// Counted events always enter the ring — including self PUTs,
+		// so "why did heat change" stays answerable.
+		h.accepted.Add(1)
+		h.appendRecent(recent)
+	case dec.Ignored:
+		h.ignoredFold.Add(1) // folded; keeps the ring free for new clients
+	case self:
+		h.selfFolded.Add(1) // self reads (rescans): pure noise, folded
+	default:
+		h.rejected.Add(1)
+		h.appendRecent(recent)
+	}
+
+	if !dec.Count {
+		return false
+	}
+	// No event_seen dedup in v0.4.0: a replayed event.id bumps the
+	// count again. Accepted bias (see package doc).
+	day := ev.Timestamp.UTC().Format("2006-01-02")
+	if h.Store != nil {
+		if err := h.Store.ActivityIncrement(ctx, day, dec.Repository, dec.Tag, dec.Action, 1, dec.Bytes); err != nil {
+			slog.Error("activity increment failed", "err", err, "event_id", ev.ID)
+			return false
+		}
+	}
+	return true
 }
 
 // SnapshotTotals returns the lifetime counters plus current ring occupancy.
@@ -538,4 +556,38 @@ func (h *Handler) writeOK(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+// IngestLocal feeds an in-process event (built by registryd for an
+// observed /v2/ operation) into the same pipeline as the webhook.
+// Returns true iff the event was counted (heat + ring).
+//
+// v0.5.8: registryd is the source of truth for what the user did
+// against the built-in registry. Pushing through processOne instead
+// of recording directly keeps the ShouldCount filter, the self-fold
+// behaviour, the ignore-rule folding and the recent-events ring
+// unified across built-in and external registries.
+//
+// Safe to call on a nil handler (no-op returns false); safe to call
+// when allow.registry_events=false (kill switch honoured at ingest
+// time, not just at handler-construction time). Safe on a webhook
+// event with the same shape (used by tests).
+//
+// ev.ID and ev.Timestamp are auto-filled if empty — the built-in
+// registry doesn't observe Distribution's request ID, so we synthesise
+// one. UA, method, media type, actor are caller responsibility.
+func (h *Handler) IngestLocal(ev Event) bool {
+	if h == nil {
+		return false
+	}
+	if !h.isEnabled() {
+		return false
+	}
+	if ev.ID == "" {
+		ev.ID = fmt.Sprintf("local-%d", time.Now().UTC().UnixNano())
+	}
+	if ev.Timestamp.IsZero() {
+		ev.Timestamp = time.Now().UTC()
+	}
+	return h.processOne(context.Background(), ev, time.Now().UTC(), h.currentIgnore())
 }

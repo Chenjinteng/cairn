@@ -6,6 +6,48 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.8] - 2026-09-26
+
+本轮主题：**热度开箱即用**。v0.5.7 之前，热度统计依赖「事件共享密钥 + 外部 registry 的 notifications webhook」——自带 registry 的一次 push/pull 不会进入热度表，运维要么搭一套 Distribution 自己接 webhook，要么看不到数据。本轮把热度链路从「可选外部 webhook」改成「自带 registry 就地喂事件 + 外部 registry webhook 仍可选」两轨并行：默认就有数据，外接依然能接。
+
+### 新增
+
+- **`internal/events.Handler.IngestLocal(ev)`**：内置 registry 在 `/v2/<repo>/manifests/<ref>` HEAD/PUT 成功后构造一个 `Event`，通过这个方法把热度直接喂进与 webhook 完全相同的 `processOne` 管线。复用 `ShouldCount` 过滤（白名单 manifest 媒体类型、HEAD/PUT 才计数、UA 忽略规则、self-fold 语义）—— 一处过滤规则，两个入口。返回 `bool`：true = 已计入（accepted+1 + SQLite + 最近事件环），false = 被过滤或 kill switch 关闭。
+- **服务端：`eventsHandler` 现在只看 SQLite 是否就绪就构造**，不再要求 `REGISTRY_NOTIFY_TOKEN` 非空。`/api/events` 在 token 空时仍然挂载（fail-closed 401），行为与 v0.5.4 一致；自带的 `/v2/*` 不再走 webhook 绕一圈。
+- **`internal/events/internal/events/local_test.go`（新文件，7 个测试）**：`CountsPull` / `RespectsKillSwitch` / `NilHandler`（nil `*Handler` 不 panic）/ `IgnoreRuleFolds` / `SelfPushCounted`（自写 PUT 仍计）/ `WrongMethodRejected`（GET 不计）/ `NewHandler_EmptyIgnore` 构造健壮性。
+- **`internal/registryd.Handler.Events *events.Handler`** 字段 + `New(store, getCreds, eventsH)` 第三参数；`localEvent(repo, tag, mediaType, action, method, r)` helper 把 `r.UserAgent()`、`r.Host`、`r.RemoteAddr`、`X-Auth-User` 头映射到 `Event` 的对应字段。
+
+### 变更
+
+- `internal/events/events.go` 把 ServeHTTP 里的 per-event 循环抽成 `processOne(ctx, ev, now, ignore) bool`；webhook 和 `IngestLocal` 都走这个 helper，杜绝规则双份维护。
+- `internal/server/server.go` 第 7 步构造门槛注释更新为 v0.5.8 语义（SQLite 即可、token 空时 fail-closed）。
+- 前端 **设置页删除「接收 registry events」开关**：自带的 registry 现在永远是热的，UI 上的开关对用户没有意义。`allow.registry_events` env + DB 列保留为隐藏的全局 kill switch（默认 true，运行时生效）；服务器层不变，UI 层不暴露。
+- 前端 **统计页文案重写**：
+  - 「还没配置事件共享密钥」警告分支**移除**——token 现在不是默认路径，少了它属于「你想接外部 registry 还没接」而不是「自带的也算不出」。
+  - 「还没收到任何热度事件」info 分支改为「自带 registry 已经自动计入；如果你想让外部 registry 也算进来，再去配 `REGISTRY_NOTIFY_TOKEN`」。
+  - 「registry 侧需要这样配」面板标题改为「外部 registry 需要这样配（可选）」；Collapse 标签同步收紧。
+  - `NOTIFY_CONFIG_YAML` 上方加一行注释：this snippet is for EXTERNAL registries。
+- `internal/api/api_test.go` 两处 `registryd.New(store, nil)` → `registryd.New(store, nil, nil)`（新签名第三个参数是 events handler，测试不关心传 nil）。
+
+### 修复
+
+- 没有功能修复；本轮纯补全既有热度功能。
+
+### 文档
+
+- `.env.example`「镜像热度」块改写：明确写「自带 registry 不需要任何配置；下面这些只对外部 registry 生效」，并把每个变量的当前角色逐条注释。
+- `README.md` 当前状态 / 版本号 → 0.5.8。
+- CHANGELOG（本文）。
+
+### 影响 / 升级
+
+- **0.5.7 → 0.5.8 数据无破坏**。SQLite schema 没动、`activity_daily` 表结构没动、in-memory 计数器本就是重启归零。
+- 升级后**立即生效**：第一次有人对自带 registry 做一次 `HEAD /v2/<repo>/manifests/<tag>` 或 push 一层，Top 榜单就会出数据，不需要重启、刷新、或重新配 webhook。
+- 如果你之前配置了 `REGISTRY_NOTIFY_TOKEN` + 外部 Distribution 的 notifications：仍然有效，新版本是两轨并行而非替换，外部 webhook 进 `/api/events`，自带 registry 走 `IngestLocal`，最终都会进同一个 SQLite 表。
+- 如果你想接的「外部 registry」其实是另一个 cairn 实例：那条 `notifications.url` 仍然走 `POST /api/events`，共享密钥照旧；自带这一侧的 `/v2/*` 流量还会通过本实例的 `IngestLocal` 自己计一次（这是对的：另一台实例通过 `/v2/*` 拉取镜像时，事件应当算到"镜像存放方"，不是"镜像来源方"，如果想反着算就在那个实例上关 `allow.registry_events`）。
+
+---
+
 ## [0.6.0] - 2026-09-26
 
 本轮主题：**多架构镜像拉取按平台白名单过滤**。v0.5.x 之前，拉一个多架构 index（比如 `nginx:alpine`、`clickhouse/server`、`alpine`）会把上游全部 ~10 个平台的子 manifest 都拉下来——单架构/双架构部署因此吃下大量用不到的层。本轮新增一个全局开关，配置后只下载目标平台的子 manifest 与它们独有的 blob。

@@ -144,16 +144,24 @@ func Build(cfg *config.Config) (*Runtime, error) {
 	}
 	executor := pull.NewExecutor(cfg.PullQueueSize, orchestrator.RunOne)
 
-	// 7. Events handler (webhook receiver for registry notifications).
+	// 7. Events handler (webhook receiver for registry notifications + the
+	// sink for built-in registry self-reports).
 	//
-	// v0.5.4: the handler is built whenever the real prerequisites exist
-	// (SQLite + notify token). allow.registry_events is no longer a
-	// BUILD-time condition but a live predicate installed via SetEnabled,
-	// so flipping it on the settings page starts/stops ingestion without a
-	// restart. Before this, a false env flag meant the route was never
-	// mounted at all and the runtime override could not switch it back on.
+	// v0.5.8: construction no longer requires NotifyToken. The handler is
+	// built whenever SQLite is up; the built-in registry feeds it
+	// directly via registryd.Handler.Events.IngestLocal, no shared secret
+	// required. NotifyToken, when empty, simply makes /api/events reject
+	// every POST (VerifySignature("", ...) = false → 401 fail-closed) —
+	// which matches the existing settings-page wording for operators who
+	// haven't wired an external registry.
+	//
+	// allow.registry_events is still a live predicate via SetEnabled, so
+	// flipping it on the settings page stops/starts ingestion without a
+	// restart (kill switch, env or panel; the panel toggle was removed
+	// in v0.5.8 but the underlying state survives in SQLite for an escape
+	// hatch).
 	var eventsHandler *events.Handler
-	if store_db != nil && cfg.NotifyToken != "" {
+	if store_db != nil {
 		// effective ignore = env ∪ panel (panel rules persist in SQLite and
 		// are merged in at startup so they survive restarts).
 		ignore := cfg.StatsIgnoreUserAgents
@@ -199,7 +207,7 @@ func Build(cfg *config.Config) (*Runtime, error) {
 	// apiMux is a *chi.Mux (http.Handler that satisfies chi.Router); mount
 	// the registryd sub-router under /v2/*.
 	chiRouter := apiMux.(chi.Router)
-	chiRouter.Mount("/v2", registryd.New(store, func() (string, string) { return cfg.EffectiveRegistryUsername(), cfg.EffectiveRegistryPassword() }))
+	chiRouter.Mount("/v2", registryd.New(store, func() (string, string) { return cfg.EffectiveRegistryUsername(), cfg.EffectiveRegistryPassword() }, eventsHandler))
 	mux := apiMux.(http.Handler)
 
 	srv := &http.Server{

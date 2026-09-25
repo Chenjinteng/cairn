@@ -134,8 +134,8 @@ type MutableSettings struct {
 	// tokens otherwise (e.g. "linux/amd64,linux/arm64"). UI renders
 	// this as a chip multi-select so operators can flip their deployment
 	// from "all architectures" to "just x86+arm64" without restarting.
-	PullPlatforms      string `json:"pullPlatforms"`
-	PullPlatformsSrc   string `json:"pullPlatformsSource"`
+	PullPlatforms    string `json:"pullPlatforms"`
+	PullPlatformsSrc string `json:"pullPlatformsSource"`
 }
 
 // GetConfig returns the safe-to-expose runtime configuration.

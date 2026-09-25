@@ -80,6 +80,9 @@ const BY_OPTIONS: { label: string; value: StatsTopBy }[] = [
  * registry 侧的通知配置片段。刻意放在前端硬编码：
  * 它是 Distribution 的配置格式，不是本服务的接口契约，从后端取反而会把两件事耦合起来。
  */
+// v0.5.8: this snippet is for EXTERNAL registries (Docker Distribution,
+// Harbor, etc.) that want to feed events here. The built-in registry
+// bundled with cairn already auto-feeds without any of this.
 const NOTIFY_CONFIG_YAML = `notifications:
   endpoints:
     - name: registry-manager
@@ -536,7 +539,7 @@ export default function StatsPage({ config, onConfigChange }: Props) {
           description={notice.description}
         />
         <div className="panel" style={{ padding: 16 }}>
-          <h3 className="stats-panel-title">registry 侧需要这样配</h3>
+          <h3 className="stats-panel-title">外部 registry 需要这样配（可选）</h3>
           <NotifyConfigSnippet />
         </div>
       </div>
@@ -611,7 +614,7 @@ export default function StatsPage({ config, onConfigChange }: Props) {
                 items={[
                   {
                     key: 'notify-config',
-                    label: '怀疑 registry 没配 notifications？查看配置片段',
+                    label: '要让外部 registry 也算进热度？查看配置片段',
                     children: <NotifyConfigSnippet />,
                   },
                 ]}
@@ -843,39 +846,24 @@ function statsNotice(config: AppConfig): {
     };
   }
 
-  if (!config.notifyTokenConfigured) {
-    return {
-      type: 'warning',
-      message: '还没配置事件共享密钥（REGISTRY_NOTIFY_TOKEN）',
-      description: (
-        <div>
-          <div>
-            没有密钥时服务端会拒绝<strong>全部</strong>事件（HTTP 401）—— 这是刻意的安全默认值，
-            因为事件接口只能靠共享密钥鉴权。所以「事件到了但一条都没算」通常是这个原因。
-          </div>
-          <div style={{ marginTop: 4, color: 'var(--color-text-3)' }}>
-            在服务端设置 <span className="mono">REGISTRY_NOTIFY_TOKEN</span>，并在 registry 的
-            notifications 里填<strong>同一个值</strong>，重启两边后开始统计。
-          </div>
-        </div>
-      ),
-    };
-  }
-
   return {
     type: 'info',
     message: '还没收到任何热度事件',
     description: (
       <div>
         <div>
-          事件接收的三个前提都满足了（开关打开、密钥已配、统计库可用），但一条事件都没进来。
-          可能是 registry 还没配 notifications，也可能最近确实没有人 push / pull ——
-          这两种情况在界面上完全一样，不要据此断定用户配错了。
+          自带的 registry 已经会自动计入 push / pull，不需要任何额外配置。
+          这里一条事件都没有，最可能的是最近真的没人 push / pull ——
+          不要据此断定用户配错了。
         </div>
         <div style={{ marginTop: 4, color: 'var(--color-text-3)' }}>
           {config.statsSince
             ? `服务端最早的数据是 ${config.statsSince}，可能不在当前时间窗内，可以切到 90 天看看。`
-            : '排查顺序：确认 registry 已重启并加载了下面的配置 → 随便拉一个镜像 → 回本页点「刷新」。'}
+            : '排查顺序：随便 push / pull 一个镜像 → 回本页点「刷新」。'}
+          {' '}
+          如果你想让<strong>外部</strong> registry（Docker Distribution /
+          Harbor 等）也算进来，再去 <span className="mono">REGISTRY_NOTIFY_TOKEN</span> 处配
+          <span className="mono">共享密钥</span>，并把下面的配置片段塞到外部 registry 的 config.yml。
         </div>
       </div>
     ),

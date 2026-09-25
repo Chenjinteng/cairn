@@ -69,7 +69,6 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
   const [registryNameDraft, setRegistryNameDraft] = useState<string>('');
   const [allowDeleteDraft, setAllowDeleteDraft] = useState<boolean>(true);
   const [allowPullDraft, setAllowPullDraft] = useState<boolean>(true);
-  const [allowRegistryEventsDraft, setAllowRegistryEventsDraft] = useState<boolean>(true);
   const [statsRetentionDraft, setStatsRetentionDraft] = useState<number>(365);
   // v0.6.0: platform allow-list applied to multi-arch image indexes on
   // pull. Empty array = "pull every platform" (preserves pre-v0.6.0
@@ -125,7 +124,6 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
     setRegistryNameDraft(m.registryName ?? '');
     setAllowDeleteDraft(m.allowDelete ?? false);
     setAllowPullDraft(m.allowPull ?? false);
-    setAllowRegistryEventsDraft(m.allowRegistryEvents ?? false);
     setStatsRetentionDraft(m.statsRetentionDays ?? 365);
     // v0.6.0: server stores CSV under mutable.pullPlatforms; split it back
     // into the UI's array form. Empty CSV → empty array ("all platforms").
@@ -186,9 +184,9 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
     if (allowPullDraft !== (m.allowPull ?? false)) {
       patch['allow.pull'] = allowPullDraft ? 'true' : 'false';
     }
-    if (allowRegistryEventsDraft !== (m.allowRegistryEvents ?? false)) {
-      patch['allow.registry_events'] = allowRegistryEventsDraft ? 'true' : 'false';
-    }
+    // v0.5.8: registry events switch removed. The built-in registry
+    // auto-feeds the heat aggregator; allow.registry_events survives
+    // as a hidden env-only kill switch (MutableKeys unchanged).
     if (statsRetentionDraft !== (m.statsRetentionDays ?? 365)) {
       patch['stats.retention.days'] = String(statsRetentionDraft);
     }
@@ -473,18 +471,6 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
             <Switch
               checked={allowPullDraft}
               onChange={setAllowPullDraft}
-              checkedChildren="启用"
-              unCheckedChildren="禁用"
-            />
-          </Form.Item>
-
-          <Form.Item
-            label={<span>接收 registry events <SourceTag source={config?.mutable.allowRegistryEventsSource} /></span>}
-            extra="关闭后 /api/events 直接 403；webhook 仍然配置但不会生效"
-          >
-            <Switch
-              checked={allowRegistryEventsDraft}
-              onChange={setAllowRegistryEventsDraft}
               checkedChildren="启用"
               unCheckedChildren="禁用"
             />

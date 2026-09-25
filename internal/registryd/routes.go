@@ -47,6 +47,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"cairn/internal/events"
 	"cairn/internal/storage"
 )
 
@@ -60,6 +61,14 @@ type Handler struct {
 	Store    storage.Storage
 	getCreds basicAuthCreds // nil == auth disabled
 	realm    string         // WWW-Authenticate realm; defaults to "cairn"
+
+	// Events (v0.5.8) is the in-process heat-aggregator. Nil-safe:
+	// every code path checks h.Events != nil before calling, so a
+	// zero-value Handler is still usable for tests that don't care
+	// about heat. Wire it in server.go from cfg → events.NewHandler
+	// so /v2/* operations are observed exactly once and don't need
+	// a separate webhook round-trip.
+	Events *events.Handler
 }
 
 // New returns a chi router pre-configured with the V2 protocol routes.
@@ -69,8 +78,17 @@ type Handler struct {
 // (registry.username / registry.password via PATCH /api/config) take
 // effect immediately without restarting the server. Pass nil to
 // disable authentication entirely (the v0.4.0 default).
-func New(store storage.Storage, getCreds basicAuthCreds) http.Handler {
-	h := &Handler{Store: store, getCreds: getCreds, realm: "cairn"}
+//
+// eventsH (v0.5.8) is the heat-aggregator the built-in registry feeds
+// on successful manifest HEAD (pull) and PUT (push). Pass nil to
+// disable local heat counting (tests + the rare case where the
+// aggregator should be wired later via direct field assignment).
+//
+// Wiring (server.go) is: events.NewHandler(...) → eventsH → New(...).
+// External registries still POST to /api/events as before; the built-in
+// registry now self-reports and skips the round-trip.
+func New(store storage.Storage, getCreds basicAuthCreds, eventsH *events.Handler) http.Handler {
+	h := &Handler{Store: store, getCreds: getCreds, realm: "cairn", Events: eventsH}
 	r := chi.NewRouter()
 
 	// /v2/ is the protocol "ping" endpoint. The OCI spec lets it 200 even
@@ -200,6 +218,38 @@ func (h *Handler) tagsList(w http.ResponseWriter, r *http.Request) {
 
 // --- /v2/<repo>/manifests/<ref> --------------------------------------------
 
+// localEvent builds an events.Event from an observed /v2/ operation.
+// Returns nil if there's nothing meaningful to record (no manifest,
+// non-manifest media type, etc.) — caller treats nil as "skip".
+//
+// tag may be empty when the caller resolved a digest (PUT-by-digest,
+// re-tag). That matches Distribution semantics: tag is the human-facing
+// name and a digest-only operation simply doesn't have one. ShouldCount
+// handles "" tag gracefully (it groups the row under the repo only).
+//
+// method should be the HTTP verb that triggered this observation;
+// action is "pull" or "push" (registry-manager naming).
+func (h *Handler) localEvent(repo, tag, mediaType, action, method string, r *http.Request) *events.Event {
+	if h.Events == nil {
+		return nil
+	}
+	if mediaType == "" {
+		return nil
+	}
+	ev := &events.Event{
+		Action: action,
+	}
+	ev.Target.MediaType = mediaType
+	ev.Target.Repository = repo
+	ev.Target.Tag = tag
+	ev.Request.Host = r.Host
+	ev.Request.Method = method
+	ev.Request.UserAgent = r.UserAgent()
+	ev.Request.RemoteAddr = r.RemoteAddr
+	ev.Actor.Name = r.Header.Get("X-Auth-User")
+	return ev
+}
+
 func (h *Handler) manifestGet(w http.ResponseWriter, r *http.Request) {
 	repo := chi.URLParam(r, "repo")
 	ref := chi.URLParam(r, "ref")
@@ -234,6 +284,9 @@ func (h *Handler) manifestHead(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", m.MediaType)
 	w.Header().Set("Docker-Content-Digest", m.Digest)
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(m.Body)))
+	if ev := h.localEvent(repo, ref, m.MediaType, "pull", http.MethodHead, r); ev != nil {
+		h.Events.IngestLocal(*ev)
+	}
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -257,6 +310,9 @@ func (h *Handler) manifestPut(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeV2Error(w, http.StatusBadRequest, "MANIFEST_INVALID", err.Error())
 		return
+	}
+	if ev := h.localEvent(repo, ref, mediaType, "push", http.MethodPut, r); ev != nil {
+		h.Events.IngestLocal(*ev)
 	}
 	w.Header().Set("Docker-Content-Digest", digest)
 	w.Header().Set("Location", fmt.Sprintf("/v2/%s/manifests/%s", repo, digest))

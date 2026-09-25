@@ -59,7 +59,7 @@ func newTestRouter(t *testing.T) http.Handler {
 	store := newFakeStore(t)
 	h := &api.Handlers{Cfg: cfg, Store: store}
 	mux := api.NewRouterWithExtras(h, nil, cfg).(chi.Router)
-	mux.Mount("/v2", registryd.New(store, nil))
+	mux.Mount("/v2", registryd.New(store, nil, nil))
 	return mux
 }
 
@@ -73,7 +73,7 @@ func newTestRouterNoDelete(t *testing.T) http.Handler {
 	store := newFakeStore(t)
 	h := &api.Handlers{Cfg: cfg, Store: store}
 	mux := api.NewRouterWithExtras(h, nil, cfg).(chi.Router)
-	mux.Mount("/v2", registryd.New(store, nil))
+	mux.Mount("/v2", registryd.New(store, nil, nil))
 	return mux
 }
 
