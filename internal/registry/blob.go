@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 // BlobExists checks whether the destination registry already has a blob.
@@ -47,23 +48,71 @@ func (c *Client) BlobExists(ctx context.Context, repo, digest string) (bool, err
 // Caller must close the returned ReadCloser. On error, the body has been
 // closed and the error returned. Content-Length is reported via the size
 // pointer (may be -1 if unknown).
+//
+// Do NOT route this through doRequest: doRequest is built for small JSON
+// responses -- it drains the body into memory (32MB cap) and closes it via
+// defer before returning, so a resp.Body handed back to callers would be
+// dead on arrival ("http2: response body closed" on the first read). Blobs
+// can be hundreds of MB and must stream. The 401 -> Bearer token retry
+// below mirrors doRequest's, including stale-token invalidation on a
+// second 401.
 func (c *Client) GetBlob(ctx context.Context, repo, digest string) (io.ReadCloser, int64, error) {
 	if repo == "" || digest == "" {
 		return nil, 0, fmt.Errorf("registry: GetBlob: repo and digest required")
 	}
 	path := fmt.Sprintf("/v2/%s/blobs/%s", escapeRepo(repo), url.PathEscape(digest))
-	resp, _, err := c.doRequest(ctx, http.MethodGet, path, "", nil)
-	if err != nil {
-		return nil, 0, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		return nil, 0, &Error{
-			Status:  resp.StatusCode,
-			Code:    "BLOB_GET_FAILED",
-			Message: fmt.Sprintf("GET %s returned %d", path, resp.StatusCode),
-			URL:     path,
+	full := *c.baseURL
+	full.Path = strings.TrimRight(full.Path, "/") + "/" + strings.TrimLeft(path, "/")
+
+	do := func(bearerToken string) (*http.Response, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, full.String(), nil)
+		if err != nil {
+			return nil, fmt.Errorf("registry: build request: %w", err)
 		}
+		req.Header.Set("User-Agent", UserAgent)
+		if bearerToken != "" {
+			req.Header.Set("Authorization", "Bearer "+bearerToken)
+		} else if c.user != "" {
+			req.SetBasicAuth(c.user, c.pass)
+		}
+		return c.http.Do(req)
+	}
+
+	resp, err := do("")
+	if err != nil {
+		return nil, 0, fmt.Errorf("registry: GET %s: %w", full.Path, err)
+	}
+
+	// V2 Bearer flow, same shape as doRequest: on 401 with a parseable
+	// challenge, fetch a token and retry once.
+	if resp.StatusCode == http.StatusUnauthorized && c.bearer != nil {
+		if ch, ok := parseChallenge(resp.Header.Get("WWW-Authenticate")); ok {
+			token, terr := c.bearer.FetchToken(ctx, ch, &BasicAuth{Username: c.user, Password: c.pass})
+			resp.Body.Close()
+			if terr != nil {
+				return nil, 0, fmt.Errorf("registry: GET %s: 401 unauthorized (bearer token fetch failed: %v)", full.Path, terr)
+			}
+			if token == "" {
+				return nil, 0, fmt.Errorf("registry: GET %s: 401 unauthorized (bearer token response empty)", full.Path)
+			}
+			resp, err = do(token)
+			if err != nil {
+				return nil, 0, fmt.Errorf("registry: GET %s (bearer retry): %w", full.Path, err)
+			}
+		}
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		// Second 401: stale cached token -- invalidate so the next call
+		// fetches a fresh one (same as doRequest).
+		if resp.StatusCode == http.StatusUnauthorized && c.bearer != nil {
+			if ch, ok := parseChallenge(resp.Header.Get("WWW-Authenticate")); ok {
+				c.bearer.Invalidate(ch, &BasicAuth{Username: c.user, Password: c.pass})
+			}
+		}
+		body := readLimited(resp.Body, 4096)
+		resp.Body.Close()
+		return nil, 0, decodeError(resp.StatusCode, full.String(), body)
 	}
 	return resp.Body, resp.ContentLength, nil
 }

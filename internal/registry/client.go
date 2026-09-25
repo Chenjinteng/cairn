@@ -241,9 +241,12 @@ func (c *Client) doRequest(ctx context.Context, method, path, accept string, res
 					} else if strings.Contains(full.Path, "/manifests/") {
 						req2.Header.Set("Accept", manifestAccept)
 					}
-					if c.user != "" {
-						req2.SetBasicAuth(c.user, c.pass)
-					}
+					// NOTE: deliberately no SetBasicAuth here. SetBasicAuth
+					// replaces the whole Authorization header, which would
+					// clobber the Bearer token just set and downgrade the
+					// retry to Basic -- Docker Hub-style registries answer
+					// that with another 401. The token already encapsulates
+					// the credentials; Basic is only for the token endpoint.
 					resp, err = c.http.Do(req2)
 					if err != nil {
 						return nil, nil, fmt.Errorf("registry: %s %s (bearer retry): %w", method, full.Path, err)

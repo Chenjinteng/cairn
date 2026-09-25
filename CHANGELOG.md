@@ -6,6 +6,21 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.6] - 2026-09-25
+
+本轮主题：**修好 blob 下载流**。0.5.5 修掉 Docker Hub 匿名 401 后，拉取第一次走到 blob 阶段，暴露出 v0.2 就存在的流式误用。
+
+### 修复
+
+- **blob 下载报 `http2: response body closed`**：`GetBlob` 复用 `doRequest`，而后者会把响应体全部读进内存（32MB 上限）并 `defer resp.Body.Close()`——`GetBlob` 返回给调用方的 `resp.Body` 是已抽干、已关闭的死流，拉取执行器第一次读就报错，blob 全部传输失败。manifest 抓取不受影响（小 JSON、按字节消费），blob 是流式（可达数百 MB）必挂。此前未暴露是因为外部源拉取一直卡在 manifest 阶段的 401。现在 `GetBlob` 自建请求、保持活流返回，并内联实现与 `doRequest` 相同的 401→Bearer token 重试（含二次 401 时失效缓存 token）。
+- **Bearer 重试被 `SetBasicAuth` 降级回 Basic**：`doRequest` 的重试请求先 `Set("Authorization", "Bearer ...")`，随后若配置了用户名密码又调 `SetBasicAuth`——后者整体替换 Authorization 头，把重试降级成 Basic 认证。Docker Hub 类 registry 对业务请求只认 Bearer，会再次 401 并失效刚取到的 token。现在重试只带 Bearer（token 已封装凭据），Basic 仅用于向 token 端点换 token。影响所有配置了凭据的外部源 manifest/blob 抓取。
+
+### 新增
+
+- `internal/registry/blob_test.go`：3 个回归测试——GetBlob 返回可完整读出的活流（~6MB payload，钉死修复前 `http2: response body closed` 场景）、blob 下载经 401→token→Bearer 重试后仍流式返回（且匿名 token 请求不带 Authorization 头）、带凭据 registry 的 manifest Bearer 重试不得降级回 Basic（token 端点收到 Basic 凭据、业务请求收到 Bearer）。
+
+---
+
 ## [0.5.5] - 2026-09-25
 
 本轮主题：**修好 Docker Hub 匿名拉取**。外部源（Docker Hub 等）配了代理仍 401 的根因是匿名 token 请求误带空 Basic 凭据头。
