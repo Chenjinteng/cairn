@@ -11,12 +11,15 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"cairn/internal/version"
 )
 
 // UserAgent identifies cairn to upstream registries. Some allowlists in
 // private registries match on User-Agent to permit scripts; "cairn/<ver>"
-// is honest and easy to filter on.
-const UserAgent = "cairn/0.1.0"
+// is honest and easy to filter on. Sourced from internal/version so a single
+// version bump propagates everywhere.
+var UserAgent = version.UserAgent
 
 // manifestAccept is the Accept header sent on every manifest fetch.
 // The V2 spec returns 404 (not 400, not 406) if Accept doesn't list a known

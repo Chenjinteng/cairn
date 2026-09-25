@@ -30,7 +30,8 @@
 - 删除：按 digest 删除 manifest，返回受影响的 tag
 - 配置探测、强制刷新
 - 内存缓存（TTL 可配）
-- 在制品：Dockerfile（多阶段，scratch 基础，运行镜像 ~15MB）+ docker-compose
+- 单版本号源（`internal/version/version.go`）+ AGENTS.md 开发规范 + CHANGELOG
+- Dockerfile（多阶段，scratch 基础，运行镜像 ~15MB）+ docker-compose
 - 14 个单元 / 集成测试，全绿
 
 ⏳ 待办：
@@ -38,6 +39,20 @@
 - v0.2：拉取队列（FIFO + 流式 PATCH）+ 凭据库 + 代理库
 - v0.3：webhook 接收 + SQLite 热度聚合 + 忽略规则
 - 前端：copy 自 registry-manager/web，改 vite.config.ts 代理 `/api` 到 :8787
+
+## 版本管理
+
+版本号 `主.中.小` 三位规则见 [AGENTS.md §版本号规则](./AGENTS.md#版本号规则)。
+
+版本号 5 处同步（漏一处就漂移）：
+
+1. `internal/version/version.go` 的 `Version` 常量
+2. `docker-compose.yml` 的 `image: ${IMAGE:-cairn:X.Y.Z}`
+3. `.env.example` 的 `IMAGE=`
+4. `README.md` 里所有 `docker build/tag/push` 示例
+5. `CHANGELOG.md` 新增一节
+
+当前版本：`0.1.0`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
 
 ## 项目结构
 

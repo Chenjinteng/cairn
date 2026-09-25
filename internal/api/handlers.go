@@ -6,6 +6,7 @@ import (
 
 	"cairn/internal/config"
 	"cairn/internal/registry"
+	"cairn/internal/version"
 )
 
 // Handlers bundles the dependencies every endpoint needs. It's passed by
@@ -23,6 +24,7 @@ type Handlers struct {
 // We intentionally exclude secrets (REGISTRY_PASSWORD, REGISTRY_CREDENTIAL_KEY,
 // REGISTRY_NOTIFY_TOKEN). registry-manager's /api/config does the same.
 type PublicConfig struct {
+	Version          string `json:"version"`
 	RegistryName     string `json:"registryName"`
 	RegistryURL      string `json:"registryUrl"`
 	AllowDelete      bool   `json:"allowDelete"`
@@ -34,6 +36,7 @@ type PublicConfig struct {
 // GetConfig returns the safe-to-expose subset of Cfg.
 func (h *Handlers) GetConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, PublicConfig{
+		Version:         version.Version,
 		RegistryName:    h.Cfg.RegistryName,
 		RegistryURL:     h.Cfg.RegistryURL,
 		AllowDelete:     h.Cfg.AllowDelete,

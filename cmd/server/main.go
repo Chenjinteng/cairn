@@ -16,6 +16,7 @@ import (
 
 	"cairn/internal/config"
 	"cairn/internal/server"
+	"cairn/internal/version"
 )
 
 func main() {
@@ -28,6 +29,7 @@ func main() {
 		os.Exit(2)
 	}
 	slog.Info("config loaded",
+		"version", version.Version,
 		"registry_url", cfg.RegistryURL,
 		"registry_name", cfg.RegistryName,
 		"port", cfg.Port,
