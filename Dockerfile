@@ -12,8 +12,17 @@
 #   docker build --build-arg GOPROXY=https://goproxy.cn,direct .
 #   docker build --build-arg GOPROXY=https://goproxy.io,direct .
 # 默认仍是 proxy.golang.org,direct(从 Go 1.21 起等价于 GOPROXY=proxy.golang.org,direct)。
+#
+# 通用 HTTP/HTTPS 代理：跟 GOPROXY 正交,影响 builder stage 内所有网络出口
+# (go / curl / git / apt 等)。默认空 = 不用代理。
+#   docker build --build-arg HTTP_PROXY=http://proxy.example.com:4433 \
+#                --build-arg HTTPS_PROXY=http://proxy.example.com:4433 \
+#                --build-arg NO_PROXY=localhost,127.0.0.1,.local .
 ARG GO_IMAGE=golang:1.26-alpine
 ARG GOPROXY=https://proxy.golang.org,direct
+ARG HTTP_PROXY=
+ARG HTTPS_PROXY=
+ARG NO_PROXY=
 
 # ---------------------------------------------------------------------------
 # 1) 构建二进制
@@ -23,7 +32,13 @@ FROM ${GO_IMAGE} AS builder
 # 在 builder stage 里再 ARG 一次,确保 ENV 能引用(全局 ARG 在 stage 内对 ENV 也可见,
 # 但显式声明更直观,也方便以后想关掉全局只在这一阶段覆盖)。
 ARG GOPROXY
-ENV GOPROXY=${GOPROXY}
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ENV GOPROXY=${GOPROXY} \
+    HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    NO_PROXY=${NO_PROXY}
 
 WORKDIR /src
 

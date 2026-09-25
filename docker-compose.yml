@@ -15,6 +15,12 @@ services:
         #   GOPROXY=https://goproxy.cn,direct
         #   GOPROXY=https://goproxy.io,direct
         GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
+        # 通用 HTTP/HTTPS 代理：跟 GOPROXY 正交,影响 builder stage 内所有网络出口。
+        # 在 .env 里设 BUILD_HTTP_PROXY / BUILD_HTTPS_PROXY / BUILD_NO_PROXY 即可。
+        # 默认空 = 不用代理(行为跟之前一致)。
+        HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
+        HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
+        NO_PROXY: ${BUILD_NO_PROXY:-}
 
     image: ${IMAGE:-cairn:0.3.1}
     container_name: cairn

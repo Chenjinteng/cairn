@@ -136,11 +136,37 @@ docker build --build-arg GOPROXY=https://goproxy.cn,direct -t cairn:dev .
 
 常用代理：`https://goproxy.cn,direct`（国内七牛）、`https://goproxy.io,direct`（国内官方推荐）、`https://mirrors.aliyun.com/goproxy/,direct`（阿里云）。
 
+### 构建期通用 HTTP 代理（跟 GOPROXY 正交）
+
+如果公司有内网 squid，构建机**直连外网受限**（不只是 Go module，go / curl / git / apt 都不通），可以给 builder stage 配 HTTP 代理。`Dockerfile` 透传 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` build-arg：
+
+```bash
+# docker build 直接覆盖
+docker build \
+  --build-arg HTTP_PROXY=http://proxy.example.com:4433 \
+  --build-arg HTTPS_PROXY=http://proxy.example.com:4433 \
+  --build-arg NO_PROXY=localhost,127.0.0.1,.local \
+  -t cairn:dev .
+
+# docker compose:在 .env 里设 BUILD_HTTP_PROXY 等(避免跟运行时 REGISTRY_PROXY 混淆)
+cat >> .env <<'EOF'
+BUILD_HTTP_PROXY=http://proxy.example.com:4433
+BUILD_HTTPS_PROXY=http://proxy.example.com:4433
+BUILD_NO_PROXY=localhost,127.0.0.1,.local
+EOF
+docker compose build --no-cache
+```
+
+**跟 GOPROXY 的关系**：GOPROXY 控制 Go module 协议本身（决定去哪个 module proxy 拉），HTTP_PROXY 控制底层 HTTP 客户端出口。两者独立可叠加 — 内网 squid 环境下一般两个都要配（Go module 协议层 + 实际网络层）。
+
+**留空 = 不设代理**：默认行为跟之前完全一致，普通 build 不需要任何额外配置。
+
 ## 部署
 
 ```bash
 cp .env.example .env       # 填好 REGISTRY_URL + REGISTRY_CREDENTIAL_KEY
                            # 受限网络:把 GOPROXY 改成 https://goproxy.cn,direct
+                           # 内网 squid:把 BUILD_HTTP_PROXY/HTTPS_PROXY 设成公司代理
 docker compose up -d --build
 ```
 

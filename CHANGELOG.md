@@ -14,10 +14,14 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
   - `docker-compose.yml` 通过 `${GOPROXY:-https://proxy.golang.org,direct}` 透传到 build-arg
   - `.env.example` 新增 `GOPROXY=` 配置项,默认留空走 `proxy.golang.org,direct`
   - 受限网络下,在 `.env` 把 `GOPROXY` 改成 `https://goproxy.cn,direct` 或 `https://goproxy.io,direct` 即可,无需改代码
+- **构建期通用 HTTP/HTTPS 代理可配置**：跟 `GOPROXY` 正交,影响 builder stage 内所有网络出口(go / curl / git / apt 等),给公司有内网 squid 的环境用。
+  - `Dockerfile` 新增 `ARG HTTP_PROXY=` `ARG HTTPS_PROXY=` `ARG NO_PROXY=`(默认空 = 不设代理,行为不变)
+  - `docker-compose.yml` 透传到 build-arg,`.env` 里用 `BUILD_HTTP_PROXY` / `BUILD_HTTPS_PROXY` / `BUILD_NO_PROXY` 配置(带 `BUILD_` 前缀跟运行时 `REGISTRY_PROXY` 区分,避免 `.env` 命名冲突)
+  - 内网 squid 示例:`BUILD_HTTP_PROXY=http://proxy.example.com:4433`
 
 ### 文档
 
-- `README.md` 开发章节新增「网络受限环境的构建(Go proxy)」小节,列出本地 / docker build 两种覆盖方式 + 常用国内代理
+- `README.md` 开发章节新增「网络受限环境的构建(Go proxy)」+「构建期通用 HTTP 代理(跟 GOPROXY 正交)」两个小节,列出本地 / docker build 两种覆盖方式 + 常用国内代理 + 内网 squid 典型用法
 - `AGENTS.md` 保持不变(版本号规则已覆盖本次改动的小版本 +1 判定)
 
 ---
