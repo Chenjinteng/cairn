@@ -6,6 +6,36 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.1] - 2026-09-25
+
+### 新增
+
+- **`PATCH /api/config`**：设置页可热改 `REGISTRY_URL`，立即生效；env 仍是首次启动默认值。
+- **`settings` SQLite 表**（migration v3）：`key/value/updated_at`，后续每加一个可热改字段都先在这里加一行 schema。
+- **`config.Mutable` + `EffectiveRegistryURL()`**：运行时注册表（`sync.RWMutex` 保护），`Orchestrator.Mutable` 引用同一指针；改完 pull 入队时立刻看到新上游，无需重启。
+- **UI（settings-page.tsx）**：
+  - "地址" 行从只读 `Descriptions` 改为 `Input + 保存` 控件
+  - 当前生效值下方带 **"界面设置（已覆盖）" / "环境变量"** Tag，标明来自 db 还是 env
+  - 留空提交 = 清除覆盖，恢复 env 默认
+
+### 变更
+
+- **`Internal/Handlers.Cfg.RegistryURL` 读路径**：所有路径改走 `Cfg.EffectiveRegistryURL()`，env vs db 优先级集中在 config 包。
+- **`Pull.Orchestrator.DefaultSourceURL` 标记 deprecated**：保留为 env-bootstrap fallback；新路径优先 `Mutable.RegistryURL()`。
+- **server.go 启动加载**：db 可用时从 `settings` 表 hydrate `cfg.Mutable.SetRegistryURL(...)`，日志带 `"registry.url.source":"db"`。
+
+### 测试
+
+- `go build ./...` ✅
+- `go vet ./...` ✅
+- `go test ./...` 全绿
+- `gofmt -l internal/` 0 个未格式化
+
+### 已知问题（v0.5.x 跟进）
+
+- 158 上卡死 job `job-1790328145899764915-1` 仍待 cancel
+- `intranet-53` 测试凭据、webhook 仍待联调
+
 ## [0.5.0] - 2026-09-25
 
 ### 新增

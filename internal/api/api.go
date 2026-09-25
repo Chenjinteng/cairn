@@ -76,6 +76,7 @@ func NewRouterWithExtras(h *Handlers, extras *ExtraHandlers, cfg *config.Config)
 	// API surface
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/config", h.GetConfig)
+		r.Patch("/config", h.UpdateConfig)
 		r.Post("/probe", h.Probe)
 		r.Get("/inventory", h.GetInventory)
 		r.Post("/refresh", h.RefreshInventory)

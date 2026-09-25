@@ -77,12 +77,29 @@ type AppConfig struct {
 	StatsSince            *string  `json:"statsSince"`
 	StatsRetentionDays    int      `json:"statsRetentionDays"`
 	StatsIgnoreUseragents []string `json:"statsIgnoreUseragents"`
+
+	// v0.5.1: runtime-editable settings the operator can change on the
+	// settings page; backed by SQLite, override env at read time. Each
+	// `*Source` field tells the UI which value is in effect right now so
+	// operators can see "db" overrides vs the "env" bootstrap default.
+	MutableSettings MutableSettings `json:"mutable"`
+}
+
+// MutableSettings is the v0.5.1 editable subset of AppConfig. Anything
+// here can be changed from the settings page without restarting the
+// service; env remains the bootstrap default on first boot.
+type MutableSettings struct {
+	// RegistryURL is the default upstream for pulls that don't pin one
+	// themselves (matches Config.RegistryURL semantics). Empty == Docker
+	// Hub (pull.DefaultUpstream).
+	RegistryURL string `json:"registryUrl"`
+	// RegistryURLSource is "db" if the value was last edited on the
+	// settings page, "env" if it's still the bootstrap default.
+	RegistryURLSource string `json:"registryUrlSource"`
 }
 
 // GetConfig returns the safe-to-expose runtime configuration.
 func (h *Handlers) GetConfig(w http.ResponseWriter, r *http.Request) {
-	rawURL := h.registryURL(r)
-
 	var statsSince *string
 	if h.DB != nil {
 		if day, err := h.DB.GetFirstDay(r.Context()); err == nil && day != "" {
@@ -115,11 +132,23 @@ func (h *Handlers) GetConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// v0.5.1: URL/Host/Mutable reflect whichever source wins right now
+	// (Mutable override > env). source tag is the only mutable URL field
+	// we expose today; add more here when more settings become editable.
+	mutableURL := h.Cfg.EffectiveRegistryURL()
+	mutableSrc := "env"
+	if h.Cfg.Mutable != nil {
+		mutableSrc = h.Cfg.Mutable.RegistryURLSource()
+	}
+	displayURL := mutableURL
+	if displayURL == "" {
+		displayURL = "http://" + r.Host // cairn now manages itself; no upstream set
+	}
 	writeJSON(w, http.StatusOK, AppConfig{
 		Name:                  h.Cfg.RegistryName,
 		Version:               version.Version,
-		URL:                   rawURL,
-		Host:                  hostOf(rawURL),
+		URL:                   displayURL,
+		Host:                  hostOf(displayURL),
 		UsingProxy:            h.Cfg.RegistryProxy != "",
 		UsingAuth:             h.Cfg.RegistryUsername != "",
 		CacheTTLSeconds:       int(h.Cfg.CacheTTL.Seconds()),
@@ -137,7 +166,61 @@ func (h *Handlers) GetConfig(w http.ResponseWriter, r *http.Request) {
 		StatsSince:            statsSince,
 		StatsRetentionDays:    h.Cfg.StatsRetentionDay,
 		StatsIgnoreUseragents: ignore,
+		MutableSettings: MutableSettings{
+			RegistryURL:       mutableURL,
+			RegistryURLSource: mutableSrc,
+		},
 	})
+}
+
+// UpdateConfig persists editable settings (v0.5.1: only registryUrl).
+// URL: PATCH /api/config  body: {"mutable":{"registryUrl":"..."}}
+//
+// 503 if the SQLite backing store is unavailable -- without it, the new
+// value wouldn't survive a restart.
+func (h *Handlers) UpdateConfig(w http.ResponseWriter, r *http.Request) {
+	if h.DB == nil {
+		reason := h.DBErr
+		if reason == "" {
+			reason = "settings database unavailable"
+		}
+		writeError(w, r, http.StatusServiceUnavailable, errors.New(reason))
+		return
+	}
+	var body struct {
+		Mutable struct {
+			RegistryURL *string `json:"registryUrl"`
+		} `json:"mutable"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeError(w, r, http.StatusBadRequest, err)
+		return
+	}
+	if body.Mutable.RegistryURL != nil {
+		v := strings.TrimSpace(*body.Mutable.RegistryURL)
+		if v != "" && !strings.HasPrefix(v, "http://") && !strings.HasPrefix(v, "https://") {
+			writeError(w, r, http.StatusBadRequest,
+				errors.New("registryUrl must start with http:// or https://, or be empty (== Docker Hub)"))
+			return
+		}
+		// Persist + apply. Empty string means "clear the override".
+		if v == "" {
+			if err := h.DB.DeleteSetting(r.Context(), "registry.url"); err != nil {
+				writeError(w, r, http.StatusInternalServerError, err)
+				return
+			}
+		} else {
+			if err := h.DB.SetSetting(r.Context(), "registry.url", v); err != nil {
+				writeError(w, r, http.StatusInternalServerError, err)
+				return
+			}
+		}
+		if h.Cfg.Mutable != nil {
+			h.Cfg.Mutable.SetRegistryURL(v)
+		}
+	}
+	// Return the freshly-applied view so the UI updates without a refetch.
+	h.GetConfig(w, r)
 }
 
 // Probe checks the local registry is readable and reports its identity.

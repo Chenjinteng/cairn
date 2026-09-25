@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"cairn/internal/config"
 	"cairn/internal/credentials"
 	"cairn/internal/db"
 	"cairn/internal/proxies"
@@ -82,8 +83,14 @@ type Orchestrator struct {
 	Proxies    *proxies.Store
 	DB         *db.Db
 
-	// DefaultSourceURL is the operator-configured upstream used when a job
-	// names no source of its own. Empty means "fall back to Docker Hub".
+	// Mutable (v0.5.1) is the live, runtime-editable settings struct. The
+	// pull source chain reads it through Mutable.RegistryURL() so changes
+	// via PATCH /api/config take effect on the next queued job without a
+	// restart. nil is OK -- resolveSource treats it as "env default only".
+	Mutable *config.Mutable
+	// DefaultSourceURL is the env bootstrap upstream (deprecated v0.5.1:
+	// superseded by Mutable; kept so resolveSource can fall back to it
+	// when Mutable is nil OR was never written to).
 	DefaultSourceURL string
 
 	PullHistoryRetention int
@@ -246,7 +253,16 @@ func (o *Orchestrator) resolveSource(v JobView) (srcURL, user, pass, proxyURL st
 		}
 	}
 	if srcURL == "" {
-		srcURL = strings.TrimSpace(o.DefaultSourceURL)
+		if o.Mutable != nil {
+			srcURL = o.Mutable.RegistryURL()
+		}
+	}
+	if srcURL == "" {
+		if o.Mutable != nil {
+			srcURL = o.Mutable.RegistryURL()
+		} else {
+			srcURL = strings.TrimSpace(o.DefaultSourceURL)
+		}
 	}
 	if srcURL == "" {
 		srcURL = DefaultUpstream

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, App, Button, Descriptions, Empty, Space, Table, Tag, Tooltip } from 'antd';
+import { Alert, App, Button, Descriptions, Empty, Input, Space, Table, Tag, Tooltip } from 'antd';
 import { ApiOutlined, DeleteOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 
@@ -10,6 +10,7 @@ import {
   purgeHeat,
   refreshInventory,
   removeIgnoreRule,
+  updateConfig,
 } from '../api';
 import IgnoreRuleModal from '../components/ignore-rule-modal';
 import type { ApiResult, AppConfig, IgnoreRules, Inventory } from '../types';
@@ -32,6 +33,10 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
   /** 预览素材：最近收到的客户端。进这一页时取一次即可。 */
   const [knownUseragents, setKnownUseragents] = useState<string[]>([]);
   const [notice, setNotice] = useState<ApiResult<unknown> | null>(null);
+  // v0.5.1: 编辑中的 REGISTRY_URL 草稿；提交时 PATCH /api/config，服务器
+  // 写 SQLite + 热替换 cfg.Mutable，新值对下一个入队的 pull job 立即生效。
+  const [registryUrlDraft, setRegistryUrlDraft] = useState<string>('');
+  const [savingRegistryUrl, setSavingRegistryUrl] = useState(false);
 
   const handleProbe = async () => {
     setProbing(true);
@@ -66,6 +71,33 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
   const statsEnabled = config?.statsEnabled === true;
 
   // 规则与预览素材各取一次。热度不可用时服务端会回空结构，不用单独降级。
+  useEffect(() => {
+    if (config) setRegistryUrlDraft(config.mutable.registryUrl);
+  }, [config]);
+
+  const handleSaveRegistryUrl = async () => {
+    if (!config) return;
+    const v = registryUrlDraft.trim();
+    if (v !== '' && !/^https?:\/\//.test(v)) {
+      message.error('地址必须以 http:// 或 https:// 开头（清空则回退到 Docker Hub）');
+      return;
+    }
+    setSavingRegistryUrl(true);
+    try {
+      const r = await updateConfig({ mutable: { registryUrl: v } });
+      if (r.success && r.data) {
+        onConfigChange(r.data);
+        message.success(v === '' ? '已清除覆盖，恢复使用环境变量默认' : '已保存；新值对后续 pull 任务立即生效');
+      } else {
+        message.error(r.message ?? '保存失败');
+      }
+    } catch (e) {
+      message.error(`保存失败：${(e as Error).message ?? e}`);
+    } finally {
+      setSavingRegistryUrl(false);
+    }
+  };
+
   useEffect(() => {
     if (!statsEnabled) {
       return;
@@ -209,8 +241,42 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
       <div className="panel" style={{ padding: 16 }}>
         <Descriptions column={1} size="small" bordered>
           <Descriptions.Item label="名称">{config?.name ?? '--'}</Descriptions.Item>
-          <Descriptions.Item label="地址">
-            <span className="mono">{config?.url ?? '--'}</span>
+          <Descriptions.Item label="默认上游地址">
+            <Space.Compact style={{ width: '100%', maxWidth: 560 }}>
+              <Input
+                className="mono"
+                placeholder="留空则使用 Docker Hub（pull.DefaultUpstream）"
+                value={registryUrlDraft}
+                onChange={(e) => setRegistryUrlDraft(e.target.value)}
+                disabled={savingRegistryUrl}
+                allowClear
+              />
+              <Button
+                type="primary"
+                loading={savingRegistryUrl}
+                onClick={() => void handleSaveRegistryUrl()}
+                disabled={
+                  !config ||
+                  (registryUrlDraft.trim() === (config.mutable.registryUrl ?? ''))
+                }
+              >
+                保存
+              </Button>
+            </Space.Compact>
+            <div style={{ marginTop: 6, color: 'var(--color-text-3)', fontSize: 12 }}>
+              当前生效：
+              {config?.mutable.registryUrlSource === 'db' ? (
+                <Tag color="purple" style={{ marginInlineStart: 6 }}>界面设置（已覆盖）</Tag>
+              ) : (
+                <Tag style={{ marginInlineStart: 6 }}>环境变量</Tag>
+              )}
+              <span className="mono" style={{ marginInlineStart: 8 }}>
+                {config?.mutable.registryUrl || '(空 → Docker Hub)'}
+              </span>
+              <span style={{ marginInlineStart: 12 }}>
+                变更对下一个入队的拉取任务立即生效，不需要重启服务
+              </span>
+            </div>
           </Descriptions.Item>
           <Descriptions.Item label="镜像引用前缀">
             <span className="mono">{config?.host ?? '--'}</span>

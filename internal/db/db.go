@@ -25,7 +25,7 @@ import (
 
 // SCHEMA_VERSION is bumped together with new migrations.
 // Bump rule: +1 per migration; never reuse a number; never delete a migration.
-const SCHEMA_VERSION = 2
+const SCHEMA_VERSION = 3
 
 // Db is the SQLite wrapper. All exported methods are safe for concurrent use.
 type Db struct {
@@ -148,6 +148,18 @@ var migrations = map[int]string{
 	CREATE TABLE IF NOT EXISTS stats_ignore (
 		useragent  TEXT PRIMARY KEY,
 		created_at TEXT NOT NULL
+	) WITHOUT ROWID;
+	`,
+	3: `
+	-- v0.5.1: runtime-mutable settings (key/value JSON-encoded strings).
+	-- Currently used for the default upstream URL -- env REGISTRY_URL is
+	-- still the bootstrap default but operators can edit it on the
+	-- settings page from then on. Keys are dotted namespaces:
+	--   registry.url           default upstream URL ("" == Docker Hub)
+	CREATE TABLE IF NOT EXISTS settings (
+		key        TEXT PRIMARY KEY,
+		value      TEXT NOT NULL,
+		updated_at INTEGER NOT NULL        -- unix seconds
 	) WITHOUT ROWID;
 	`,
 }
@@ -547,7 +559,33 @@ func (d *Db) AddIgnore(ctx context.Context, useragent string) error {
 
 // RemoveIgnore deletes one panel rule. Missing rows are not an error.
 func (d *Db) RemoveIgnore(ctx context.Context, useragent string) error {
-	_, err := d.conn.ExecContext(ctx, `DELETE FROM stats_ignore WHERE useragent = ?`, useragent)
+	_, err := d.conn.ExecContext(ctx, "DELETE FROM stats_ignore WHERE useragent = ?", useragent)
+	return err
+}
+
+// GetSetting returns the value for key, or "" if absent.
+// Errors only on real I/O problems.
+func (d *Db) GetSetting(ctx context.Context, key string) (string, error) {
+	var v string
+	err := d.conn.QueryRowContext(ctx, "SELECT value FROM settings WHERE key = ?", key).Scan(&v)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return v, err
+}
+
+// SetSetting upserts (key, value) and bumps updated_at.
+func (d *Db) SetSetting(ctx context.Context, key, value string) error {
+	_, err := d.conn.ExecContext(ctx, `
+		INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+	`, key, value, time.Now().UTC().Unix())
+	return err
+}
+
+// DeleteSetting removes key. No-op if absent.
+func (d *Db) DeleteSetting(ctx context.Context, key string) error {
+	_, err := d.conn.ExecContext(ctx, "DELETE FROM settings WHERE key = ?", key)
 	return err
 }
 

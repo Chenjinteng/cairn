@@ -109,13 +109,24 @@ func Build(cfg *config.Config) (*Runtime, error) {
 	// 5. Pull executor (always present in v0.5.0; per-job source is part of
 	// the request, not a server-wide setting. REGISTRY_URL merely seeds
 	// DefaultSourceURL for jobs that don't pin their own upstream).
+	// v0.5.1: hydrate runtime-editable settings from SQLite so a previously
+	// edited default upstream survives restart. Env is the bootstrap
+	// default when the row is absent.
+	if store_db != nil && cfg.Mutable != nil {
+		if v, err := store_db.GetSetting(context.Background(), "registry.url"); err == nil && v != "" {
+			cfg.Mutable.SetRegistryURL(v)
+			slog.Info("loaded runtime-mutable settings", "registry.url.source", "db")
+		}
+	}
 	orchestrator := &pull.Orchestrator{
-		Dest:                 store,
-		SrcResolve:           pull.DefaultSourceResolver(),
-		Vault:                vault,
-		Proxies:              proxyStore,
-		DB:                   store_db,
-		DefaultSourceURL:     strings.TrimRight(cfg.RegistryURL, "/"),
+		Dest:       store,
+		SrcResolve: pull.DefaultSourceResolver(),
+		Vault:      vault,
+		Proxies:    proxyStore,
+		DB:         store_db,
+		// v0.5.1: pull source now flows through cfg.Mutable, so changes
+		// via PATCH /api/config take effect on the next queued job.
+		Mutable:              cfg.Mutable,
 		PullHistoryRetention: cfg.PullHistoryRetentionDay,
 	}
 	executor := pull.NewExecutor(cfg.PullQueueSize, orchestrator.RunOne)
@@ -145,6 +156,7 @@ func Build(cfg *config.Config) (*Runtime, error) {
 	}
 
 	extras := &api.ExtraHandlers{
+		Full: cfg,
 		Cfg: &api.ConfigExtras{
 			AllowPull:        cfg.AllowPull,
 			AllowDelete:      cfg.AllowDelete,

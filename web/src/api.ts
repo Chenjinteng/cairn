@@ -51,6 +51,22 @@ async function request<T>(path: string, init?: RequestInit): Promise<ApiResult<T
 
 export const fetchConfig = () => request<AppConfig>('/api/config');
 
+/**
+ * v0.5.1: persist a runtime-editable setting on the server. Currently only
+ * `mutable.registryUrl` is honoured; the server-side UpdateConfig handler
+ * validates + writes SQLite + reloads the in-memory Mutable pointer in
+ * one step, so the new value takes effect on the next queued pull job.
+ */
+export interface MutablePatch {
+  registryUrl?: string;
+}
+export interface ConfigPatch {
+  mutable?: MutablePatch;
+}
+
+export const updateConfig = (patch: ConfigPatch) =>
+  request<AppConfig>('/api/config', { method: 'PATCH', body: JSON.stringify(patch) });
+
 export const fetchInventory = () => request<Inventory>('/api/inventory');
 
 export const refreshInventory = () => request<Inventory>('/api/refresh', { method: 'POST' });

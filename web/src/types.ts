@@ -80,6 +80,24 @@ export interface AppConfig {
    * 下发到前端是为了能**确认规则生效了**：否则"热度不涨"和"配置没读到"看起来一样。
    */
   statsIgnoreUseragents: string[];
+
+  /**
+   * v0.5.1: runtime-editable settings shown + edited on the settings page.
+   * `registryUrl` here is the *current effective* value (mutable override
+   * wins; otherwise env fallback). `registryUrlSource` tells the UI whether
+   * the user is looking at a "db" override or the "env" bootstrap default.
+   */
+  mutable: MutableSettings;
+}
+
+/**
+ * v0.5.1: editable settings. Right now only the default upstream URL --
+ * more fields can be added later without a backend migration as long as
+ * each new key gets a corresponding `Mutable.*` field + setter.
+ */
+export interface MutableSettings {
+  registryUrl: string;
+  registryUrlSource: 'env' | 'db';
 }
 
 export interface ApiResult<T> {

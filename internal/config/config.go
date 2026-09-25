@@ -15,8 +15,56 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
+
+// Mutable holds runtime-editable settings. v0.5.1: the default upstream URL
+// (REGISTRY_URL replacement) is persisted to SQLite so the settings page can
+// edit it without restarting; env keeps the bootstrap default.
+type Mutable struct {
+	mu          sync.RWMutex
+	registryURL string // "" == Docker Hub (pull.DefaultUpstream)
+}
+
+func (m *Mutable) RegistryURL() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.registryURL
+}
+
+func (m *Mutable) SetRegistryURL(v string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.registryURL = strings.TrimRight(strings.TrimSpace(v), "/")
+}
+
+// RegistryURLSource reports where the current value came from. "db" once
+// the settings page has ever overridden; "env" while still the bootstrap
+// default. The settings page surfaces this so operators can see whether
+// they're looking at the env fallback or a persisted override.
+func (m *Mutable) RegistryURLSource() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.registryURL != "" {
+		return "db"
+	}
+	return "env"
+}
+
+// EffectiveRegistryURL returns Mutable.RegistryURL() if set, otherwise the
+// env-loaded Config.RegistryURL fallback. Use this everywhere instead of
+// reaching for Config.RegistryURL directly -- it keeps env vs db precedence
+// in one place.
+func (c *Config) EffectiveRegistryURL() string {
+	if c == nil || c.Mutable == nil {
+		return ""
+	}
+	if v := c.Mutable.RegistryURL(); v != "" {
+		return v
+	}
+	return c.RegistryURL
+}
 
 // Config is the resolved runtime configuration for cairn.
 //
@@ -39,6 +87,10 @@ type Config struct {
 	RegistryPassword string        // REGISTRY_PASSWORD, optional
 	RegistryName     string        // REGISTRY_NAME, default "镜像仓库"
 	CacheTTL         time.Duration // REGISTRY_CACHE_TTL_SECONDS, default 60s
+	// Mutable holds runtime-editable settings; populated in Load().
+	// At read time, callers should prefer EffectiveRegistryURL() over the
+	// bare env field so env vs db precedence is centralised.
+	Mutable *Mutable
 
 	// StorageDir is where the embedded /v2 endpoint keeps blobs, manifests and
 	// upload sessions. REGISTRY_STORAGE_DIR, default "<REGISTRY_CREDENTIALS_DIR>/registry".

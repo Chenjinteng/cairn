@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"cairn/internal/config"
 	"cairn/internal/credentials"
 	"cairn/internal/db"
 	"cairn/internal/events"
@@ -27,7 +28,11 @@ import (
 // ExtraHandlers bundles deps that aren't in Handlers yet (so the v0.1
 // handlers.go stays small and reviewable).
 type ExtraHandlers struct {
-	Cfg      *ConfigExtras
+	Cfg *ConfigExtras
+	// Full (v0.5.1) is the live Config pointer; use it for any field that
+	// has a runtime source (MutableRegistryURL etc). Cfg above is the
+	// immutable subset for the API surface.
+	Full     *config.Config
 	Executor *pull.Executor
 	Vault    *credentials.Vault
 	Proxies  *proxies.Store
@@ -235,7 +240,9 @@ func (e *ExtraHandlers) CreatePullJob(w http.ResponseWriter, r *http.Request) {
 		nj.ProxyURL = p
 	}
 	if nj.SourceURL == "" && e.Cfg != nil {
-		nj.SourceURL = strings.TrimRight(e.Cfg.RegistryURL, "/")
+		if v := e.Full.EffectiveRegistryURL(); v != "" {
+			nj.SourceURL = strings.TrimRight(v, "/")
+		}
 	}
 	job := e.Executor.Submit(nj)
 	writeJSON(w, http.StatusCreated, uiJobView(job))
@@ -325,7 +332,7 @@ func (e *ExtraHandlers) ProbePullSource(w http.ResponseWriter, r *http.Request) 
 	}
 	target := strings.TrimSpace(req.SourceURL)
 	if target == "" && e.Cfg != nil {
-		target = strings.TrimRight(e.Cfg.RegistryURL, "/")
+		target = strings.TrimRight(e.Full.EffectiveRegistryURL(), "/")
 	}
 	if target == "" {
 		writeError(w, r, http.StatusBadRequest,
@@ -421,7 +428,7 @@ func (e *ExtraHandlers) defaultUpstream() string {
 	if e == nil || e.Cfg == nil {
 		return pull.DefaultUpstream
 	}
-	if v := strings.TrimRight(e.Cfg.RegistryURL, "/"); v != "" {
+	if v := strings.TrimRight(e.Full.EffectiveRegistryURL(), "/"); v != "" {
 		return v
 	}
 	return pull.DefaultUpstream
@@ -899,7 +906,7 @@ func (e *ExtraHandlers) TestProxy(w http.ResponseWriter, r *http.Request) {
 	target := strings.TrimSpace(body.TargetURL)
 	if target == "" {
 		// Default: probe the local registry's own /v2/ through the proxy.
-		base := strings.TrimSuffix(e.Cfg.RegistryURL, "/")
+		base := strings.TrimSuffix(e.Full.EffectiveRegistryURL(), "/")
 		if base == "" {
 			base = "http://" + r.Host
 		}
