@@ -71,6 +71,12 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
   const [allowPullDraft, setAllowPullDraft] = useState<boolean>(true);
   const [allowRegistryEventsDraft, setAllowRegistryEventsDraft] = useState<boolean>(true);
   const [statsRetentionDraft, setStatsRetentionDraft] = useState<number>(365);
+  // v0.6.0: platform allow-list applied to multi-arch image indexes on
+  // pull. Empty array = "pull every platform" (preserves pre-v0.6.0
+  // behaviour); non-empty = only fetch children whose OS/architecture
+  // matches. The server stores this as a CSV string under
+  // config.MutableKey "pull.platforms"; the UI speaks a string array.
+  const [pullPlatformsDraft, setPullPlatformsDraft] = useState<string[]>([]);
   // v0.5.3: registry self-auth (Basic). Password is NEVER seeded from
   // config -- server deliberately doesn't echo it back, so we always
   // start blank; user typing = "set", blank on save = "clear override".
@@ -121,6 +127,14 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
     setAllowPullDraft(m.allowPull ?? false);
     setAllowRegistryEventsDraft(m.allowRegistryEvents ?? false);
     setStatsRetentionDraft(m.statsRetentionDays ?? 365);
+    // v0.6.0: server stores CSV under mutable.pullPlatforms; split it back
+    // into the UI's array form. Empty CSV → empty array ("all platforms").
+    setPullPlatformsDraft(
+      (m.pullPlatforms ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+    );
     setRegistryUsernameDraft(m.registryUsername ?? '');
     // Password: intentionally blank (server doesn't echo stored value).
   }, [config]);
@@ -177,6 +191,20 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
     }
     if (statsRetentionDraft !== (m.statsRetentionDays ?? 365)) {
       patch['stats.retention.days'] = String(statsRetentionDraft);
+    }
+    // v0.6.0: server stores CSV. Normalise via Set so a re-arranged chip
+    // order doesn't count as a change (saves a db write).
+    const currentChips = (m.pullPlatforms ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .sort();
+    const draftChips = [...pullPlatformsDraft].sort();
+    if (
+      currentChips.length !== draftChips.length ||
+      currentChips.some((c, i) => c !== draftChips[i])
+    ) {
+      patch['pull.platforms'] = pullPlatformsDraft.join(',');
     }
     if (registryUsernameDraft.trim() !== (m.registryUsername ?? '')) {
       patch['registry.username'] = registryUsernameDraft.trim();
@@ -473,6 +501,64 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
               onChange={(v) => setStatsRetentionDraft(v ?? 365)}
               style={{ width: 180 }}
             />
+          </Form.Item>
+
+          {/*
+            v0.6.0: platform allow-list for multi-arch pulls. Empty =
+            "pull every platform" (current behaviour); chips toggle which
+            platforms make it through the filter. Server stores this as
+            the CSV mutable.pullPlatforms; we send it via the bulk save
+            below. Single-arch deployments stay small by enabling just
+            "linux/amd64" or "linux/amd64, linux/arm64".
+          */}
+          <Form.Item
+            label={<span>拉取平台白名单 <SourceTag source={config?.mutable.pullPlatformsSource} /></span>}
+            extra={
+              pullPlatformsDraft.length === 0
+                ? '当前未启用过滤：多架构镜像会按上游索引全部拉取（与 v0.6.0 之前的行为一致）。'
+                : `已选 ${pullPlatformsDraft.length} 个：${pullPlatformsDraft.join(', ')}。其余架构（包括未列出的 linux/*）将跳过。`
+            }
+          >
+            <Space wrap>
+              {[
+                { id: 'linux/amd64', label: 'linux/amd64 (x86_64)' },
+                { id: 'linux/arm64', label: 'linux/arm64 (aarch64)' },
+                { id: 'linux/arm/v7', label: 'linux/arm/v7 (32-bit ARMv7)' },
+                { id: 'linux/386', label: 'linux/386' },
+                { id: 'linux/ppc64le', label: 'linux/ppc64le' },
+                { id: 'linux/s390x', label: 'linux/s390x' },
+                { id: 'linux/riscv64', label: 'linux/riscv64' },
+                { id: 'windows/amd64', label: 'windows/amd64' },
+              ].map((opt) => {
+                const on = pullPlatformsDraft.includes(opt.id);
+                return (
+                  <Tag.CheckableTag
+                    key={opt.id}
+                    checked={on}
+                    onChange={(checked) => {
+                      setPullPlatformsDraft((prev) => {
+                        const set = new Set(prev);
+                        if (checked) set.add(opt.id);
+                        else set.delete(opt.id);
+                        return Array.from(set);
+                      });
+                    }}
+                  >
+                    {opt.label}
+                  </Tag.CheckableTag>
+                );
+              })}
+              {pullPlatformsDraft.length > 0 ? (
+                <Button
+                  size="small"
+                  type="link"
+                  onClick={() => setPullPlatformsDraft([])}
+                  style={{ paddingInline: 8 }}
+                >
+                  清空（恢复全部）
+                </Button>
+              ) : null}
+            </Space>
           </Form.Item>
 
           <Form.Item>

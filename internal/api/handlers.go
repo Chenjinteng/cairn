@@ -128,6 +128,14 @@ type MutableSettings struct {
 	AllowRegistryEvtsSrc string `json:"allowRegistryEventsSource"`
 	StatsRetentionDays   int    `json:"statsRetentionDays"`
 	StatsRetentionSrc    string `json:"statsRetentionDaysSource"`
+	// PullPlatforms (v0.6.0) is the platform allow-list applied to
+	// multi-arch image indexes on pull. Empty string = "pull every
+	// platform" (current behaviour); CSV of "<os>/<arch>[/<variant>]"
+	// tokens otherwise (e.g. "linux/amd64,linux/arm64"). UI renders
+	// this as a chip multi-select so operators can flip their deployment
+	// from "all architectures" to "just x86+arm64" without restarting.
+	PullPlatforms      string `json:"pullPlatforms"`
+	PullPlatformsSrc   string `json:"pullPlatformsSource"`
 }
 
 // GetConfig returns the safe-to-expose runtime configuration.
@@ -217,6 +225,8 @@ func (h *Handlers) GetConfig(w http.ResponseWriter, r *http.Request) {
 			AllowRegistryEvtsSrc: src(h.Cfg.Mutable, "allow.registry_events"),
 			StatsRetentionDays:   h.Cfg.EffectiveStatsRetentionDays(),
 			StatsRetentionSrc:    src(h.Cfg.Mutable, "stats.retention.days"),
+			PullPlatforms:        strings.Join(h.Cfg.EffectivePullPlatforms(), ","),
+			PullPlatformsSrc:     src(h.Cfg.Mutable, "pull.platforms"),
 		},
 	})
 }
@@ -274,6 +284,30 @@ func (h *Handlers) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 				writeError(w, r, http.StatusBadRequest,
 					errors.New(key+" must be true/false"))
 				return
+			}
+		case "stringcsv":
+			// v0.6.0: each token is <os>/<arch>[/<variant>] with empty
+			// meaning "all platforms". Reject garbage here so a typo
+			// ("amd64" with no "linux/" prefix) doesn't silently turn
+			// into a pull-no-op at runtime.
+			for _, tok := range strings.Split(val, ",") {
+				tok = strings.TrimSpace(tok)
+				if tok == "" {
+					continue
+				}
+				parts := strings.Split(tok, "/")
+				if len(parts) < 2 || len(parts) > 3 {
+					writeError(w, r, http.StatusBadRequest,
+						errors.New(key+" token "+tok+" must be <os>/<arch>[/<variant>] (e.g. linux/amd64 or linux/arm/v7)"))
+					return
+				}
+				for _, seg := range parts {
+					if seg == "" || strings.ContainsAny(seg, " \t\n") {
+						writeError(w, r, http.StatusBadRequest,
+							errors.New(key+" token "+tok+" has an empty segment"))
+						return
+					}
+				}
 			}
 		}
 		// Persist + apply. Empty string means "clear the override".

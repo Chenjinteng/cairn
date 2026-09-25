@@ -118,6 +118,14 @@ export interface MutableSettings {
   allowRegistryEventsSource: 'env' | 'db';
   statsRetentionDays: number;
   statsRetentionDaysSource: 'env' | 'db';
+  /**
+   * v0.6.0: platform allow-list applied to multi-arch image indexes on pull.
+   * Empty string = "all platforms" (current behaviour). CSV of
+   * "<os>/<arch>[/<variant>]" tokens (e.g. "linux/amd64,linux/arm64"
+   * or "linux/amd64,linux/arm/v7"). Lowercased server-side.
+   */
+  pullPlatforms: string;
+  pullPlatformsSource: 'env' | 'db';
 }
 
 export interface ApiResult<T> {

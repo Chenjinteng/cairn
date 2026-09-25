@@ -6,6 +6,31 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.6.0] - 2026-09-26
+
+本轮主题：**多架构镜像拉取按平台白名单过滤**。v0.5.x 之前，拉一个多架构 index（比如 `nginx:alpine`、`clickhouse/server`、`alpine`）会把上游全部 ~10 个平台的子 manifest 都拉下来——单架构/双架构部署因此吃下大量用不到的层。本轮新增一个全局开关，配置后只下载目标平台的子 manifest 与它们独有的 blob。
+
+### 新增
+
+- **拉取平台白名单 `pull.platforms`**（设置页 → "拉取平台白名单"）。可选值是 `<os>/<arch>[/<variant>]` 的 CSV（例：`linux/amd64,linux/arm64` 或 `linux/amd64,linux/arm/v7`）；空 = 不过滤（保留 v0.5.x 的"全部平台"行为）。支持 `linux/amd64` / `linux/arm64` / `linux/arm/v7` / `linux/386` / `linux/ppc64le` / `linux/s390x` / `linux/riscv64` / `windows/amd64` 等常见架构的 chip 多选；自定义 token 也能从原始 CSV 输入。配置后只拉这些平台的子 manifest 与它们独有的 blob——alpine 这种"所有平台共享同一层"的镜像虽然表面 size 没变化，但拉取耗时显著下降（少 16 次子 manifest + blob-existence HEAD 请求）。
+- **环境变量 bootstrap `REGISTRY_PULL_PLATFORMS`**：首次部署时不用先打开 UI 改设置，直接在 `.env` 里写一行 `REGISTRY_PULL_PLATFORMS=linux/amd64,linux/arm64` 重启即生效；之后改设置页会覆盖 env（与 `REGISTRY_URL` / `REGISTRY_PROXY` 同样的 Mutable > env 优先级）。
+- **空匹配保护**：白名单过滤后如果一个子 manifest 都没命中（例如镜像只有 `linux/arm64` 你却写了 `linux/amd64`），`planTransfer` 立刻报错 `platform filter [...] matched no child manifests in the source index`，不会静默产出空 index 把后续 `docker pull` 全打挂。
+- **未知 platform 不被悄悄丢**：上游写 `architecture: "unknown"` 或缺字段的子 manifest 会原样保留——宁可多拉一个也优于静默丢失上游给的唯一 manifest。
+
+### 变更
+
+- `MutableKeys` 新增 `pull.platforms`，类型 `stringcsv`（新增的第三种类型：字符串 + 内置 CSV 校验；每个 token 必须严格 `<word>/<word>[/<word>]`，空段、含空格、非 ASCII 都被 400 拒绝）。
+- `MutableSettings` 新增 `pullPlatforms` + `pullPlatformsSource` 字段，UI 顶部 / 设置页立即可读。
+- `config.EffectivePullPlatforms()` 新增 helper：读 Mutable > env，空值返回 `nil`（= 不过滤），CSV 自动 trim + lowercase。
+- `pull.planTransfer()` 签名增加 `platformAllow []string` 参数；过滤逻辑使用新加的 `sourcePlatformRef.key()` / `matchAny()`。
+- `pull.executor` 引入 `manifestFetcher` interface（仅含 `GetManifest`），让 planTransfer 单元测试可以注入 fake，无需 HTTP mock。
+
+### 测试
+
+- `internal/pull/executor_test.go`（新文件）：5 个测试——`key()` 处理 nil / 缺字段 / 大写归一化、`matchAny()` 严格匹配（`linux/arm` ≠ `linux/arm/v7`）、`planTransfer` 三档 case（白名单命中 1 个、allow-list 为空命中全部、白名单 0 匹配时报错）、单架构 manifest 走原路径不受 filter 影响。
+
+---
+
 ## [0.5.7] - 2026-09-25
 
 本轮主题：**拉取任务的阶段明细**。展开一个拉取任务行，现在能看到每一步的进度——与 registry-manager 的展开视图对齐——而不是只有一条总进度。

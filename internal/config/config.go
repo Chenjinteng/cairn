@@ -59,6 +59,7 @@ var MutableKeys = []string{
 	"allow.pull",            // Config.EffectiveAllowPull
 	"allow.registry_events", // Config.EffectiveAllowRegistryEvents
 	"stats.retention.days",  // Config.EffectiveStatsRetentionDays
+	"pull.platforms",        // Config.EffectivePullPlatforms (CSV of <os>/<arch>[/<variant>]; empty = all)
 }
 
 // MutableKeysSet is the O(1) lookup version used by UpdateConfig.
@@ -82,6 +83,7 @@ var MutableFieldType = map[string]string{
 	"allow.pull":            "bool",
 	"allow.registry_events": "bool",
 	"stats.retention.days":  "int",
+	"pull.platforms":        "stringcsv",
 }
 
 // Get returns the persisted override for key, or "" if no override.
@@ -213,6 +215,37 @@ func (c *Config) EffectiveStatsRetentionDays() int {
 	return c.StatsRetentionDay
 }
 
+// EffectivePullPlatforms returns the allow-list of platforms the pull executor
+// uses to filter multi-arch image indexes. Empty list = "pull everything";
+// non-empty = "only fetch children whose OS/architecture[/variant] appears
+// in this list". Read precedence is Mutable override > env bootstrap.
+//
+// A platform token is "os/arch" or "os/arch/variant" (e.g. "linux/amd64",
+// "linux/arm/v7"). Validation is the caller's job — UpdateConfig already
+// rejects garbage tokens, and the env bootstrap is operator-controlled.
+// We trim and lowercase here so legacy env values written in a hurry don't
+// fail to match upstream platform strings.
+func (c *Config) EffectivePullPlatforms() []string {
+	raw := ""
+	if c != nil && c.Mutable != nil {
+		raw = c.Mutable.Get("pull.platforms")
+	}
+	if raw == "" && c != nil {
+		raw = c.PullPlatforms
+	}
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if t := strings.ToLower(strings.TrimSpace(p)); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 func (c *Config) EffectiveRegistryUsername() string {
 	if c == nil {
 		return ""
@@ -277,8 +310,9 @@ type Config struct {
 	AllowPull   bool // REGISTRY_ALLOW_PULL, default true
 
 	// Pull queue
-	PullQueueSize           int // REGISTRY_PULL_QUEUE_SIZE, default 50
-	PullHistoryRetentionDay int // REGISTRY_PULL_HISTORY_RETENTION_DAYS, default 90
+	PullQueueSize           int    // REGISTRY_PULL_QUEUE_SIZE, default 50
+	PullHistoryRetentionDay int    // REGISTRY_PULL_HISTORY_RETENTION_DAYS, default 90
+	PullPlatforms           string // REGISTRY_PULL_PLATFORMS, optional CSV of <os>/<arch>[/<variant>]; empty = all platforms (current behaviour)
 
 	// Heat / events
 	NotifyToken              string        // REGISTRY_NOTIFY_TOKEN, optional but required for heat
@@ -310,6 +344,7 @@ func Load() (*Config, error) {
 		AllowPull:               boolEnv("REGISTRY_ALLOW_PULL", true),
 		PullQueueSize:           intEnv("REGISTRY_PULL_QUEUE_SIZE", 50),
 		PullHistoryRetentionDay: intEnv("REGISTRY_PULL_HISTORY_RETENTION_DAYS", 90),
+		PullPlatforms:           strings.TrimSpace(os.Getenv("REGISTRY_PULL_PLATFORMS")),
 		NotifyToken:             os.Getenv("REGISTRY_NOTIFY_TOKEN"),
 		AllowRegistryEvents:     boolEnv("REGISTRY_ALLOW_REGISTRY_EVENTS", true),
 		StatsRetentionDay:       intEnv("REGISTRY_STATS_RETENTION_DAYS", 365),

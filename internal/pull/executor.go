@@ -98,6 +98,12 @@ type Orchestrator struct {
 	// when Mutable is nil OR was never written to).
 	DefaultSourceURL string
 
+	// pullPlatforms (v0.6.0) returns the platform allow-list the executor
+	// applies to multi-arch image indexes. Empty = "pull every platform"
+	// (preserves pre-v0.6.0 behaviour). Read through Config so a runtime
+	// change via PATCH /api/config takes effect on the next queued job.
+	pullPlatforms func() []string
+
 	PullHistoryRetention int
 }
 
@@ -161,7 +167,7 @@ func (o *Orchestrator) RunOne(ctx context.Context, j *Job) error {
 		return fmt.Errorf("fetch source manifest %s:%s from %s: %w", srcRepo, srcTag, srcURL, err)
 	}
 
-	plan, err := planTransfer(ctx, src, srcRepo, srcManifest)
+	plan, err := planTransfer(ctx, src, srcRepo, srcManifest, o.pullPlatforms())
 	if err != nil {
 		updatePhase(j, 0, func(p *Phase) {
 			p.Status = PhaseFailed
@@ -445,9 +451,58 @@ type sourceManifestDoc struct {
 }
 
 type sourceDesc struct {
-	MediaType string `json:"mediaType"`
-	Digest    string `json:"digest"`
-	Size      int64  `json:"size"`
+	MediaType string             `json:"mediaType"`
+	Digest    string             `json:"digest"`
+	Size      int64              `json:"size"`
+	Platform  *sourcePlatformRef `json:"platform,omitempty"` // index entries only
+}
+
+// sourcePlatformRef is the {architecture,os[,variant]} object the registry
+// attaches to each child in an image index's manifests[]. Empty Variant is
+// normal (amd64, arm64, ppc64le, s390x, riscv64, ... all have none); arm/v7
+// and arm/v6 carry "v7"/"v6".
+type sourcePlatformRef struct {
+	Architecture string `json:"architecture"`
+	OS           string `json:"os"`
+	Variant      string `json:"variant,omitempty"`
+}
+
+// platformKey returns "os/arch" or "os/arch/variant" — the canonical token
+// shape MutableKeys "pull.platforms" accepts. Lowercased to match the
+// allow-list parsing in config.EffectivePullPlatforms.
+func (p *sourcePlatformRef) key() string {
+	if p == nil {
+		return ""
+	}
+	os := strings.ToLower(strings.TrimSpace(p.OS))
+	arch := strings.ToLower(strings.TrimSpace(p.Architecture))
+	if os == "" || arch == "" {
+		return ""
+	}
+	if v := strings.ToLower(strings.TrimSpace(p.Variant)); v != "" {
+		return os + "/" + arch + "/" + v
+	}
+	return os + "/" + arch
+}
+
+// matchAny reports whether this platform's key appears in the allow-list.
+// An empty allow-list means "all platforms" (no filter).
+func (p *sourcePlatformRef) matchAny(allow []string) bool {
+	if len(allow) == 0 {
+		return true
+	}
+	k := p.key()
+	if k == "" {
+		// No platform info at all: keep it. Better to pull an "unknown"
+		// child than to silently drop the only manifest the registry gave.
+		return true
+	}
+	for _, a := range allow {
+		if a == k {
+			return true
+		}
+	}
+	return false
 }
 
 func decodeSourceDoc(raw []byte) (sourceManifestDoc, error) {
@@ -461,11 +516,23 @@ func decodeSourceDoc(raw []byte) (sourceManifestDoc, error) {
 	return doc, nil
 }
 
+// manifestFetcher is the slice of *registry.Client that planTransfer uses.
+// Keeping it as a one-method interface lets unit tests inject a fake
+// without HTTP mocking or depending on the concrete Client struct.
+type manifestFetcher interface {
+	GetManifest(ctx context.Context, repo, reference string) (*registry.Manifest, error)
+}
+
 // planTransfer expands the root manifest into the exact set of blobs and child
 // manifests to copy. For a multi-arch index every child is fetched up front:
 // they are small JSON documents, and having them lets us report an accurate
 // blob total before the first byte moves.
-func planTransfer(ctx context.Context, src *registry.Client, srcRepo string, root *registry.Manifest) (*transferPlan, error) {
+//
+// platformAllow filters multi-arch index children: empty = all (current
+// behaviour); non-empty = only children whose {os,architecture[,variant]}
+// appears in the list. If filtering leaves zero matches the pull fails
+// clearly rather than silently producing an empty index.
+func planTransfer(ctx context.Context, src manifestFetcher, srcRepo string, root *registry.Manifest, platformAllow []string) (*transferPlan, error) {
 	if root == nil {
 		return nil, fmt.Errorf("source manifest is nil")
 	}
@@ -479,8 +546,12 @@ func planTransfer(ctx context.Context, src *registry.Client, srcRepo string, roo
 
 	if len(doc.Manifests) > 0 {
 		plan.rootMediaType = firstNonEmpty(root.MediaType, doc.MediaType, mediaTypeOCIIndex)
+		matched := 0
 		for _, child := range doc.Manifests {
 			if child.Digest == "" {
+				continue
+			}
+			if !child.Platform.matchAny(platformAllow) {
 				continue
 			}
 			m, err := src.GetManifest(ctx, srcRepo, child.Digest)
@@ -497,6 +568,10 @@ func planTransfer(ctx context.Context, src *registry.Client, srcRepo string, roo
 				Raw:       m.Raw,
 			})
 			collectBlobs(&plan.blobs, seen, childDoc)
+			matched++
+		}
+		if matched == 0 {
+			return nil, fmt.Errorf("platform filter %v matched no child manifests in the source index", platformAllow)
 		}
 		return plan, nil
 	}
