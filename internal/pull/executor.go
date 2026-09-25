@@ -81,6 +81,9 @@ func (o *Orchestrator) RunOne(ctx context.Context, j *Job) error {
 	var cred *credentials.Credential
 	var proxy *proxies.Proxy
 	if v.Credential != "" {
+		if o.Vault == nil {
+			return fmt.Errorf("credential %q: credential store unavailable", v.Credential)
+		}
 		c, err := o.Vault.Get(v.Credential)
 		if err != nil {
 			return fmt.Errorf("credential %q: %w", v.Credential, err)
@@ -88,13 +91,22 @@ func (o *Orchestrator) RunOne(ctx context.Context, j *Job) error {
 		cred = &c
 	}
 	if v.Proxy != "" {
+		if o.Proxies == nil {
+			return fmt.Errorf("proxy %q: proxy store unavailable", v.Proxy)
+		}
 		p, err := o.Proxies.Get(v.Proxy)
 		if err != nil {
 			return fmt.Errorf("proxy %q: %w", v.Proxy, err)
 		}
 		proxy = &p
 	}
-	srcURL := cred.URL
+	// cred is nil for anonymous pulls — default to Docker Hub. (The old code
+	// dereferenced cred.URL unconditionally and panicked on every job that
+	// had no credential attached.)
+	srcURL := ""
+	if cred != nil {
+		srcURL = cred.URL
+	}
 	if srcURL == "" {
 		srcURL = "https://registry-1.docker.io"
 	}

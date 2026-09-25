@@ -4,6 +4,7 @@ import { ConfigProvider, theme as antdTheme } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 
 import App, { type ThemeMode } from './App';
+import ErrorBoundary from './components/error-boundary';
 import './theme.css';
 import './app.css';
 
@@ -73,10 +74,12 @@ function Root() {
 
   return (
     <ConfigProvider theme={buildAntdTheme(mode)} locale={zhCN}>
-      <App
-        mode={mode}
-        onToggleMode={() => setMode((current) => (current === 'dark' ? 'light' : 'dark'))}
-      />
+      <ErrorBoundary>
+        <App
+          mode={mode}
+          onToggleMode={() => setMode((current) => (current === 'dark' ? 'light' : 'dark'))}
+        />
+      </ErrorBoundary>
     </ConfigProvider>
   );
 }

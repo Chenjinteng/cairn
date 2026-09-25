@@ -64,25 +64,40 @@ func Build(cfg *config.Config) (*Runtime, error) {
 
 	// 2. SQLite for stats + history (best-effort; if it fails, /api/stats returns 503).
 	var store_db *db.Db
+	var dbErr string
 	if dbPath, err := safeDBPath(dataDir); err == nil {
 		d, err := db.Open(dbPath)
 		if err != nil {
+			dbErr = err.Error()
 			slog.Warn("db open failed; stats endpoints will 503", "err", err)
 		} else {
 			store_db = d
 		}
+	} else {
+		dbErr = err.Error()
+		slog.Warn("db path rejected; stats endpoints will 503", "err", err)
 	}
 
-	// 3. Credential vault.
-	vault, err := credentials.Open(filepath.Join(dataDir, "credentials.json"), cfg.CredentialKey)
-	if err != nil {
-		return nil, fmt.Errorf("server: open vault: %w", err)
+	// 3. Credential vault (best-effort since v0.4.0: a missing/broken
+	// REGISTRY_CREDENTIAL_KEY degrades /api/credentials to 503 with the
+	// reason instead of taking the whole server down).
+	var vault *credentials.Vault
+	var vaultErr string
+	if v, err := credentials.Open(filepath.Join(dataDir, "credentials.json"), cfg.CredentialKey); err != nil {
+		vaultErr = err.Error()
+		slog.Warn("credential vault open failed; /api/credentials will 503", "err", err)
+	} else {
+		vault = v
 	}
 
-	// 4. Proxy store.
-	proxyStore, err := proxies.Open(filepath.Join(dataDir, "proxies.json"))
-	if err != nil {
-		return nil, fmt.Errorf("server: open proxies: %w", err)
+	// 4. Proxy store (best-effort, same rationale as the vault).
+	var proxyStore *proxies.Store
+	var proxiesErr string
+	if ps, err := proxies.Open(filepath.Join(dataDir, "proxies.json")); err != nil {
+		proxiesErr = err.Error()
+		slog.Warn("proxy store open failed; /api/proxies will 503", "err", err)
+	} else {
+		proxyStore = ps
 	}
 
 	// 5. External registry client (used by pull jobs to fetch from upstream).
@@ -117,27 +132,47 @@ func Build(cfg *config.Config) (*Runtime, error) {
 		executor = pull.NewExecutor(cfg.PullQueueSize, orchestrator.RunOne)
 	}
 
-	// 7. Events handler.
+	// 7. Events handler (webhook receiver for registry notifications).
 	var eventsHandler *events.Handler
-	if store_db != nil && cfg.NotifyToken != "" {
-		eventsHandler = events.NewHandler(store_db, cfg.NotifyToken, cfg.StatsIgnoreUserAgents, 200)
+	if store_db != nil && cfg.NotifyToken != "" && cfg.AllowRegistryEvents {
+		// effective ignore = env ∪ panel (panel rules persist in SQLite and
+		// are merged in at startup so they survive restarts).
+		ignore := cfg.StatsIgnoreUserAgents
+		if panel, err := store_db.ListIgnore(context.Background()); err == nil {
+			ignore = events.MergeIgnore(ignore, panel)
+		}
+		eventsHandler = events.NewHandler(store_db, cfg.NotifyToken, ignore, 200)
 	}
 
 	// 8. Admin handlers (browse/delete talk to local storage; pull uses external client).
-	handlers := &api.Handlers{Cfg: cfg, Store: store, Registry: externalRegistry}
+	handlers := &api.Handlers{
+		Cfg:        cfg,
+		Store:      store,
+		Registry:   externalRegistry,
+		Vault:      vault,
+		Proxies:    proxyStore,
+		DB:         store_db,
+		VaultErr:   vaultErr,
+		ProxiesErr: proxiesErr,
+		DBErr:      dbErr,
+	}
 
 	extras := &api.ExtraHandlers{
 		Cfg: &api.ConfigExtras{
 			AllowPull:        cfg.AllowPull,
 			IgnoreUserAgents: cfg.StatsIgnoreUserAgents,
+			RegistryURL:      cfg.RegistryURL,
 		},
-		Executor: executor,
-		Vault:    vault,
-		Proxies:  proxyStore,
-		DB:       store_db,
-		Events:   eventsHandler,
-		Registry: externalRegistry,
-		Store:    store,
+		Executor:   executor,
+		Vault:      vault,
+		Proxies:    proxyStore,
+		DB:         store_db,
+		Events:     eventsHandler,
+		Registry:   externalRegistry,
+		Store:      store,
+		VaultErr:   vaultErr,
+		ProxiesErr: proxiesErr,
+		DBErr:      dbErr,
 	}
 
 	// 9. Composite router: /api/* + /v2/*

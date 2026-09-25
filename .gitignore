@@ -22,10 +22,12 @@ go.work.sum
 # Local config (mirrors registry.config.json convention from registry-manager)
 /registry.config.json
 
-# Frontend (until we wire it in)
+# Frontend
 /web/node_modules/
 /web/dist/
 /web/.vite/
+# pnpm build 产物：go:embed 的源，由构建产生，不入库
+/internal/webui/dist/
 
 # Editor / OS
 .DS_Store

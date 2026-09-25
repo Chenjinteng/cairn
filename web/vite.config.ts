@@ -22,7 +22,8 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: resolve(import.meta.dirname, 'dist'),
+    // 产物直接进 Go embed 目录，`go build -tags webui` 时打进二进制。
+    outDir: resolve(import.meta.dirname, '../internal/webui/dist'),
     emptyOutDir: true,
   },
 });

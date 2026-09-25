@@ -1,10 +1,14 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +21,7 @@ import (
 	"cairn/internal/pull"
 	"cairn/internal/registry"
 	"cairn/internal/storage"
+	"cairn/internal/version"
 )
 
 // ExtraHandlers bundles deps that aren't in Handlers yet (so the v0.1
@@ -30,20 +35,31 @@ type ExtraHandlers struct {
 	Events   *events.Handler
 	Registry registry.Registry
 	Store    storage.Storage
+
+	// v0.4.0: startup failure reasons for the optional stores ("" when
+	// available). Surfaced by the 503 guards so the UI can explain *why*
+	// a panel is disabled.
+	VaultErr   string
+	ProxiesErr string
+	DBErr      string
 }
 
 // ConfigExtras holds the extra config fields the new handlers need.
 type ConfigExtras struct {
-	AllowPull       bool
+	AllowPull        bool
 	IgnoreUserAgents []string
+	// RegistryURL is the externally reachable base URL of the local registry.
+	// TestProxy uses it as the default probe target (v0.4.0).
+	RegistryURL string
 }
 
-// RegisterExtraRoutes mounts the v0.2 + v0.3 endpoints on the chi router.
+// RegisterRoutes mounts the v0.2 + v0.3 + v0.4 endpoints on the chi router.
 //
-// Pattern: separate from the v0.1 routes so we can group them in the README
-// and let middleware differ (e.g. /api/pull/* could rate-limit later).
+// IMPORTANT: paths here are RELATIVE to the /api group (api.go calls this
+// inside r.Route("/api", ...)). The v0.2 implementation mounted "/api/..."
+// paths here, producing the double-prefix bug (/api/api/credentials).
 func (e *ExtraHandlers) RegisterRoutes(r chi.Router) {
-	r.Route("/api/pull", func(r chi.Router) {
+	r.Route("/pull", func(r chi.Router) {
 		r.Get("/jobs", e.ListPullJobs)
 		r.Post("/jobs", e.CreatePullJob)
 		r.Get("/jobs/{id}", e.GetPullJob)
@@ -52,26 +68,30 @@ func (e *ExtraHandlers) RegisterRoutes(r chi.Router) {
 		r.Post("/probe", e.ProbePullSource)
 	})
 
-	r.Route("/api/credentials", func(r chi.Router) {
+	r.Route("/credentials", func(r chi.Router) {
 		r.Get("/", e.ListCredentials)
 		r.Post("/", e.CreateCredential)
 		r.Get("/{id}", e.GetCredential)
+		r.Patch("/{id}", e.UpdateCredential)
 		r.Delete("/{id}", e.DeleteCredential)
 		r.Post("/{id}/test", e.TestCredential)
 	})
 
-	r.Route("/api/proxies", func(r chi.Router) {
+	r.Route("/proxies", func(r chi.Router) {
 		r.Get("/", e.ListProxies)
 		r.Post("/", e.CreateProxy)
 		r.Get("/{id}", e.GetProxy)
+		r.Patch("/{id}", e.UpdateProxy)
 		r.Delete("/{id}", e.DeleteProxy)
 		r.Post("/{id}/test", e.TestProxy)
 	})
 
 	if e.Events != nil {
+		// Webhook ingest (registry-side notification endpoint).
 		r.Post("/events", e.Events.ServeHTTP)
 	}
-	r.Route("/api/stats", func(r chi.Router) {
+
+	r.Route("/stats", func(r chi.Router) {
 		r.Get("/summary", e.StatsSummary)
 		r.Get("/top", e.StatsTop)
 		r.Get("/series", e.StatsSeries)
@@ -85,19 +105,95 @@ func (e *ExtraHandlers) RegisterRoutes(r chi.Router) {
 	})
 }
 
+// --- guards -----------------------------------------------------------------
+
+func (e *ExtraHandlers) vaultUnavailable(w http.ResponseWriter, r *http.Request) bool {
+	if e.Vault == nil {
+		reason := e.VaultErr
+		if reason == "" {
+			reason = "credential store unavailable"
+		}
+		writeError(w, r, http.StatusServiceUnavailable, errors.New(reason))
+		return true
+	}
+	return false
+}
+
+func (e *ExtraHandlers) proxiesUnavailable(w http.ResponseWriter, r *http.Request) bool {
+	if e.Proxies == nil {
+		reason := e.ProxiesErr
+		if reason == "" {
+			reason = "proxy store unavailable"
+		}
+		writeError(w, r, http.StatusServiceUnavailable, errors.New(reason))
+		return true
+	}
+	return false
+}
+
 // --- Pull -------------------------------------------------------------------
 
+// CreatePullJobReq mirrors the UI's CreatePullJobRequest. Fields the v0.4.0
+// executor cannot honour yet (inline source url/auth, overwrite) are accepted
+// and ignored — the executor always pulls through its configured external
+// registry client. Deep contract lands in v0.5.0.
 type CreatePullJobReq struct {
-	SourceRef  string `json:"sourceRef"`
-	DestRepo   string `json:"destRepo"`
-	DestTag    string `json:"destTag"`
-	Credential string `json:"credential,omitempty"`
-	Proxy      string `json:"proxy,omitempty"`
+	SourceImage string `json:"sourceImage"`
+	DestRepo    string `json:"destRepo"`
+	DestTag     string `json:"destTag"`
+	Credential  string `json:"credential,omitempty"`
+	Proxy       string `json:"proxy,omitempty"`
+	Overwrite   bool   `json:"overwrite"`
+	SourceUrl   string `json:"sourceUrl,omitempty"`
+	SourceAuth  *struct {
+		Mode     string `json:"mode"`
+		Username string `json:"username"`
+		Password string `json:"password"`
+	} `json:"sourceAuth,omitempty"`
+}
+
+// uiJobView maps pull.JobView onto the UI's PullJob shape (minimal viable
+// mapping for v0.4.0; phases/destStatus arrive with v0.5.0).
+func uiJobView(j pull.JobView) map[string]any {
+	sourceRepo, sourceTag, _ := splitSourceRef(j.SourceRef)
+	var startedAt, finishedAt any
+	if !j.StartedAt.IsZero() {
+		startedAt = j.StartedAt
+	}
+	if !j.EndedAt.IsZero() {
+		finishedAt = j.EndedAt
+	}
+	return map[string]any{
+		"id":         j.ID,
+		"status":     string(j.State),
+		"sourceRepo": sourceRepo,
+		"sourceTag":  sourceTag,
+		"sourceUrl":  "",
+		"targetRepo": j.DestRepo,
+		"targetTag":  j.DestTag,
+		"credential": j.Credential,
+		"proxy":      j.Proxy,
+		"bytes":      j.BytesDone,
+		"totalBytes": j.BytesTotal,
+		"blobsDone":  j.BlobsDone,
+		"blobsTotal": j.BlobsTotal,
+		"createdAt":  j.CreatedAt,
+		"startedAt":  startedAt,
+		"finishedAt": finishedAt,
+		"error":      j.Error,
+		"phases":     []any{},
+	}
 }
 
 func (e *ExtraHandlers) CreatePullJob(w http.ResponseWriter, r *http.Request) {
+	if e.Executor == nil {
+		writeError(w, r, http.StatusServiceUnavailable,
+			errors.New("pull queue is not enabled (external registry unreachable)"))
+		return
+	}
 	if !e.Cfg.AllowPull {
-		writeError(w, r, http.StatusForbidden, errDeleteDisabled) // reuse 403 path
+		writeError(w, r, http.StatusForbidden,
+			errors.New("pull is disabled (REGISTRY_ALLOW_PULL=false)"))
 		return
 	}
 	var req CreatePullJobReq
@@ -105,32 +201,52 @@ func (e *ExtraHandlers) CreatePullJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, err)
 		return
 	}
-	if req.SourceRef == "" {
-		writeError(w, r, http.StatusBadRequest, errors.New("sourceRef required"))
+	if _, _, ok := splitSourceRef(req.SourceImage); !ok {
+		writeError(w, r, http.StatusBadRequest,
+			errors.New("sourceImage must be <repo>:<tag>"))
 		return
 	}
-	if _, _, ok := splitSourceRef(req.SourceRef); !ok {
-		writeError(w, r, http.StatusBadRequest, errors.New("sourceRef must be <repo>:<tag>"))
+	if strings.TrimSpace(req.DestRepo) == "" {
+		writeError(w, r, http.StatusBadRequest, errors.New("destRepo required"))
 		return
 	}
-	job := e.Executor.Submit(req.SourceRef, req.DestRepo, req.DestTag, req.Credential, req.Proxy)
-	writeJSON(w, http.StatusAccepted, job)
+	job := e.Executor.Submit(req.SourceImage, req.DestRepo, req.DestTag, req.Credential, req.Proxy)
+	writeJSON(w, http.StatusCreated, uiJobView(job))
 }
 
 func (e *ExtraHandlers) ListPullJobs(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, e.Executor.List())
+	if e.Executor == nil {
+		// Read-only list degrades to an empty array so the UI doesn't explode
+		// when the pull feature is disabled.
+		writeJSON(w, http.StatusOK, []any{})
+		return
+	}
+	jobs := e.Executor.List()
+	out := make([]any, 0, len(jobs))
+	for _, j := range jobs {
+		out = append(out, uiJobView(j))
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (e *ExtraHandlers) GetPullJob(w http.ResponseWriter, r *http.Request) {
+	if e.Executor == nil {
+		writeError(w, r, http.StatusServiceUnavailable, errors.New("pull queue is not enabled"))
+		return
+	}
 	id := chiURLParam(r, "id")
 	if j := e.Executor.Get(id); j.ID != "" {
-		writeJSON(w, http.StatusOK, j)
+		writeJSON(w, http.StatusOK, uiJobView(j))
 		return
 	}
 	writeError(w, r, http.StatusNotFound, errors.New("job not found"))
 }
 
 func (e *ExtraHandlers) CancelPullJob(w http.ResponseWriter, r *http.Request) {
+	if e.Executor == nil {
+		writeError(w, r, http.StatusServiceUnavailable, errors.New("pull queue is not enabled"))
+		return
+	}
 	id := chiURLParam(r, "id")
 	if err := e.Executor.Cancel(id); err != nil {
 		if errors.Is(err, pull.ErrJobNotFound) {
@@ -140,10 +256,15 @@ func (e *ExtraHandlers) CancelPullJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"id": id, "cancelled": true})
+	// Return the cancelled job view so the UI can update in place.
+	writeJSON(w, http.StatusOK, uiJobView(e.Executor.Get(id)))
 }
 
 func (e *ExtraHandlers) DeletePullJob(w http.ResponseWriter, r *http.Request) {
+	if e.Executor == nil {
+		writeError(w, r, http.StatusServiceUnavailable, errors.New("pull queue is not enabled"))
+		return
+	}
 	id := chiURLParam(r, "id")
 	if err := e.Executor.Delete(id); err != nil {
 		if errors.Is(err, pull.ErrJobNotFound) {
@@ -157,28 +278,38 @@ func (e *ExtraHandlers) DeletePullJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	// 200 + body (not 204): the UI's api() helper rejects empty bodies.
+	writeJSON(w, http.StatusOK, map[string]any{"id": id})
 }
 
 func (e *ExtraHandlers) ProbePullSource(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		URL        string `json:"url"`
+		SourceURL  string `json:"sourceUrl"`
 		Credential string `json:"credential,omitempty"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, r, http.StatusBadRequest, err)
 		return
 	}
-	if req.URL == "" {
+	target := strings.TrimSpace(req.URL)
+	if target == "" {
+		target = strings.TrimSpace(req.SourceURL)
+	}
+	if target == "" {
 		writeError(w, r, http.StatusBadRequest, errors.New("url required"))
 		return
 	}
-	if !strings.HasPrefix(req.URL, "http://") && !strings.HasPrefix(req.URL, "https://") {
+	if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
 		writeError(w, r, http.StatusBadRequest, errors.New("url must be http(s)://..."))
 		return
 	}
-	cfg := registry.Config{BaseURL: req.URL, Timeout: 5 * time.Second}
+	cfg := registry.Config{BaseURL: target, Timeout: 5 * time.Second}
 	if req.Credential != "" {
+		if e.Vault == nil {
+			writeError(w, r, http.StatusServiceUnavailable, errors.New("credential store unavailable"))
+			return
+		}
 		c, err := e.Vault.Get(req.Credential)
 		if err != nil {
 			writeError(w, r, http.StatusNotFound, err)
@@ -192,11 +323,24 @@ func (e *ExtraHandlers) ProbePullSource(w http.ResponseWriter, r *http.Request) 
 		writeError(w, r, http.StatusBadRequest, err)
 		return
 	}
+	start := time.Now()
 	if err := client.Probe(r.Context()); err != nil {
-		writeError(w, r, http.StatusBadGateway, err)
+		// Domain failure → 200 {ok:false} so the UI renders it inline.
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":        false,
+			"error":     err.Error(),
+			"elapsedMs": time.Since(start).Milliseconds(),
+			"url":       target,
+		})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":         true,
+		"status":     "ok",
+		"elapsedMs":  time.Since(start).Milliseconds(),
+		"url":        target,
+		"apiVersion": "2",
+	})
 }
 
 func splitSourceRef(ref string) (repo, tag string, ok bool) {
@@ -217,321 +361,669 @@ func splitSourceRef(ref string) (repo, tag string, ok bool) {
 }
 
 // --- Credentials ------------------------------------------------------------
+//
+// JSON views never leak the password back to the client (hasPassword flag
+// instead). The UI's Credential shape: {id,name,registryUrl,username,
+// hasPassword,note?,createdAt,updatedAt}.
+
+type credentialView struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	RegistryURL string `json:"registryUrl"`
+	Username    string `json:"username"`
+	HasPassword bool   `json:"hasPassword"`
+	Note        string `json:"note,omitempty"`
+	CreatedAt   string `json:"createdAt"`
+	UpdatedAt   string `json:"updatedAt"`
+}
+
+func toCredentialView(c credentials.Credential) credentialView {
+	return credentialView{
+		ID:          c.ID,
+		Name:        c.Name,
+		RegistryURL: c.URL,
+		Username:    c.Username,
+		HasPassword: c.Password != "",
+		Note:        c.Note,
+		CreatedAt:   c.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:   c.UpdatedAt.Format(time.RFC3339),
+	}
+}
+
+// credentialInput is the create/update request body. On update an empty
+// password means "keep the stored one" (the UI never round-trips secrets).
+type credentialInput struct {
+	Name        string `json:"name"`
+	RegistryURL string `json:"registryUrl"`
+	Username    string `json:"username"`
+	Password    string `json:"password"`
+	Note        string `json:"note"`
+}
 
 func (e *ExtraHandlers) ListCredentials(w http.ResponseWriter, r *http.Request) {
-	out := []credentials.Credential{}
-	for _, c := range e.Vault.List() {
-		c.Password = "" // never echo password
-		out = append(out, c)
+	if e.vaultUnavailable(w, r) {
+		return
+	}
+	all := e.Vault.List()
+	out := make([]credentialView, 0, len(all))
+	for _, c := range all {
+		out = append(out, toCredentialView(c))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
 func (e *ExtraHandlers) CreateCredential(w http.ResponseWriter, r *http.Request) {
-	var c credentials.Credential
-	if err := decodeJSON(r, &c); err != nil {
+	if e.vaultUnavailable(w, r) {
+		return
+	}
+	var in credentialInput
+	if err := decodeJSON(r, &in); err != nil {
 		writeError(w, r, http.StatusBadRequest, err)
 		return
 	}
-	if c.ID == "" {
-		c.ID = newID()
+	if strings.TrimSpace(in.Name) == "" || strings.TrimSpace(in.RegistryURL) == "" {
+		writeError(w, r, http.StatusBadRequest, errors.New("name and registryUrl are required"))
+		return
+	}
+	c := credentials.Credential{
+		ID:       newID(),
+		Name:     strings.TrimSpace(in.Name),
+		URL:      strings.TrimSpace(in.RegistryURL),
+		Username: in.Username,
+		Password: in.Password,
+		Note:     in.Note,
 	}
 	if err := e.Vault.Put(c); err != nil {
 		writeError(w, r, http.StatusBadRequest, err)
 		return
 	}
 	stored, _ := e.Vault.Get(c.ID)
-	stored.Password = "" // don't echo back
-	writeJSON(w, http.StatusCreated, stored)
+	writeJSON(w, http.StatusCreated, toCredentialView(stored))
 }
 
 func (e *ExtraHandlers) GetCredential(w http.ResponseWriter, r *http.Request) {
+	if e.vaultUnavailable(w, r) {
+		return
+	}
 	id := chiURLParam(r, "id")
 	c, err := e.Vault.Get(id)
 	if err != nil {
 		writeError(w, r, http.StatusNotFound, err)
 		return
 	}
-	c.Password = ""
-	writeJSON(w, http.StatusOK, c)
+	writeJSON(w, http.StatusOK, toCredentialView(c))
+}
+
+func (e *ExtraHandlers) UpdateCredential(w http.ResponseWriter, r *http.Request) {
+	if e.vaultUnavailable(w, r) {
+		return
+	}
+	id := chiURLParam(r, "id")
+	existing, err := e.Vault.Get(id)
+	if err != nil {
+		writeError(w, r, http.StatusNotFound, err)
+		return
+	}
+	var in credentialInput
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, r, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(in.Name) != "" {
+		existing.Name = strings.TrimSpace(in.Name)
+	}
+	if strings.TrimSpace(in.RegistryURL) != "" {
+		existing.URL = strings.TrimSpace(in.RegistryURL)
+	}
+	existing.Username = in.Username
+	if in.Password != "" { // empty = keep stored password
+		existing.Password = in.Password
+	}
+	existing.Note = in.Note
+	if err := e.Vault.Put(existing); err != nil {
+		writeError(w, r, http.StatusBadRequest, err)
+		return
+	}
+	stored, _ := e.Vault.Get(id)
+	writeJSON(w, http.StatusOK, toCredentialView(stored))
 }
 
 func (e *ExtraHandlers) DeleteCredential(w http.ResponseWriter, r *http.Request) {
+	if e.vaultUnavailable(w, r) {
+		return
+	}
 	id := chiURLParam(r, "id")
 	if err := e.Vault.Delete(id); err != nil {
 		writeError(w, r, http.StatusNotFound, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, map[string]any{"id": id})
 }
 
+// TestCredential probes /v2/ on the credential's registry with basic auth.
+// Transport/domain failures are returned as HTTP 200 {ok:false} — the UI
+// renders them inline next to the form.
 func (e *ExtraHandlers) TestCredential(w http.ResponseWriter, r *http.Request) {
+	if e.vaultUnavailable(w, r) {
+		return
+	}
 	id := chiURLParam(r, "id")
 	c, err := e.Vault.Get(id)
 	if err != nil {
 		writeError(w, r, http.StatusNotFound, err)
 		return
 	}
-	client, err := registry.NewClient(registry.Config{
-		BaseURL:  c.URL,
-		Username: c.Username,
-		Password: c.Password,
-		Timeout:  5 * time.Second,
-	})
+	base := strings.TrimSuffix(c.URL, "/")
+	endpoint := base + "/v2/"
+
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		writeError(w, r, http.StatusBadRequest, err)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok": false, "error": err.Error(), "registryUrl": base,
+		})
 		return
 	}
-	if err := client.Probe(r.Context()); err != nil {
-		writeError(w, r, http.StatusBadGateway, err)
+	if c.Username != "" {
+		req.SetBasicAuth(c.Username, c.Password)
+	}
+	req.Header.Set("User-Agent", "cairn/"+version.Version)
+
+	start := time.Now()
+	resp, err := http.DefaultClient.Do(req)
+	elapsed := time.Since(start).Milliseconds()
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok": false, "error": err.Error(), "elapsedMs": elapsed, "registryUrl": base,
+		})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":          resp.StatusCode < 400,
+		"status":      resp.StatusCode,
+		"statusText":  resp.Status,
+		"elapsedMs":   elapsed,
+		"registryUrl": base,
+		"apiVersion":  "2",
+		"purpose":     "source",
+	})
 }
 
 // --- Proxies ----------------------------------------------------------------
 
+type proxyView struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	URL       string `json:"url"`
+	Username  string `json:"username"`
+	HasAuth   bool   `json:"hasAuth"`
+	Note      string `json:"note,omitempty"`
+	CreatedAt string `json:"createdAt"`
+	UpdatedAt string `json:"updatedAt"`
+}
+
+func toProxyView(p proxies.Proxy) proxyView {
+	return proxyView{
+		ID:        p.ID,
+		Name:      p.Name,
+		URL:       p.URL,
+		Username:  p.Username,
+		HasAuth:   p.Password != "",
+		Note:      p.Note,
+		CreatedAt: p.CreatedAt.Format(time.RFC3339),
+		UpdatedAt: p.UpdatedAt.Format(time.RFC3339),
+	}
+}
+
+// proxyInput: on update an empty password CLEARS the stored one (proxies are
+// often anonymous; the UI sends "" when the auth toggle is off).
+type proxyInput struct {
+	Name     string `json:"name"`
+	URL      string `json:"url"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Note     string `json:"note"`
+}
+
 func (e *ExtraHandlers) ListProxies(w http.ResponseWriter, r *http.Request) {
-	out := []proxies.Proxy{}
-	for _, p := range e.Proxies.List() {
-		p.Password = ""
-		out = append(out, p)
+	if e.proxiesUnavailable(w, r) {
+		return
+	}
+	all := e.Proxies.List()
+	out := make([]proxyView, 0, len(all))
+	for _, p := range all {
+		out = append(out, toProxyView(p))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
 func (e *ExtraHandlers) CreateProxy(w http.ResponseWriter, r *http.Request) {
-	var p proxies.Proxy
-	if err := decodeJSON(r, &p); err != nil {
+	if e.proxiesUnavailable(w, r) {
+		return
+	}
+	var in proxyInput
+	if err := decodeJSON(r, &in); err != nil {
 		writeError(w, r, http.StatusBadRequest, err)
 		return
 	}
-	if p.ID == "" {
-		p.ID = newID()
+	if strings.TrimSpace(in.Name) == "" || strings.TrimSpace(in.URL) == "" {
+		writeError(w, r, http.StatusBadRequest, errors.New("name and url are required"))
+		return
+	}
+	p := proxies.Proxy{
+		ID:       newID(),
+		Name:     strings.TrimSpace(in.Name),
+		URL:      strings.TrimSpace(in.URL),
+		Username: in.Username,
+		Password: in.Password,
+		Note:     in.Note,
 	}
 	if err := e.Proxies.Put(p); err != nil {
 		writeError(w, r, http.StatusBadRequest, err)
 		return
 	}
 	stored, _ := e.Proxies.Get(p.ID)
-	stored.Password = ""
-	writeJSON(w, http.StatusCreated, stored)
+	writeJSON(w, http.StatusCreated, toProxyView(stored))
 }
 
 func (e *ExtraHandlers) GetProxy(w http.ResponseWriter, r *http.Request) {
+	if e.proxiesUnavailable(w, r) {
+		return
+	}
 	id := chiURLParam(r, "id")
 	p, err := e.Proxies.Get(id)
 	if err != nil {
 		writeError(w, r, http.StatusNotFound, err)
 		return
 	}
-	p.Password = ""
-	writeJSON(w, http.StatusOK, p)
+	writeJSON(w, http.StatusOK, toProxyView(p))
+}
+
+func (e *ExtraHandlers) UpdateProxy(w http.ResponseWriter, r *http.Request) {
+	if e.proxiesUnavailable(w, r) {
+		return
+	}
+	id := chiURLParam(r, "id")
+	existing, err := e.Proxies.Get(id)
+	if err != nil {
+		writeError(w, r, http.StatusNotFound, err)
+		return
+	}
+	var in proxyInput
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, r, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(in.Name) != "" {
+		existing.Name = strings.TrimSpace(in.Name)
+	}
+	if strings.TrimSpace(in.URL) != "" {
+		existing.URL = strings.TrimSpace(in.URL)
+	}
+	existing.Username = in.Username
+	existing.Password = in.Password // empty = clear (anonymous proxy)
+	existing.Note = in.Note
+	if err := e.Proxies.Put(existing); err != nil {
+		writeError(w, r, http.StatusBadRequest, err)
+		return
+	}
+	stored, _ := e.Proxies.Get(id)
+	writeJSON(w, http.StatusOK, toProxyView(stored))
 }
 
 func (e *ExtraHandlers) DeleteProxy(w http.ResponseWriter, r *http.Request) {
+	if e.proxiesUnavailable(w, r) {
+		return
+	}
 	id := chiURLParam(r, "id")
 	if err := e.Proxies.Delete(id); err != nil {
 		writeError(w, r, http.StatusNotFound, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, map[string]any{"id": id})
 }
 
+// TestProxy dials targetUrl THROUGH the proxy and reports timing + status.
+// A transport failure is returned as HTTP 200 {ok:false} — it's a domain
+// result, not a server error.
 func (e *ExtraHandlers) TestProxy(w http.ResponseWriter, r *http.Request) {
+	if e.proxiesUnavailable(w, r) {
+		return
+	}
 	id := chiURLParam(r, "id")
 	p, err := e.Proxies.Get(id)
 	if err != nil {
 		writeError(w, r, http.StatusNotFound, err)
 		return
 	}
-	client, err := registry.NewClient(registry.Config{
-		BaseURL: "https://example.com", // dummy; we only care that the proxy connects
-		Proxy:   p.URL,
-		Timeout: 5 * time.Second,
-	})
+
+	var body struct {
+		TargetURL string `json:"targetUrl"`
+	}
+	_ = decodeJSON(r, &body)
+	target := strings.TrimSpace(body.TargetURL)
+	if target == "" {
+		// Default: probe the local registry's own /v2/ through the proxy.
+		base := strings.TrimSuffix(e.Cfg.RegistryURL, "/")
+		if base == "" {
+			base = "http://" + r.Host
+		}
+		target = base + "/v2/"
+	}
+
+	proxyURL, err := url.Parse(p.URL)
 	if err != nil {
-		writeError(w, r, http.StatusBadRequest, err)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok": false, "error": "invalid proxy url: " + err.Error(), "targetUrl": target,
+		})
 		return
 	}
-	// attempt a HEAD on the proxy itself (CONNECT-style) — we'll do a GET
-	// against a known-stable endpoint as a smoke test.
-	req, _ := http.NewRequestWithContext(r.Context(), "GET", "https://example.com/", nil)
-	req.Header.Set("User-Agent", "cairn/probe")
-	resp, err := client.HTTP().Do(req)
+	if p.Username != "" {
+		proxyURL.User = url.UserPassword(p.Username, p.Password)
+	}
+
+	transport := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+	client := &http.Client{Transport: transport, Timeout: 10 * time.Second}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
-		writeError(w, r, http.StatusBadGateway, err)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok": false, "error": err.Error(), "targetUrl": target,
+		})
 		return
 	}
-	resp.Body.Close()
-	writeJSON(w, http.StatusOK, map[string]any{
-		"status": "ok",
-		"proxy":  p.URL,
-		"test":   resp.StatusCode,
-	})
+	req.Header.Set("User-Agent", "cairn/"+version.Version)
+
+	start := time.Now()
+	resp, err := client.Do(req)
+	elapsed := time.Since(start).Milliseconds()
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok": false, "error": err.Error(), "elapsedMs": elapsed, "targetUrl": target,
+		})
+		return
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+
+	out := map[string]any{
+		"ok":         resp.StatusCode < 400,
+		"status":     resp.StatusCode,
+		"statusText": resp.Status,
+		"elapsedMs":  elapsed,
+		"targetUrl":  target,
+	}
+	if resp.StatusCode < 400 {
+		out["registryApiVersion"] = "2"
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // --- Stats ------------------------------------------------------------------
 
 func (e *ExtraHandlers) StatsSummary(w http.ResponseWriter, r *http.Request) {
-	since := parseSince(r, 30)
-	s, err := e.DB.GetSummary(r.Context(), since)
-	if err != nil {
-		writeError(w, r, http.StatusInternalServerError, err)
-		return
+	days := parseDays(r, 7)
+	out := map[string]any{
+		"days":         days,
+		"total":        int64(0),
+		"repositories": 0,
+		"tags":         0,
+		"lastAt":       nil,
+		"push":         int64(0),
+		"pull":         int64(0),
 	}
-	writeJSON(w, http.StatusOK, s)
-}
-
-func (e *ExtraHandlers) StatsTop(w http.ResponseWriter, r *http.Request) {
-	since := parseSince(r, 30)
-	limit := parseLimit(r, 20)
-	top, err := e.DB.GetTopRepos(r.Context(), since, limit)
-	if err != nil {
-		writeError(w, r, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, top)
-}
-
-func (e *ExtraHandlers) StatsSeries(w http.ResponseWriter, r *http.Request) {
-	since := parseSince(r, 90)
-	limit := parseLimit(r, 5000)
-	pts, err := e.DB.GetSeries(r.Context(), since, limit)
-	if err != nil {
-		writeError(w, r, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, pts)
-}
-
-func (e *ExtraHandlers) StatsRepositories(w http.ResponseWriter, r *http.Request) {
-	e.StatsTop(w, r)
-}
-
-func (e *ExtraHandlers) StatsEvents(w http.ResponseWriter, r *http.Request) {
-	if e.Events == nil {
-		writeJSON(w, http.StatusOK, []any{})
-		return
-	}
-	writeJSON(w, http.StatusOK, e.Events.RecentEvents())
-}
-
-func (e *ExtraHandlers) StatsClients(w http.ResponseWriter, r *http.Request) {
-	// stub: aggregate User-Agent counts from the recent buffer
-	if e.Events == nil {
-		writeJSON(w, http.StatusOK, []any{})
-		return
-	}
-	type clientRow struct {
-		UserAgent string `json:"userAgent"`
-		Pulls     int    `json:"pulls"`
-		Pushes    int    `json:"pushes"`
-	}
-	counts := map[string]*clientRow{}
-	for _, ev := range e.Events.RecentEvents() {
-		c, ok := counts[ev.UserAgent]
-		if !ok {
-			c = &clientRow{UserAgent: ev.UserAgent}
-			counts[ev.UserAgent] = c
+	if e.DB != nil {
+		if s, err := e.DB.GetSummary(r.Context(), daysSince(days)); err == nil {
+			out["total"] = s.TotalPulls + s.TotalPushes
+			out["repositories"] = s.UniqueRepos
+			out["tags"] = s.UniqueTags
+			out["push"] = s.TotalPushes
+			out["pull"] = s.TotalPulls
+			if !s.LastSeen.IsZero() {
+				out["lastAt"] = s.LastSeen.Format(time.RFC3339)
+			}
 		}
-		if !ev.Counted {
-			continue
-		}
-		switch ev.Action {
-		case "pull":
-			c.Pulls++
-		case "push":
-			c.Pushes++
-		}
-	}
-	out := make([]clientRow, 0, len(counts))
-	for _, c := range counts {
-		out = append(out, *c)
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
-func (e *ExtraHandlers) StatsIgnoreGet(w http.ResponseWriter, r *http.Request) {
-	if e.Events == nil {
-		writeJSON(w, http.StatusOK, []string{})
-		return
+func (e *ExtraHandlers) StatsTop(w http.ResponseWriter, r *http.Request) {
+	days := parseDays(r, 7)
+	limit := parseLimit(r, 10)
+	by := r.URL.Query().Get("by")
+	byTag := by == "tag"
+	if by != "repository" && by != "tag" {
+		by = "repository"
+		byTag = false
 	}
-	writeJSON(w, http.StatusOK, e.Cfg.IgnoreUserAgents)
+	out := map[string]any{"days": days, "by": by, "items": []any{}}
+	if e.DB != nil {
+		if items, err := e.DB.GetTop(r.Context(), daysSince(days), limit, byTag); err == nil {
+			out["items"] = items // TopItem json tags already match the UI
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (e *ExtraHandlers) StatsSeries(w http.ResponseWriter, r *http.Request) {
+	days := parseDays(r, 7)
+	repo := r.URL.Query().Get("repository")
+	out := map[string]any{"days": days, "repository": repo, "points": []any{}}
+	if e.DB != nil {
+		if pts, err := e.DB.GetSeriesByDay(r.Context(), daysSince(days), repo); err == nil {
+			out["points"] = pts
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (e *ExtraHandlers) StatsRepositories(w http.ResponseWriter, r *http.Request) {
+	days := parseDays(r, 7)
+	out := map[string]any{"days": days, "items": map[string]any{}}
+	if e.DB != nil {
+		if stats, err := e.DB.GetRepoStats(r.Context(), daysSince(days)); err == nil {
+			items := make(map[string]any, len(stats))
+			for _, s := range stats {
+				items[s.Repository] = map[string]any{
+					"events": s.Events,
+					"pull":   s.Pull,
+					"push":   s.Push,
+					"lastAt": s.LastAt,
+				}
+			}
+			out["items"] = items
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (e *ExtraHandlers) StatsEvents(w http.ResponseWriter, r *http.Request) {
+	limit := parseLimit(r, 50)
+	items := []any{}
+	totals := map[string]any{
+		"accepted": int64(0), "rejected": int64(0), "buffered": 0,
+		"bufferSize": 0, "self": int64(0), "ignored": int64(0),
+	}
+	if e.Events != nil {
+		evs := e.Events.RecentEvents()
+		if limit > 0 && limit < len(evs) {
+			evs = evs[:limit]
+		}
+		for _, ev := range evs {
+			items = append(items, ev)
+		}
+		t := e.Events.SnapshotTotals()
+		totals["accepted"] = t.Accepted
+		totals["rejected"] = t.Rejected
+		totals["buffered"] = t.Buffered
+		totals["bufferSize"] = t.BufferSize
+		totals["self"] = t.Self
+		totals["ignored"] = t.Ignored
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items":  items,
+		"totals": totals,
+	})
+}
+
+func (e *ExtraHandlers) StatsClients(w http.ResponseWriter, r *http.Request) {
+	days := parseDays(r, 7)
+	since := daysSince(days)
+	items := []any{}
+	if e.Events != nil {
+		for _, c := range e.Events.SnapshotClients() {
+			if c.LastSeenAt.Before(since) {
+				continue
+			}
+			items = append(items, c) // ClientStat json tags already match the UI
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"days": days, "items": items})
+}
+
+// StatsHeatDelete purges ALL derived heat data (activity_daily rows).
+// UI shape: {activity, seen}. There is no event_seen table in v0.4.0, so
+// seen is always 0.
+func (e *ExtraHandlers) StatsHeatDelete(w http.ResponseWriter, r *http.Request) {
+	var activity int64
+	if e.DB != nil {
+		n, err := e.DB.PurgeAll(r.Context())
+		if err != nil {
+			writeError(w, r, http.StatusInternalServerError, err)
+			return
+		}
+		activity = n
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"activity": activity, "seen": 0})
+}
+
+// --- Ignore rules -----------------------------------------------------------
+//
+// effective = env ∪ panel. Env rules come from STATS_IGNORE_USER_AGENTS and
+// are read-only; panel rules live in SQLite and are mutable at runtime.
+// Every mutation recomputes the effective set and pushes it into the live
+// events handler so changes apply immediately.
+
+func (e *ExtraHandlers) envIgnore() []string {
+	out := make([]string, 0, len(e.Cfg.IgnoreUserAgents))
+	out = append(out, e.Cfg.IgnoreUserAgents...)
+	sort.Strings(out)
+	return out
+}
+
+func (e *ExtraHandlers) panelIgnore(ctx context.Context) []string {
+	if e.DB == nil {
+		return []string{}
+	}
+	list, err := e.DB.ListIgnore(ctx)
+	if err != nil {
+		return []string{}
+	}
+	sort.Strings(list)
+	return list
+}
+
+func (e *ExtraHandlers) writeIgnoreRules(w http.ResponseWriter, r *http.Request, status int) {
+	env := e.envIgnore()
+	panel := e.panelIgnore(r.Context())
+	effective := events.MergeIgnore(env, panel)
+	if e.Events != nil {
+		e.Events.SetIgnoreUAs(effective)
+	}
+	writeJSON(w, status, map[string]any{
+		"env":       env,
+		"panel":     panel,
+		"effective": effective,
+	})
+}
+
+func (e *ExtraHandlers) StatsIgnoreGet(w http.ResponseWriter, r *http.Request) {
+	e.writeIgnoreRules(w, r, http.StatusOK)
 }
 
 func (e *ExtraHandlers) StatsIgnoreAdd(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Pattern string `json:"pattern"`
+	if e.DB == nil {
+		reason := e.DBErr
+		if reason == "" {
+			reason = "stats database unavailable — cannot persist ignore rules"
+		}
+		writeError(w, r, http.StatusServiceUnavailable, errors.New(reason))
+		return
 	}
-	if err := decodeJSON(r, &req); err != nil {
+	var body struct {
+		UserAgent string `json:"useragent"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
 		writeError(w, r, http.StatusBadRequest, err)
 		return
 	}
-	pattern := strings.TrimSpace(req.Pattern)
-	if pattern == "" {
-		writeError(w, r, http.StatusBadRequest, errors.New("pattern required"))
+	ua := strings.TrimSpace(body.UserAgent)
+	if ua == "" {
+		writeError(w, r, http.StatusBadRequest, errors.New("useragent is required"))
 		return
 	}
-	for _, p := range e.Cfg.IgnoreUserAgents {
-		if p == pattern {
-			writeJSON(w, http.StatusOK, e.Cfg.IgnoreUserAgents)
-			return
-		}
-	}
-	e.Cfg.IgnoreUserAgents = append(e.Cfg.IgnoreUserAgents, pattern)
-	if e.Events != nil {
-		e.Events.SetIgnoreUAs(e.Cfg.IgnoreUserAgents)
-	}
-	writeJSON(w, http.StatusOK, e.Cfg.IgnoreUserAgents)
-}
-
-func (e *ExtraHandlers) StatsIgnoreRemove(w http.ResponseWriter, r *http.Request) {
-	pattern := chiURLParam(r, "pattern")
-	pattern = strings.TrimSpace(pattern)
-	out := e.Cfg.IgnoreUserAgents[:0]
-	for _, p := range e.Cfg.IgnoreUserAgents {
-		if p != pattern {
-			out = append(out, p)
-		}
-	}
-	e.Cfg.IgnoreUserAgents = out
-	if e.Events != nil {
-		e.Events.SetIgnoreUAs(out)
-	}
-	writeJSON(w, http.StatusOK, e.Cfg.IgnoreUserAgents)
-}
-
-func (e *ExtraHandlers) StatsHeatDelete(w http.ResponseWriter, r *http.Request) {
-	cutoff := time.Now().UTC().AddDate(0, 0, -365) // default: delete everything older than 1y
-	if q := r.URL.Query().Get("olderThanDays"); q != "" {
-		if d, err := time.ParseDuration(q + "h"); err == nil {
-			cutoff = time.Now().UTC().Add(-d)
-		}
-	}
-	n, err := e.DB.RetentionCleanup(r.Context(), cutoff)
-	if err != nil {
+	if err := e.DB.AddIgnore(r.Context(), ua); err != nil {
 		writeError(w, r, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"deleted": n})
+	e.writeIgnoreRules(w, r, http.StatusCreated)
+}
+
+func (e *ExtraHandlers) StatsIgnoreRemove(w http.ResponseWriter, r *http.Request) {
+	if e.DB == nil {
+		reason := e.DBErr
+		if reason == "" {
+			reason = "stats database unavailable — cannot persist ignore rules"
+		}
+		writeError(w, r, http.StatusServiceUnavailable, errors.New(reason))
+		return
+	}
+	var body struct {
+		UserAgent string `json:"useragent"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeError(w, r, http.StatusBadRequest, err)
+		return
+	}
+	ua := strings.TrimSpace(body.UserAgent)
+	if ua == "" {
+		writeError(w, r, http.StatusBadRequest, errors.New("useragent is required"))
+		return
+	}
+	if err := e.DB.RemoveIgnore(r.Context(), ua); err != nil {
+		writeError(w, r, http.StatusInternalServerError, err)
+		return
+	}
+	e.writeIgnoreRules(w, r, http.StatusOK)
 }
 
 // --- helpers ----------------------------------------------------------------
 
-func parseSince(r *http.Request, defDays int) time.Time {
+// parseDays reads ?days=N (plain integer). The v0.2 implementation used
+// time.ParseDuration(q+"h"), which silently treated "7" as 7 HOURS — the UI
+// always sends plain day counts.
+func parseDays(r *http.Request, defDays int) int {
 	if q := r.URL.Query().Get("days"); q != "" {
-		if d, err := time.ParseDuration(q + "h"); err == nil {
-			return time.Now().UTC().Add(-d)
+		if n, err := strconv.Atoi(q); err == nil && n > 0 {
+			return n
 		}
 	}
-	return time.Now().UTC().AddDate(0, 0, -defDays)
+	return defDays
+}
+
+func daysSince(days int) time.Time {
+	return time.Now().UTC().AddDate(0, 0, -days)
 }
 
 func parseLimit(r *http.Request, def int) int {
 	if q := r.URL.Query().Get("limit"); q != "" {
-		var n int
-		if _, err := fmtSscan(q, &n); err == nil {
+		if n, err := strconv.Atoi(q); err == nil && n > 0 {
 			return n
 		}
 	}
@@ -552,21 +1044,6 @@ func randHex(n int) string {
 	return string(b)
 }
 
-func fmtSscan(s string, n *int) (int, error) {
-	v := 0
-	for _, r := range s {
-		if r < '0' || r > '9' {
-			return 0, errors.New("not a number")
-		}
-		v = v*10 + int(r-'0')
-	}
-	*n = v
-	return len(s), nil
-}
-
 func decodeJSON(r *http.Request, dst any) error {
 	return json.NewDecoder(r.Body).Decode(dst)
 }
-
-// url.PathEscape re-exported (avoids an extra import in tests).
-var _ = url.PathEscape

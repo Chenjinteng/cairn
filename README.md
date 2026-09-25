@@ -20,9 +20,9 @@
 3. **库式后端**：HTTP handler 通过 `cmd/server` 装配，业务逻辑在 `internal/` 下，方便后续挂到别人的服务里
 4. **可观测性**：自带 `/healthz` `/readyz`
 
-## 当前状态：v0.3.1（2026-09-25）—— **cairn 现在是 registry 本身**
+## 当前状态：v0.4.0（2026-09-25）—— **cairn 现在是 registry 本身，且自带 Web UI**
 
-✅ 已实现（v0.1 + v0.2 + v0.3）：
+✅ 已实现（v0.1 – v0.4）：
 
 **数据平面**（v0.3 新增）
 
@@ -44,13 +44,14 @@
 **前端**
 
 - React + AntD + Vite，从 registry-manager/web 复制（视觉 / 交互 100% 一致）
+- 前端 dist 通过 `//go:embed` 嵌入二进制（-tags webui），`/` 直接服务 UI，深路由 fallback index.html（v0.4 新增）
 
 **工程化**
 
 - 单版本号源（`internal/version/version.go` 5 处同步）
 - AGENTS.md 开发规范 + CHANGELOG.md（Keep a Changelog）
 - Dockerfile（多阶段 scratch 基础，运行镜像 ~15MB）+ docker-compose
-- 21 个测试全绿
+- `go test ./...` 全绿
 
 ⏳ 后续 TODO：
 
@@ -58,7 +59,6 @@
 - Garbage collection（孤儿 blob 不会自动清）
 - 多架构 index 拉取（registry-manager 也跳过，cairn 沿用）
 - v0.2 / v0.3 单元测试（v0.3 已有集成测试覆盖）
-- 前端 dist `//go:embed` 进二进制（目前要单独跑 `pnpm build` + nginx 反代）
 
 ## 版本管理
 
@@ -72,7 +72,7 @@
 4. `README.md` 里所有 `docker build/tag/push` 示例
 5. `CHANGELOG.md` 新增一节
 
-当前版本：`0.3.1`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
+当前版本：`0.4.0`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
 
 ## 项目结构
 
@@ -138,7 +138,7 @@ docker build --build-arg GOPROXY=https://goproxy.cn,direct -t cairn:dev .
 
 ### 构建期通用 HTTP 代理（跟 GOPROXY 正交）
 
-如果构建机**直连外网受限**（不只是 Go module，go / curl / git / apt 都不通），但内网有可用的 HTTP 代理（如 `proxy.example.com:7890`），可以给 builder stage 配 HTTP 代理。`Dockerfile` 透传 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` build-arg：
+如果构建机**直连外网受限**（不只是 Go module，go / curl / git / apt 都不通），但内网有可用的 HTTP 代理（如 `proxy.example.com:7890`），可以给 web-builder / builder stage 配 HTTP 代理。`Dockerfile` 透传 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` build-arg：
 
 ```bash
 # docker build 直接覆盖
@@ -153,6 +153,8 @@ cat >> .env <<'EOF'
 BUILD_HTTP_PROXY=http://proxy.example.com:7890
 BUILD_HTTPS_PROXY=http://proxy.example.com:7890
 BUILD_NO_PROXY=localhost,127.0.0.1,.local
+# 前端依赖走国内/内网 npm 镜像(可选)
+NPM_REGISTRY=https://registry.npmmirror.com
 EOF
 docker compose build --no-cache
 ```
@@ -167,6 +169,7 @@ docker compose build --no-cache
 cp .env.example .env       # 填好 REGISTRY_URL + REGISTRY_CREDENTIAL_KEY
                            # 受限网络:把 GOPROXY 改成 https://goproxy.cn,direct
                            # 内网代理:把 BUILD_HTTP_PROXY/HTTPS_PROXY 设成 http://proxy.example.com:7890
+                           # 前端依赖镜像:NPM_REGISTRY=https://registry.npmmirror.com(受限网络)
                            # 访问端口:改 HOST_PORT(示例 80 = http://<宿主机>:80;不设回退 8787)
 docker compose up -d --build
 ```

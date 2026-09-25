@@ -52,6 +52,7 @@ type Credential struct {
 	URL       string    `json:"url"`
 	Username  string    `json:"username"`
 	Password  string    `json:"password,omitempty"`
+	Note      string    `json:"note,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }

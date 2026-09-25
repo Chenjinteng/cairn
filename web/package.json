@@ -1,7 +1,8 @@
 {
   "name": "cairn-web",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
+  "packageManager": "pnpm@12.5.1",
   "description": "cairn 前端（copy 自 registry-manager/web）",
   "type": "module",
   "engines": {

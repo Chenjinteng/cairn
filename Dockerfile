@@ -1,31 +1,70 @@
 # 多阶段构建：
-#   builder   编译 Go 二进制
-#   runtime   最终镜像，scratch + 二进制
+#   web-builder  构建 web/ 前端（pnpm build，产物落 /internal/webui/dist）
+#   builder      拷贝前端产物后以 -tags webui 编译 Go 二进制（前端 //go:embed 进二进制）
+#   runtime      最终镜像，scratch + 二进制
 #
 # 运行镜像只 ~15MB（10MB 二进制 + 5MB ca-certs + /etc/passwd），
 # 比 registry-manager 的 Node + antd 几十MB 还要小一个数量级。
 #
 # 基础镜像可覆盖：构建机拉不到 Docker Hub 时换成内网镜像。
-#   docker build --build-arg GO_IMAGE=proxy.example.com:10001/golang:1.26-alpine .
+#   docker build --build-arg GO_IMAGE=proxy.example.com:10001/golang:1.26-alpine \
+#                --build-arg NODE_IMAGE=proxy.example.com:10001/node:22-alpine .
 
 # Go 模块代理：构建机访问 proxy.golang.org 受限/慢时改成国内镜像。
 #   docker build --build-arg GOPROXY=https://goproxy.cn,direct .
 #   docker build --build-arg GOPROXY=https://goproxy.io,direct .
 # 默认仍是 proxy.golang.org,direct(从 Go 1.21 起等价于 GOPROXY=proxy.golang.org,direct)。
 #
-# 通用 HTTP/HTTPS 代理：跟 GOPROXY 正交,影响 builder stage 内所有网络出口
-# (go / curl / git / apt 等)。默认空 = 不用代理。
+# npm registry 镜像：前端依赖下载受限时换成内网/国内镜像（corepack 拉 pnpm 也走它）。
+#   docker build --build-arg NPM_REGISTRY=https://registry.npmmirror.com .
+#
+# 通用 HTTP/HTTPS 代理：跟 GOPROXY / NPM_REGISTRY 正交,影响 web-builder / builder
+# 两个构建 stage 内所有网络出口(go / curl / git / apt / pnpm 等)。默认空 = 不用代理。
 #   docker build --build-arg HTTP_PROXY=http://proxy.example.com:7890 \
 #                --build-arg HTTPS_PROXY=http://proxy.example.com:7890 \
 #                --build-arg NO_PROXY=localhost,127.0.0.1,.local .
 ARG GO_IMAGE=golang:1.26-alpine
+ARG NODE_IMAGE=node:22-alpine
 ARG GOPROXY=https://proxy.golang.org,direct
+ARG NPM_REGISTRY=
 ARG HTTP_PROXY=
 ARG HTTPS_PROXY=
 ARG NO_PROXY=
 
 # ---------------------------------------------------------------------------
-# 1) 构建二进制
+# 1) 前端构建（vite outDir 指向 ../internal/webui/dist，容器内解析为 /internal/webui/dist）
+# ---------------------------------------------------------------------------
+FROM ${NODE_IMAGE} AS web-builder
+
+# 在 stage 里再 ARG 一次,确保 ENV 能引用
+ARG NPM_REGISTRY
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ENV HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    NO_PROXY=${NO_PROXY}
+
+WORKDIR /web
+
+# 依赖清单先 COPY：package.json / lockfile 不变时这层缓存命中，pnpm install 从秒级起步。
+# package.json 的 packageManager 字段钉死 pnpm 版本，corepack 据此激活。
+COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
+RUN if [ -n "$NPM_REGISTRY" ]; then \
+      export COREPACK_NPM_REGISTRY="$NPM_REGISTRY"; \
+      corepack enable; \
+      npm config set registry "$NPM_REGISTRY"; \
+    else \
+      corepack enable; \
+    fi \
+ && pnpm install --frozen-lockfile
+
+# 源码全量 COPY 后再 build（dist 落 /internal/webui/dist）
+COPY web/ ./
+RUN pnpm build
+
+# ---------------------------------------------------------------------------
+# 2) 编译二进制（-tags webui：//go:embed 前端 dist）
 # ---------------------------------------------------------------------------
 FROM ${GO_IMAGE} AS builder
 
@@ -48,17 +87,21 @@ RUN go mod download
 
 COPY . .
 
+# 前端构建产物：internal/webui 的 //go:embed 需要 dist 存在（-tags webui）
+COPY --from=web-builder /internal/webui/dist ./internal/webui/dist
+
 # CGO=0：编译成纯静态二进制，scratch 也能跑
 # -trimpath：去掉本地路径信息，二进制可重现
 # -ldflags="-s -w"：去符号表，缩 ~30%
 RUN CGO_ENABLED=0 go build \
+    -tags webui \
     -trimpath \
     -ldflags="-s -w" \
     -o /out/cairn \
     ./cmd/server
 
 # ---------------------------------------------------------------------------
-# 2) 运行
+# 3) 运行
 # ---------------------------------------------------------------------------
 FROM scratch
 
@@ -75,7 +118,7 @@ EXPOSE 8787
 
 ENV PORT=8787
 
-# 健康检查：用 Go 二进制自己的 /healthz
+# 健康检查：用二进制自带的 -healthz 探针（HTTP GET /healthz，0=健康/1=不健康）
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD ["/cairn", "-healthz"]
 

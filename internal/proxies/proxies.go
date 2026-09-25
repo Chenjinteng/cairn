@@ -29,6 +29,7 @@ type Proxy struct {
 	URL       string    `json:"url"`
 	Username  string    `json:"username,omitempty"`
 	Password  string    `json:"password,omitempty"`
+	Note      string    `json:"note,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }

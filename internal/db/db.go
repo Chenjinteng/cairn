@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -24,7 +25,7 @@ import (
 
 // SCHEMA_VERSION is bumped together with new migrations.
 // Bump rule: +1 per migration; never reuse a number; never delete a migration.
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
 
 // Db is the SQLite wrapper. All exported methods are safe for concurrent use.
 type Db struct {
@@ -140,6 +141,15 @@ var migrations = map[int]string{
 	) WITHOUT ROWID;
 	CREATE INDEX IF NOT EXISTS pull_jobs_started ON pull_jobs(started_at);
 	`,
+	2: `
+	-- Panel-managed User-Agent ignore rules (settings page).
+	-- Env-provided rules (REGISTRY_STATS_IGNORE_USERAGENTS) are NOT stored
+	-- here; the effective list is the union of env + panel at runtime.
+	CREATE TABLE IF NOT EXISTS stats_ignore (
+		useragent  TEXT PRIMARY KEY,
+		created_at TEXT NOT NULL
+	) WITHOUT ROWID;
+	`,
 }
 
 // ActivityIncrement applies one heat increment. Used by events.aggregator.
@@ -199,6 +209,7 @@ type ActivitySummary struct {
 	TotalPulls  int64     `json:"totalPulls"`
 	TotalPushes int64     `json:"totalPushes"`
 	UniqueRepos int       `json:"uniqueRepos"`
+	UniqueTags  int       `json:"uniqueTags"`
 	FirstSeen   time.Time `json:"firstSeen,omitempty"`
 	LastSeen    time.Time `json:"lastSeen,omitempty"`
 }
@@ -211,13 +222,14 @@ func (d *Db) GetSummary(ctx context.Context, since time.Time) (ActivitySummary, 
 			COALESCE(SUM(CASE WHEN action='pull' THEN count ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN action='push' THEN count ELSE 0 END), 0),
 			COUNT(DISTINCT repository),
+			COUNT(DISTINCT repository || ':' || tag),
 			MIN(day),
 			MAX(day)
 		FROM activity_daily
 		WHERE day >= ?
 	`, since.UTC().Format("2006-01-02"))
 	var minDay, maxDay sql.NullString
-	if err := row.Scan(&s.TotalPulls, &s.TotalPushes, &s.UniqueRepos, &minDay, &maxDay); err != nil {
+	if err := row.Scan(&s.TotalPulls, &s.TotalPushes, &s.UniqueRepos, &s.UniqueTags, &minDay, &maxDay); err != nil {
 		return s, err
 	}
 	if minDay.Valid {
@@ -315,6 +327,228 @@ func (d *Db) RetentionCleanup(ctx context.Context, cutoff time.Time) (int64, err
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+// PurgeAll deletes every heat row (settings page "clear heat data").
+// Idempotent; returns the number of activity_daily rows removed.
+//
+// There is no event_seen table in this schema (dedup lives in the events
+// ring buffer), so the API layer reports seen=0 alongside this count.
+func (d *Db) PurgeAll(ctx context.Context) (int64, error) {
+	res, err := d.conn.ExecContext(ctx, `DELETE FROM activity_daily`)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// GetFirstDay returns the earliest day present in activity_daily, or ""
+// when the table is empty. Used for /api/config statsSince (all-time
+// first day, independent of any query window).
+func (d *Db) GetFirstDay(ctx context.Context) (string, error) {
+	var day sql.NullString
+	if err := d.conn.QueryRowContext(ctx, `SELECT MIN(day) FROM activity_daily`).Scan(&day); err != nil {
+		return "", err
+	}
+	return day.String, nil
+}
+
+// TopItem is one entry of the /api/stats/top list. Tag is only set when
+// aggregating by tag; Tags (distinct tag count) only when aggregating by
+// repository — matching the UI's StatsTopItem optional fields.
+type TopItem struct {
+	Repository string  `json:"repository"`
+	Tag        string  `json:"tag,omitempty"`
+	Events     int64   `json:"events"`
+	Pull       int64   `json:"pull"`
+	Push       int64   `json:"push"`
+	Tags       int     `json:"tags,omitempty"`
+	LastAt     *string `json:"lastAt"`
+}
+
+// GetTop aggregates the busiest repositories (byTag=false) or individual
+// tags (byTag=true) inside the window, hottest first.
+func (d *Db) GetTop(ctx context.Context, since time.Time, limit int, byTag bool) ([]TopItem, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	query := `
+		SELECT repository,
+		       COALESCE(SUM(count), 0),
+		       COALESCE(SUM(CASE WHEN action='pull' THEN count ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN action='push' THEN count ELSE 0 END), 0),
+		       COUNT(DISTINCT CASE WHEN tag <> '' THEN tag END),
+		       MAX(day)
+		FROM activity_daily
+		WHERE day >= ?
+		GROUP BY repository
+		ORDER BY SUM(count) DESC, repository ASC
+		LIMIT ?`
+	if byTag {
+		query = `
+		SELECT repository || ':' || tag,
+		       COALESCE(SUM(count), 0),
+		       COALESCE(SUM(CASE WHEN action='pull' THEN count ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN action='push' THEN count ELSE 0 END), 0),
+		       0,
+		       MAX(day)
+		FROM activity_daily
+		WHERE day >= ? AND tag <> ''
+		GROUP BY repository, tag
+		ORDER BY SUM(count) DESC, repository ASC, tag ASC
+		LIMIT ?`
+	}
+	rows, err := d.conn.QueryContext(ctx, query, since.UTC().Format("2006-01-02"), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []TopItem{}
+	for rows.Next() {
+		var it TopItem
+		var maxDay sql.NullString
+		if byTag {
+			// repository column carries "repo:tag"; split on the last colon
+			// so repository names containing ':' (impossible per OCI spec)
+			// still behave sanely.
+			var combined string
+			if err := rows.Scan(&combined, &it.Events, &it.Pull, &it.Push, new(int), &maxDay); err != nil {
+				return nil, err
+			}
+			if i := strings.LastIndex(combined, ":"); i >= 0 {
+				it.Repository, it.Tag = combined[:i], combined[i+1:]
+			} else {
+				it.Repository = combined
+			}
+		} else {
+			if err := rows.Scan(&it.Repository, &it.Events, &it.Pull, &it.Push, &it.Tags, &maxDay); err != nil {
+				return nil, err
+			}
+		}
+		if maxDay.Valid {
+			v := maxDay.String
+			it.LastAt = &v
+		}
+		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
+// DayPoint is one day of the /api/stats/series trend.
+type DayPoint struct {
+	Day    string `json:"day"`
+	Events int64  `json:"events"`
+	Pull   int64  `json:"pull"`
+	Push   int64  `json:"push"`
+}
+
+// GetSeriesByDay returns per-day totals (ascending), optionally filtered
+// to a single repository. Days without events are simply absent — the UI
+// renders gaps itself.
+func (d *Db) GetSeriesByDay(ctx context.Context, since time.Time, repo string) ([]DayPoint, error) {
+	query := `
+		SELECT day,
+		       COALESCE(SUM(count), 0),
+		       COALESCE(SUM(CASE WHEN action='pull' THEN count ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN action='push' THEN count ELSE 0 END), 0)
+		FROM activity_daily
+		WHERE day >= ?`
+	args := []any{since.UTC().Format("2006-01-02")}
+	if repo != "" {
+		query += ` AND repository = ?`
+		args = append(args, repo)
+	}
+	query += ` GROUP BY day ORDER BY day ASC`
+	rows, err := d.conn.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []DayPoint{}
+	for rows.Next() {
+		var p DayPoint
+		if err := rows.Scan(&p.Day, &p.Events, &p.Pull, &p.Push); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// RepoStat is one repository's heat inside the window, used to build the
+// /api/stats/repositories map (the images page joins it onto the list).
+type RepoStat struct {
+	Repository string  `json:"repository"`
+	Events     int64   `json:"events"`
+	Pull       int64   `json:"pull"`
+	Push       int64   `json:"push"`
+	LastAt     *string `json:"lastAt"`
+}
+
+// GetRepoStats returns per-repository totals for every repository that has
+// heat in the window. No limit: row count is bounded by the repository count.
+func (d *Db) GetRepoStats(ctx context.Context, since time.Time) ([]RepoStat, error) {
+	rows, err := d.conn.QueryContext(ctx, `
+		SELECT repository,
+		       COALESCE(SUM(count), 0),
+		       COALESCE(SUM(CASE WHEN action='pull' THEN count ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN action='push' THEN count ELSE 0 END), 0),
+		       MAX(day)
+		FROM activity_daily
+		WHERE day >= ?
+		GROUP BY repository
+		ORDER BY repository ASC`, since.UTC().Format("2006-01-02"))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []RepoStat{}
+	for rows.Next() {
+		var s RepoStat
+		var maxDay sql.NullString
+		if err := rows.Scan(&s.Repository, &s.Events, &s.Pull, &s.Push, &maxDay); err != nil {
+			return nil, err
+		}
+		if maxDay.Valid {
+			v := maxDay.String
+			s.LastAt = &v
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// ListIgnore returns panel-managed UA ignore rules (insertion order).
+func (d *Db) ListIgnore(ctx context.Context) ([]string, error) {
+	rows, err := d.conn.QueryContext(ctx, `
+		SELECT useragent FROM stats_ignore ORDER BY created_at ASC, useragent ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var ua string
+		if err := rows.Scan(&ua); err != nil {
+			return nil, err
+		}
+		out = append(out, ua)
+	}
+	return out, rows.Err()
+}
+
+// AddIgnore inserts one panel rule; duplicates are a no-op.
+func (d *Db) AddIgnore(ctx context.Context, useragent string) error {
+	_, err := d.conn.ExecContext(ctx, `
+		INSERT OR IGNORE INTO stats_ignore(useragent, created_at) VALUES (?, ?)`,
+		useragent, time.Now().UTC().Format(time.RFC3339))
+	return err
+}
+
+// RemoveIgnore deletes one panel rule. Missing rows are not an error.
+func (d *Db) RemoveIgnore(ctx context.Context, useragent string) error {
+	_, err := d.conn.ExecContext(ctx, `DELETE FROM stats_ignore WHERE useragent = ?`, useragent)
+	return err
 }
 
 func ensureParent(path string) error {

@@ -11,6 +11,7 @@ import (
 
 	"cairn/internal/config"
 	"cairn/internal/registry"
+	"cairn/internal/webui"
 )
 
 // chiURLParam is a tiny shim so handler code reads cleaner than chi.URLParam.
@@ -85,6 +86,16 @@ func NewRouterWithExtras(h *Handlers, extras *ExtraHandlers, cfg *config.Config)
 			extras.RegisterRoutes(r)
 		}
 	})
+
+	// Top-level webhook alias: registry notification configs commonly point
+	// at /events; the /api/events route registered above stays for compat.
+	if extras != nil && extras.Events != nil {
+		r.Post("/events", extras.Events.ServeHTTP)
+	}
+
+	// Embedded SPA (compiled in with -tags webui). The catch-all has the
+	// lowest routing priority: /api/*, /v2/*, /healthz, /readyz all win.
+	r.Handle("/*", webui.Handler())
 
 	return r
 }

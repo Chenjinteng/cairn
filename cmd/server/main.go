@@ -7,10 +7,14 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"cairn/internal/config"
 	"cairn/internal/server"
@@ -18,6 +22,31 @@ import (
 )
 
 func main() {
+	// -healthz: Docker HEALTHCHECK probe mode. Instead of starting a second
+	// server (which collided on :8787 and always exited 1 — the container
+	// was permanently "unhealthy" in v0.3.x), dial the running instance's
+	// /healthz and map the result onto the exit code.
+	healthz := flag.Bool("healthz", false, "probe http://127.0.0.1:$PORT/healthz of the running server and exit 0 on success")
+	flag.Parse()
+	if *healthz {
+		port := os.Getenv("PORT")
+		if port == "" {
+			port = "8787"
+		}
+		client := &http.Client{Timeout: 4 * time.Second}
+		resp, err := client.Get("http://127.0.0.1:" + port + "/healthz")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "healthz probe failed: %v\n", err)
+			os.Exit(1)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			fmt.Fprintf(os.Stderr, "healthz probe got status %d\n", resp.StatusCode)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 

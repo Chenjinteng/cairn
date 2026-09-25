@@ -21,8 +21,11 @@ services:
         HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
         HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
         NO_PROXY: ${BUILD_NO_PROXY:-}
+        # 前端构建（v0.4 新增）：node 镜像与 npm registry 镜像（受限网络用）
+        NODE_IMAGE: ${NODE_IMAGE:-node:22-alpine}
+        NPM_REGISTRY: ${NPM_REGISTRY:-}
 
-    image: ${IMAGE:-cairn:0.3.1}
+    image: ${IMAGE:-cairn:0.4.0}
     container_name: cairn
     restart: unless-stopped
 

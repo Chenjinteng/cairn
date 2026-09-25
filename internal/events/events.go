@@ -9,14 +9,22 @@
 //   - Only count HEAD / PUT methods. Docker's pull is "HEAD tag → GET
 //     digest → GET blobs"; the HEAD carries the tag, the GET does not.
 //     Counting GET would double the count.
-//   - Dedupe by event.id. Distribution's queue has threshold/backoff
-//     retries; same event arrives multiple times. Idempotent ingest.
-//   - Self-User-Agent ("cairn/") events are NOT silently dropped — they
-//     still update activity_daily so dashboards stay accurate. They
-//     merely don't go into the "recent events" debug buffer.
+//   - Self-User-Agent ("cairn/") READ events are folded into a single
+//     counter (totals.self) and never enter the recent-events ring: a
+//     rescan produces one event per tag and would evict everything else.
+//     Self WRITES (PUT, counted) DO enter the ring — they change heat, so
+//     they must stay auditable.
+//   - Events hitting a UA ignore rule are folded into totals.ignored and
+//     also stay out of the ring, so unclassified new clients aren't
+//     evicted by already-handled noise.
 //   - Ignore rules: substring case-insensitive match on User-Agent.
 //     Empty pattern in the list is treated as "match nothing" to avoid
 //     a typo silently zeroing all heat.
+//
+// v0.4.0 note: there is no event_seen dedup table (registry-manager has
+// one); Distribution retries may double-count. The bias is accepted until
+// persistence lands. Counters and the client aggregate are in-memory and
+// reset on restart — the recent-events ring always was.
 package events
 
 import (
@@ -26,10 +34,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"cairn/internal/db"
@@ -39,11 +50,11 @@ import (
 // MANIFEST_MEDIA_TYPES is the whitelist (NOT blacklist). Anything not in
 // this set is dropped before counting. Unknown types should fail closed.
 var MANIFEST_MEDIA_TYPES = map[string]struct{}{
-	"application/vnd.docker.distribution.manifest.v2+json":          {},
-	"application/vnd.docker.distribution.manifest.list.v2+json":    {},
-	"application/vnd.docker.distribution.manifest.v1+json":          {}, // deprecated but seen in older registries
-	"application/vnd.oci.image.manifest.v1+json":                   {},
-	"application/vnd.oci.image.index.v1+json":                      {},
+	"application/vnd.docker.distribution.manifest.v2+json":       {},
+	"application/vnd.docker.distribution.manifest.list.v2+json": {},
+	"application/vnd.docker.distribution.manifest.v1+json":      {}, // deprecated but seen in older registries
+	"application/vnd.oci.image.manifest.v1+json":                {},
+	"application/vnd.oci.image.index.v1+json":                   {},
 }
 
 // COUNTED_METHODS is the set of HTTP methods we count for heat.
@@ -54,24 +65,22 @@ var COUNTED_METHODS = map[string]struct{}{
 }
 
 // SELF_USERAGENT_PREFIX identifies events produced by cairn itself
-// (refresh scans, pull jobs). They still count toward heat (a pull job
-// PUTs a manifest, which is a real "push" by some actor) but the recent
-// events buffer excludes them to keep the debug view clean.
+// (refresh scans, pull jobs).
 var SELF_USERAGENT_PREFIX = "cairn/"
 
 // Event is one Distribution notification event.
 //
 // Distribution posts an array of these under "events": [...]
 type Event struct {
-	ID        string `json:"id"`        // dedup key
+	ID        string    `json:"id"` // dedup key
 	Timestamp time.Time `json:"timestamp"`
-	Action    string `json:"action"`    // "pull" | "push"
+	Action    string    `json:"action"` // "pull" | "push"
 	Target    struct {
-		MediaType    string `json:"mediaType"`
-		Digest       string `json:"digest"`
-		Repository   string `json:"repository"`
-		Tag          string `json:"tag,omitempty"`
-		Length       int64  `json:"length,omitempty"`
+		MediaType  string `json:"mediaType"`
+		Digest     string `json:"digest"`
+		Repository string `json:"repository"`
+		Tag        string `json:"tag,omitempty"`
+		Length     int64  `json:"length,omitempty"`
 	} `json:"target"`
 	Request struct {
 		Host       string `json:"host"`
@@ -85,8 +94,12 @@ type Event struct {
 }
 
 // Decision is the result of ShouldCount.
+//
+// Reason is a machine code (stable across versions, greppable from the
+// UI): OK / NOT_MANIFEST / METHOD_<verb> / IGNORED_UA:<pattern>.
 type Decision struct {
 	Count      bool
+	Ignored    bool // hit a UA ignore rule (folded into totals.ignored)
 	Reason     string
 	Repository string
 	Tag        string
@@ -96,25 +109,24 @@ type Decision struct {
 
 // ShouldCount applies all filtering rules and returns the decision.
 //
-// Pure function — easy to unit test. Caller (Recorder) decides what to do
+// Pure function — easy to unit test. Caller (Handler) decides what to do
 // with the result (insert into SQLite, surface in the debug buffer, etc.).
 func ShouldCount(ev Event, ignoreUserAgents []string) Decision {
 	// 1. media type must be a manifest (whitelist)
 	if _, ok := MANIFEST_MEDIA_TYPES[ev.Target.MediaType]; !ok {
-		return Decision{Reason: "non-manifest media type"}
+		return Decision{Reason: "NOT_MANIFEST"}
 	}
 	// 2. method must be HEAD or PUT
 	if _, ok := COUNTED_METHODS[ev.Request.Method]; !ok {
-		return Decision{Reason: "method not counted: " + ev.Request.Method}
+		return Decision{Reason: "METHOD_" + ev.Request.Method}
 	}
 	// 3. ignore user-agent rules
 	if hit := matchIgnoredUseragent(ev.Request.UserAgent, ignoreUserAgents); hit != "" {
-		return Decision{Reason: "ignored by User-Agent rule: " + hit}
+		return Decision{Ignored: true, Reason: "IGNORED_UA:" + hit}
 	}
-	// 4. dedupe is handled at storage layer; here we just return the
-	//    composite decision so the caller can pass it on.
 	return Decision{
 		Count:      true,
+		Reason:     "OK",
 		Repository: ev.Target.Repository,
 		Tag:        ev.Target.Tag,
 		Action:     ev.Action,
@@ -139,9 +151,29 @@ func matchIgnoredUseragent(ua string, patterns []string) string {
 }
 
 // IsSelfUserAgent returns true if the User-Agent was emitted by this binary.
-// Used to decide whether to put the event into the recent-events buffer.
 func IsSelfUserAgent(ua string) bool {
 	return strings.HasPrefix(ua, SELF_USERAGENT_PREFIX)
+}
+
+// MergeIgnore unions env-provided and panel-provided UA rules, preserving
+// order (env first) and dropping duplicates + blanks.
+func MergeIgnore(lists ...[]string) []string {
+	seen := map[string]struct{}{}
+	out := []string{}
+	for _, l := range lists {
+		for _, p := range l {
+			t := strings.TrimSpace(p)
+			if t == "" {
+				continue
+			}
+			if _, ok := seen[t]; ok {
+				continue
+			}
+			seen[t] = struct{}{}
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // VerifySignature validates the Authorization header from a Distribution
@@ -174,32 +206,78 @@ func VerifySignature(token string, header string, body []byte) bool {
 	return subtle.ConstantTimeCompare(got, want) == 1
 }
 
-// Handler is the HTTP handler for POST /api/events.
+// Handler is the HTTP handler for the notification webhook.
 //
-// Verifies signature, dedupes by event.id, applies ShouldCount, persists
-// increments via db.Db.ActivityIncrement.
+// Verifies signature, applies ShouldCount, persists increments via
+// db.Db.ActivityIncrement, and maintains three in-memory views:
+//   - recent ring (per-event debug panel, /api/stats/events items)
+//   - lifetime counters (totals: accepted/rejected/self/ignored)
+//   - per-client aggregate (/api/stats/clients)
 type Handler struct {
-	Store      *db.Db
-	Token      string
-	IgnoreUAs  []string
+	Store *db.Db
+	Token string
 
-	// In-memory ring buffer for the recent-events debug panel.
-	recentMu  sync.Mutex
+	mu        sync.Mutex
+	ignoreUAs []string
 	recent    []RecentEvent
 	recentCap int
+	clients   map[string]*clientAgg
+
+	accepted    atomic.Int64 // counted → heat + ring
+	rejected    atomic.Int64 // not counted, not ignored, not self-read → ring
+	selfFolded  atomic.Int64 // self UA reads, folded (no ring)
+	ignoredFold atomic.Int64 // hit ignore rule, folded (no ring)
 }
 
-// RecentEvent is the public view of an event for /api/stats/events.
+// RecentEvent is the public view of an event; its JSON shape is exactly
+// the UI's StatsEventItem.
 type RecentEvent struct {
-	ReceivedAt time.Time `json:"receivedAt"`
-	EventID    string    `json:"eventId"`
-	Repository string    `json:"repository"`
-	Tag        string    `json:"tag"`
+	At         time.Time `json:"at"`      // server receive time
+	EventAt    time.Time `json:"eventAt"` // registry-side timestamp
+	ID         string    `json:"id"`
 	Action     string    `json:"action"`
 	Method     string    `json:"method"`
-	UserAgent  string    `json:"userAgent"`
+	MediaType  string    `json:"mediaType"`
+	Repository string    `json:"repository"`
+	Tag        string    `json:"tag"`
+	UserAgent  string    `json:"useragent"`
+	Addr       string    `json:"addr"`
+	Host       string    `json:"host"`
+	Actor      string    `json:"actor"`
+	Reason     string    `json:"reason"` // OK when counted
 	Counted    bool      `json:"counted"`
-	Reason     string    `json:"reason,omitempty"`
+}
+
+// clientAgg accumulates per-User-Agent totals (in-memory; resets on
+// restart). Row count is bounded by distinct UAs, so it stays small even
+// for slow-dripping clients the ring buffer would have evicted.
+type clientAgg struct {
+	UserAgent   string
+	FirstSeenAt time.Time
+	LastSeenAt  time.Time
+	Events      int64
+	Counted     int64
+	Self        bool
+}
+
+// ClientStat is the public per-client view (/api/stats/clients items).
+type ClientStat struct {
+	UserAgent   string    `json:"useragent"`
+	FirstSeenAt time.Time `json:"firstSeenAt"`
+	LastSeenAt  time.Time `json:"lastSeenAt"`
+	Events      int64     `json:"events"`
+	Counted     int64     `json:"counted"`
+	Self        bool      `json:"self"`
+}
+
+// Totals is the counters block of /api/stats/events.
+type Totals struct {
+	Accepted   int64 `json:"accepted"`
+	Rejected   int64 `json:"rejected"`
+	Buffered   int   `json:"buffered"`
+	BufferSize int   `json:"bufferSize"`
+	Self       int64 `json:"self"`
+	Ignored    int64 `json:"ignored"`
 }
 
 // NewHandler wires a Handler. recentCap is the size of the debug ring.
@@ -208,40 +286,45 @@ func NewHandler(store *db.Db, token string, ignoreUAs []string, recentCap int) *
 		recentCap = 200
 	}
 	return &Handler{
-		Store:      store,
-		Token:      token,
-		IgnoreUAs:  ignoreUAs,
-		recent:     make([]RecentEvent, 0, recentCap),
+		Store:     store,
+		Token:     token,
+		ignoreUAs: append([]string{}, ignoreUAs...),
+		recent:    make([]RecentEvent, 0, recentCap),
 		recentCap: recentCap,
+		clients:   map[string]*clientAgg{},
 	}
 }
 
-// SetIgnoreUAs replaces the live ignore list (handlers can mutate at runtime).
+// SetIgnoreUAs replaces the live (effective = env ∪ panel) ignore list.
 func (h *Handler) SetIgnoreUAs(uas []string) {
-	h.recentMu.Lock()
-	h.IgnoreUAs = uas
-	h.recentMu.Unlock()
+	h.mu.Lock()
+	h.ignoreUAs = append([]string{}, uas...)
+	h.mu.Unlock()
 }
 
-// ServeHTTP processes one batch of events.
+// currentIgnore returns a copy of the live ignore list.
+func (h *Handler) currentIgnore() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string{}, h.ignoreUAs...)
+}
+
+// ServeHTTP processes one batch of notification events.
 //
 // Distribution may POST a single event or an array; we accept both shapes.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		h.writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	body, err := readAll(r.Body, 1<<20) // cap at 1 MiB; registries batch ~dozens
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // cap at 1 MiB
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "read body: "+err.Error())
+		h.writeErr(w, http.StatusBadRequest, "read body: "+err.Error())
 		return
 	}
-	if h.Token != "" {
-		authz := r.Header.Get("Authorization")
-		if !VerifySignature(h.Token, authz, body) {
-			writeError(w, http.StatusUnauthorized, "invalid signature")
-			return
-		}
+	if !VerifySignature(h.Token, r.Header.Get("Authorization"), body) {
+		h.writeErr(w, http.StatusUnauthorized, "invalid signature")
+		return
 	}
 
 	// Parse: try array first, then single object.
@@ -249,59 +332,102 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err := json.Unmarshal(body, &arr); err != nil {
 		var single Event
 		if err := json.Unmarshal(body, &single); err != nil {
-			writeError(w, http.StatusBadRequest, "not a valid event batch: "+err.Error())
+			h.writeErr(w, http.StatusBadRequest, "not a valid event batch: "+err.Error())
 			return
 		}
 		arr = []Event{single}
 	}
 
+	ignore := h.currentIgnore()
+	now := time.Now().UTC()
 	processed := 0
 	for _, ev := range arr {
 		if ev.ID == "" {
 			continue
 		}
-		dec := ShouldCount(ev, h.IgnoreUAs)
-		// record into debug ring regardless of count decision (unless self-UA)
-		if !IsSelfUserAgent(ev.Request.UserAgent) {
-			h.appendRecent(RecentEvent{
-				ReceivedAt: time.Now().UTC(),
-				EventID:    ev.ID,
-				Repository: ev.Target.Repository,
-				Tag:        ev.Target.Tag,
-				Action:     ev.Action,
-				Method:     ev.Request.Method,
-				UserAgent:  ev.Request.UserAgent,
-				Counted:    dec.Count,
-				Reason:     dec.Reason,
-			})
+		dec := ShouldCount(ev, ignore)
+		self := IsSelfUserAgent(ev.Request.UserAgent)
+
+		h.recordClient(ev.Request.UserAgent, now, dec.Count, self)
+
+		recent := RecentEvent{
+			At:         now,
+			EventAt:    ev.Timestamp.UTC(),
+			ID:         ev.ID,
+			Action:     ev.Action,
+			Method:     ev.Request.Method,
+			MediaType:  ev.Target.MediaType,
+			Repository: ev.Target.Repository,
+			Tag:        ev.Target.Tag,
+			UserAgent:  ev.Request.UserAgent,
+			Addr:       ev.Request.RemoteAddr,
+			Host:       ev.Request.Host,
+			Actor:      ev.Actor.Name,
+			Reason:     dec.Reason,
+			Counted:    dec.Count,
 		}
+
+		switch {
+		case dec.Count:
+			// Counted events always enter the ring — including self PUTs,
+			// so "why did heat change" stays answerable.
+			h.accepted.Add(1)
+			h.appendRecent(recent)
+		case dec.Ignored:
+			h.ignoredFold.Add(1) // folded; keeps the ring free for new clients
+		case self:
+			h.selfFolded.Add(1) // self reads (rescans): pure noise, folded
+		default:
+			h.rejected.Add(1)
+			h.appendRecent(recent)
+		}
+
 		if !dec.Count {
 			continue
 		}
-		// SQLite dedupes via (day, repo, tag, action) primary key + count;
-		// same event.id replayed bumps the count again, which is fine since
-		// we'd rather double-count a retry than miss an event. (registry-manager
-		// dedupes in a separate `event_seen` table; we omit it for v0.1 and
-		// rely on the registry's threshold/backoff being low enough that
-		// the bias is small.)
+		// No event_seen dedup in v0.4.0: a replayed event.id bumps the
+		// count again. Accepted bias (see package doc).
 		day := ev.Timestamp.UTC().Format("2006-01-02")
-		if err := h.Store.ActivityIncrement(r.Context(), day, dec.Repository, dec.Tag, dec.Action, 1, dec.Bytes); err != nil {
-			slog.Error("activity increment failed", "err", err, "event_id", ev.ID)
-			continue
+		if h.Store != nil {
+			if err := h.Store.ActivityIncrement(r.Context(), day, dec.Repository, dec.Tag, dec.Action, 1, dec.Bytes); err != nil {
+				slog.Error("activity increment failed", "err", err, "event_id", ev.ID)
+				continue
+			}
 		}
 		processed++
 	}
-	writeJSON(w, http.StatusAccepted, map[string]any{
-		"received":   len(arr),
-		"processed":  processed,
-		"version":    version.Version,
+	h.writeOK(w, http.StatusAccepted, map[string]any{
+		"received":  len(arr),
+		"processed": processed,
+		"version":   version.Version,
 	})
+}
+
+// recordClient updates the per-UA aggregate. Every received event counts
+// toward Events (including ignored ones — "events > 0 but counted == 0"
+// is how the UI shows "seen but filtered").
+func (h *Handler) recordClient(ua string, now time.Time, counted, self bool) {
+	if ua == "" {
+		ua = "(empty)"
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	c, ok := h.clients[ua]
+	if !ok {
+		c = &clientAgg{UserAgent: ua, FirstSeenAt: now, Self: self}
+		h.clients[ua] = c
+	}
+	c.LastSeenAt = now
+	c.Events++
+	if counted {
+		c.Counted++
+	}
 }
 
 // appendRecent pushes an event into the bounded ring; oldest evicted when full.
 func (h *Handler) appendRecent(ev RecentEvent) {
-	h.recentMu.Lock()
-	defer h.recentMu.Unlock()
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	if len(h.recent) >= h.recentCap {
 		h.recent = h.recent[1:]
 	}
@@ -310,18 +436,51 @@ func (h *Handler) appendRecent(ev RecentEvent) {
 
 // RecentEvents returns a snapshot copy of the in-memory ring (newest first).
 func (h *Handler) RecentEvents() []RecentEvent {
-	h.recentMu.Lock()
-	defer h.recentMu.Unlock()
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	out := make([]RecentEvent, len(h.recent))
-	// reverse: newest first
 	for i, ev := range h.recent {
 		out[len(h.recent)-1-i] = ev
 	}
 	return out
 }
 
-// SetBaseIgnoreUAs is a package-level helper used at startup to set the
-// initial User-Agent ignore list from env.
+// SnapshotTotals returns the lifetime counters plus current ring occupancy.
+func (h *Handler) SnapshotTotals() Totals {
+	h.mu.Lock()
+	buffered := len(h.recent)
+	size := h.recentCap
+	h.mu.Unlock()
+	return Totals{
+		Accepted:   h.accepted.Load(),
+		Rejected:   h.rejected.Load(),
+		Buffered:   buffered,
+		BufferSize: size,
+		Self:       h.selfFolded.Load(),
+		Ignored:    h.ignoredFold.Load(),
+	}
+}
+
+// SnapshotClients returns the per-UA aggregate, most recently seen first.
+func (h *Handler) SnapshotClients() []ClientStat {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]ClientStat, 0, len(h.clients))
+	for _, c := range h.clients {
+		out = append(out, ClientStat{
+			UserAgent:   c.UserAgent,
+			FirstSeenAt: c.FirstSeenAt,
+			LastSeenAt:  c.LastSeenAt,
+			Events:      c.Events,
+			Counted:     c.Counted,
+			Self:        c.Self,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].LastSeenAt.After(out[j].LastSeenAt) })
+	return out
+}
+
+// SetBaseIgnoreUAs normalizes the env-provided ignore list at startup.
 func SetBaseIgnoreUAs(cfg []string) []string {
 	out := make([]string, 0, len(cfg))
 	for _, p := range cfg {
@@ -332,30 +491,11 @@ func SetBaseIgnoreUAs(cfg []string) []string {
 	return out
 }
 
-// --- tiny helpers (avoid dragging encoding/json into the imports twice) ---
+// --- tiny helpers: the webhook speaks plain JSON to the registry, NOT the
+// {success,code,message,data} envelope the UI API uses. Keep them private
+// so nobody mistakes them for the api-package writers. ---
 
-func readAll(r interface{ Read([]byte) (int, error) }, n int) ([]byte, error) {
-	buf := make([]byte, n)
-	read := 0
-	for {
-		if read >= n {
-			return buf[:n], nil
-		}
-		i, err := r.Read(buf[read:])
-		read += i
-		if err != nil {
-			if err.Error() == "EOF" {
-				return buf[:read], nil
-			}
-			return buf[:read], err
-		}
-		if i == 0 {
-			return buf[:read], nil
-		}
-	}
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
+func (h *Handler) writeErr(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]any{
@@ -363,7 +503,7 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	})
 }
 
-func writeJSON(w http.ResponseWriter, status int, body any) {
+func (h *Handler) writeOK(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)

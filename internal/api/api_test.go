@@ -84,8 +84,8 @@ func TestGetConfig(t *testing.T) {
 	if rr.Code != 200 {
 		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
 	}
-	if !strings.Contains(rr.Body.String(), `"registryName":"Test"`) {
-		t.Errorf("body missing registryName: %s", rr.Body.String())
+	if !strings.Contains(rr.Body.String(), `"name":"Test"`) {
+		t.Errorf("body missing name: %s", rr.Body.String())
 	}
 }
 
@@ -115,20 +115,27 @@ func TestDeleteTagSuccess(t *testing.T) {
 	if digest == "" {
 		t.Fatalf("could not extract digest from inventory body: %s", inv.Body.String())
 	}
-	req := httptest.NewRequest(http.MethodDelete, "/api/tags?repo=alpine&digest="+digest, nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/tags?repository=alpine&tag=3.19", nil)
 	r.ServeHTTP(rr, req)
 	if rr.Code != 200 {
 		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
 	}
-	if !strings.Contains(rr.Body.String(), `"deleted":true`) {
-		t.Errorf("body missing deleted:true: %s", rr.Body.String())
+	body := rr.Body.String()
+	if !strings.Contains(body, `"deletedTag":"3.19"`) {
+		t.Errorf("body missing deletedTag: %s", body)
+	}
+	if !strings.Contains(body, `"digest":"`+digest+`"`) {
+		t.Errorf("body missing resolved digest %s: %s", digest, body)
+	}
+	if !strings.Contains(body, `"affectedTags":["3.19"]`) {
+		t.Errorf("body missing affectedTags: %s", body)
 	}
 }
 
 func TestDeleteDisabledConfig(t *testing.T) {
 	r := newTestRouterNoDelete(t)
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodDelete, "/api/tags?repo=alpine&digest=sha256:abc", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/tags?repository=alpine&tag=3.19", nil)
 	r.ServeHTTP(rr, req)
 	if rr.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", rr.Code)
@@ -141,7 +148,7 @@ func TestDeleteDisabledConfig(t *testing.T) {
 func TestDeleteMissingParams(t *testing.T) {
 	r := newTestRouter(t)
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodDelete, "/api/tags?repo=alpine", nil) // no digest
+	req := httptest.NewRequest(http.MethodDelete, "/api/tags?repository=alpine", nil) // no tag
 	r.ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rr.Code)

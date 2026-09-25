@@ -1,0 +1,18 @@
+# 构建上下文瘦身 + 防敏感文件进镜像层
+
+.git
+.env
+.env.*
+
+# 前端依赖与产物：容器内由 web-builder 阶段重新 install/build，
+# 本地残留（尤其 internal/webui/dist 的旧产物）绝不能混进 builder 阶段
+web/node_modules
+web/dist
+web/.vite
+internal/webui/dist
+
+# 本地杂项
+/tmp
+*.test
+*.out
+.DS_Store
