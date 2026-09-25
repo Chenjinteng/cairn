@@ -37,6 +37,11 @@ type Client struct {
 	http    *http.Client
 	user    string
 	pass    string
+	// bearer handles the V2 spec "Bearer token" flow. Some upstreams
+	// (Docker Hub, ghcr.io, quay.io) require a Bearer token even for
+	// "public" manifests; the client auto-applies for it on 401 and
+	// caches the token per (realm, service, scope, basic-auth).
+	bearer *BearerAuth
 }
 
 // GetBaseURL returns the registry base URL as a string. Used by the pull
@@ -132,6 +137,10 @@ func NewClient(cfg Config) (*Client, error) {
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // intentional, opt-in
 	}
 
+	b := NewBearerAuth(&http.Client{
+		Timeout:   timeout,
+		Transport: transport, // share transport with token fetches so proxy / connection pool are reused
+	})
 	return &Client{
 		baseURL: u,
 		http: &http.Client{
@@ -140,6 +149,7 @@ func NewClient(cfg Config) (*Client, error) {
 		},
 		user: cfg.Username,
 		pass: cfg.Password,
+		bearer: b,
 	}, nil
 }
 
@@ -210,12 +220,59 @@ func (c *Client) doRequest(ctx context.Context, method, path, accept string, res
 	}
 	defer resp.Body.Close()
 
+	// V2 spec: on 401 with `WWW-Authenticate: Bearer realm="...",service="..."`,
+	// the client must fetch a token and retry the original request once.
+	// Docker Hub is the canonical case -- even "public" library/alpine
+	// manifest fetches return 401 without a Bearer token.
+	if resp.StatusCode == http.StatusUnauthorized && c.bearer != nil {
+		if ch, ok := parseChallenge(resp.Header.Get("WWW-Authenticate")); ok {
+			token, terr := c.bearer.FetchToken(ctx, ch, &BasicAuth{Username: c.user, Password: c.pass})
+			_ = resp.Body.Close()
+			if terr == nil && token != "" {
+				// Rebuild the request with the bearer token (so ctx is honoured)
+				// and retry once.
+				req2, rerr := http.NewRequestWithContext(ctx, method, full.String(), nil)
+				if rerr == nil {
+					req2.Header = req.Header.Clone()
+					req2.Header.Set("Authorization", "Bearer "+token)
+					req2.Header.Set("User-Agent", UserAgent)
+					if accept != "" {
+						req2.Header.Set("Accept", accept)
+					} else if strings.Contains(full.Path, "/manifests/") {
+						req2.Header.Set("Accept", manifestAccept)
+					}
+					if c.user != "" {
+						req2.SetBasicAuth(c.user, c.pass)
+					}
+					resp, err = c.http.Do(req2)
+					if err != nil {
+						return nil, nil, fmt.Errorf("registry: %s %s (bearer retry): %w", method, full.Path, err)
+					}
+					defer resp.Body.Close()
+					// Fall through to the body/status read below.
+				} else {
+					return nil, nil, fmt.Errorf("registry: bearer token: %w", terr)
+				}
+			} else {
+				// 401 without a usable challenge -> surface the original 401.
+				return nil, nil, fmt.Errorf("registry: %s %s: 401 unauthorized (no bearer challenge)", method, full.Path)
+			}
+		}
+	}
+
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20)) // 32MB cap; manifest JSON is small
 	if err != nil {
 		return nil, nil, fmt.Errorf("registry: read body: %w", err)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// If the second attempt also 401'd (stale token), invalidate the
+		// cache entry so the next call gets a fresh one.
+		if resp.StatusCode == http.StatusUnauthorized && c.bearer != nil {
+			if ch, ok := parseChallenge(resp.Header.Get("WWW-Authenticate")); ok {
+				c.bearer.Invalidate(ch, &BasicAuth{Username: c.user, Password: c.pass})
+			}
+		}
 		return nil, body, decodeError(resp.StatusCode, full.String(), body)
 	}
 

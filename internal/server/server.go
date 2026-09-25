@@ -133,6 +133,9 @@ func Build(cfg *config.Config) (*Runtime, error) {
 		// v0.5.1: pull source now flows through cfg.Mutable, so changes
 		// via PATCH /api/config take effect on the next queued job.
 		Mutable:              cfg.Mutable,
+		// v0.5.4: live cfg pointer so resolveSource can read the global
+		// HTTP proxy (registry.proxy setting). nil-safe.
+		Cfg:                  cfg,
 		PullHistoryRetention: cfg.PullHistoryRetentionDay,
 	}
 	executor := pull.NewExecutor(cfg.PullQueueSize, orchestrator.RunOne)

@@ -88,6 +88,10 @@ type Orchestrator struct {
 	// via PATCH /api/config take effect on the next queued job without a
 	// restart. nil is OK -- resolveSource treats it as "env default only".
 	Mutable *config.Mutable
+	// Cfg (v0.5.4) is the live Config pointer; resolveSource reads the
+	// global HTTP proxy from it via EffectiveRegistryProxy(). nil is OK
+	// -- proxy then falls back to per-job overrides only.
+	Cfg *config.Config
 	// DefaultSourceURL is the env bootstrap upstream (deprecated v0.5.1:
 	// superseded by Mutable; kept so resolveSource can fall back to it
 	// when Mutable is nil OR was never written to).
@@ -280,6 +284,13 @@ func (o *Orchestrator) resolveSource(v JobView) (srcURL, user, pass, proxyURL st
 		if proxyURL == "" {
 			proxyURL = p.URL
 		}
+	}
+	// v0.5.4: fall back to the global registry-proxy setting (mutable
+	// > env). Without this, jobs with no per-job proxy inherit nothing
+	// even when the operator set one on the settings page, so pulls to
+	// an upstream that requires a proxy silently time out.
+	if proxyURL == "" && o.Cfg != nil {
+		proxyURL = strings.TrimSpace(o.Cfg.EffectiveRegistryProxy())
 	}
 	return srcURL, user, pass, proxyURL, nil
 }
