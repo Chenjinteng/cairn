@@ -16,16 +16,15 @@ import (
 	"cairn/internal/db"
 	"cairn/internal/events"
 	"cairn/internal/proxies"
-	"cairn/internal/registry"
 	"cairn/internal/storage"
 	"cairn/internal/version"
 )
 
 // Handlers bundles the dependencies every endpoint needs.
 //
-// As of v0.3, the browse/delete endpoints operate on the local storage
-// (cairn IS the registry); the registry.Registry field is kept only for
-// pull jobs that fetch from external sources.
+// As of v0.5, cairn IS the registry: browse/delete/inventory operate on the
+// local storage, and pull jobs name their own upstream per job. There is no
+// managed external registry handle to carry here any more.
 //
 // v0.4.0 adds the optional service handles (Vault/Proxies/DB) plus their
 // startup error strings so GET /api/config can tell the UI *why* a
@@ -33,9 +32,6 @@ import (
 type Handlers struct {
 	Cfg   *config.Config
 	Store storage.Storage
-	// Registry is the (optional) external registry client used by pull jobs
-	// to fetch from upstream sources. Admin browse/delete no longer use it.
-	Registry registry.Registry
 
 	// Optional services; nil means unavailable at startup.
 	Vault   *credentials.Vault
@@ -157,16 +153,52 @@ func (h *Handlers) Probe(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// registryURL is the externally visible registry address: REGISTRY_URL when
-// set, else derived from the request Host header.
+// registryURL is the externally visible registry address.
+//
+// v0.5 flips the precedence: cairn manages *itself*, so the address the
+// client actually used to reach us is the truth. The Host header wins
+// (honouring X-Forwarded-Proto / X-Forwarded-Host behind a reverse proxy);
+// REGISTRY_URL is now only a fallback for setups where the panel is reached
+// on an address that must not be advertised to `docker` (e.g. a compose
+// service name or a loopback bind).
 func (h *Handlers) registryURL(r *http.Request) string {
-	if h.Cfg.RegistryURL != "" {
-		return h.Cfg.RegistryURL
-	}
 	if r != nil && r.Host != "" {
-		return "http://" + r.Host
+		scheme := "http"
+		if r.TLS != nil {
+			scheme = "https"
+		}
+		if proto := forwardedProto(r); proto != "" {
+			scheme = proto
+		}
+		host := r.Host
+		if fh := firstCSV(r.Header.Get("X-Forwarded-Host")); fh != "" {
+			host = fh
+		}
+		return scheme + "://" + host
+	}
+	return strings.TrimSuffix(h.Cfg.RegistryURL, "/")
+}
+
+// forwardedProto returns "http" / "https" when a reverse proxy supplied
+// X-Forwarded-Proto. The header may be a comma-separated hop list; the
+// client-facing (first) entry wins.
+func forwardedProto(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	switch strings.ToLower(firstCSV(r.Header.Get("X-Forwarded-Proto"))) {
+	case "http", "https":
+		return strings.ToLower(firstCSV(r.Header.Get("X-Forwarded-Proto")))
 	}
 	return ""
+}
+
+// firstCSV returns the first element of a comma-separated header value.
+func firstCSV(v string) string {
+	if i := strings.IndexByte(v, ','); i >= 0 {
+		v = v[:i]
+	}
+	return strings.TrimSpace(v)
 }
 
 // hostOf extracts the host[:port] part of a registry URL (best-effort).
@@ -497,7 +529,7 @@ func (h *Handlers) DeleteTag(w http.ResponseWriter, r *http.Request) {
 	}
 	// Blast radius BEFORE deleting: every tag currently on this digest.
 	affected := tagsForDigest(r.Context(), h.Store, repo, digest)
-	if err := h.Store.DeleteManifest(r.Context(), repo, digest); err != nil {
+	if _, err := h.Store.DeleteManifest(r.Context(), repo, digest); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			writeError(w, r, http.StatusNotFound, err)
 			return

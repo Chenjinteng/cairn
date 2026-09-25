@@ -25,7 +25,7 @@ func (c *Client) DeleteManifest(ctx context.Context, repo, digest string) ([]str
 	if digest == "" {
 		return nil, fmt.Errorf("registry: digest is required")
 	}
-	path := fmt.Sprintf("/v2/%s/manifests/%s", url.PathEscape(repo), url.PathEscape(digest))
+	path := fmt.Sprintf("/v2/%s/manifests/%s", escapeRepo(repo), url.PathEscape(digest))
 	resp, _, err := c.doRequest(ctx, http.MethodDelete, path, "", nil)
 	if err != nil {
 		return nil, err

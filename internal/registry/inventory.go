@@ -84,7 +84,7 @@ func (c *Client) ListTags(ctx context.Context, repo string) ([]string, error) {
 		Name string   `json:"name"`
 		Tags []string `json:"tags"`
 	}
-	path := fmt.Sprintf("/v2/%s/tags/list", url.PathEscape(repo))
+	path := fmt.Sprintf("/v2/%s/tags/list", escapeRepo(repo))
 	_, _, err := c.doRequest(ctx, http.MethodGet, path, "", &doc)
 	if err != nil {
 		return nil, err
@@ -115,7 +115,7 @@ func (c *Client) GetManifest(ctx context.Context, repo, reference string) (*Mani
 	if repo == "" || reference == "" {
 		return nil, fmt.Errorf("registry: repo and reference are required")
 	}
-	path := fmt.Sprintf("/v2/%s/manifests/%s", url.PathEscape(repo), url.PathEscape(reference))
+	path := fmt.Sprintf("/v2/%s/manifests/%s", escapeRepo(repo), url.PathEscape(reference))
 
 	resp, body, err := c.doRequest(ctx, http.MethodGet, path, "", nil)
 	if err != nil {
@@ -188,7 +188,8 @@ func decodeManifestLayers(raw json.RawMessage, mediaType string, m *Manifest) er
 			MediaType string `json:"mediaType"`
 		} `json:"layers"`
 		Config struct {
-			Size int64 `json:"size"`
+			Digest string `json:"digest"`
+			Size   int64  `json:"size"`
 		} `json:"config"`
 	}
 	if err := json.Unmarshal(raw, &single); err != nil {
@@ -205,6 +206,7 @@ func decodeManifestLayers(raw json.RawMessage, mediaType string, m *Manifest) er
 	if single.Config.Size > 0 {
 		size += single.Config.Size
 	}
+	m.ConfigDigest = single.Config.Digest
 	m.Size = size
 	return nil
 }
@@ -235,7 +237,7 @@ func (c *Client) FetchConfig(ctx context.Context, repo string, configDigest stri
 	if configDigest == "" {
 		return nil, nil
 	}
-	path := fmt.Sprintf("/v2/%s/blobs/%s", url.PathEscape(repo), url.PathEscape(configDigest))
+	path := fmt.Sprintf("/v2/%s/blobs/%s", escapeRepo(repo), url.PathEscape(configDigest))
 	resp, body, err := c.doRequest(ctx, http.MethodGet, path, "", nil)
 	if err != nil {
 		return nil, err

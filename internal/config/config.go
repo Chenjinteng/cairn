@@ -1,7 +1,7 @@
 // Package config loads runtime configuration from environment variables.
 //
 // Mirrors registry-manager's env conventions so .env files can be reused:
-//   - REGISTRY_URL         required, the OCI Distribution endpoint we manage
+//   - REGISTRY_URL         OPTIONAL, the default upstream registry pull jobs read from
 //   - PORT                 default 8787, HTTP listen port
 //   - REGISTRY_CREDENTIAL_KEY  AES-256-GCM key for the credential vault
 //   - REGISTRY_NOTIFY_TOKEN    shared secret for distribution webhook events
@@ -10,9 +10,9 @@
 package config
 
 import (
-	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -26,13 +26,25 @@ type Config struct {
 	// HTTP
 	Port int // PORT, default 8787
 
-	// Managed registry (the OCI Distribution we read/delete/pull into)
-	RegistryURL      string        // REGISTRY_URL, required
+	// Embedded registry + optional upstream source.
+	//
+	// cairn IS the registry now: it serves /v2 itself out of StorageDir, so
+	// REGISTRY_URL is OPTIONAL. When set it is only the DEFAULT upstream that a
+	// pull job falls back to when the job itself names no source (the page form
+	// and saved credentials still win). Leaving it empty is the normal
+	// deployment — cairn then manages nothing but its own storage.
+	RegistryURL      string        // REGISTRY_URL, optional default upstream
 	RegistryProxy    string        // REGISTRY_PROXY, optional
 	RegistryUsername string        // REGISTRY_USERNAME, optional
 	RegistryPassword string        // REGISTRY_PASSWORD, optional
 	RegistryName     string        // REGISTRY_NAME, default "镜像仓库"
 	CacheTTL         time.Duration // REGISTRY_CACHE_TTL_SECONDS, default 60s
+
+	// StorageDir is where the embedded /v2 endpoint keeps blobs, manifests and
+	// upload sessions. REGISTRY_STORAGE_DIR, default "<REGISTRY_CREDENTIALS_DIR>/registry".
+	// Mount a dedicated volume here in containers: every pulled and pushed image
+	// lives on this path, and recreating the container without it loses them.
+	StorageDir string
 
 	// Capability gates (mirrors registry-manager)
 	AllowDelete bool // REGISTRY_ALLOW_DELETE, default true
@@ -43,14 +55,14 @@ type Config struct {
 	PullHistoryRetentionDay int // REGISTRY_PULL_HISTORY_RETENTION_DAYS, default 90
 
 	// Heat / events
-	NotifyToken             string        // REGISTRY_NOTIFY_TOKEN, optional but required for heat
-	AllowRegistryEvents     bool          // REGISTRY_ALLOW_REGISTRY_EVENTS, default true
-	StatsRetentionDay       int           // REGISTRY_STATS_RETENTION_DAYS, default 365
-	StatsIgnoreUserAgents   []string      // REGISTRY_STATS_IGNORE_USERAGENTS, comma-separated, case-insensitive substring match
+	NotifyToken              string        // REGISTRY_NOTIFY_TOKEN, optional but required for heat
+	AllowRegistryEvents      bool          // REGISTRY_ALLOW_REGISTRY_EVENTS, default true
+	StatsRetentionDay        int           // REGISTRY_STATS_RETENTION_DAYS, default 365
+	StatsIgnoreUserAgents    []string      // REGISTRY_STATS_IGNORE_USERAGENTS, comma-separated, case-insensitive substring match
 	StatsAggregationInterval time.Duration // derived from retention window; not env-driven
 
 	// Credential vault
-	CredentialKey string // REGISTRY_CREDENTIAL_KEY, strongly recommended; absence disables vault (pulls still work anonymously)
+	CredentialKey  string // REGISTRY_CREDENTIAL_KEY, strongly recommended; absence disables vault (pulls still work anonymously)
 	CredentialsDir string // REGISTRY_CREDENTIALS_DIR, default /app/data
 
 	// Dev convenience
@@ -62,7 +74,7 @@ type Config struct {
 func Load() (*Config, error) {
 	c := &Config{
 		Port:                    intEnv("PORT", 8787),
-		RegistryURL:             os.Getenv("REGISTRY_URL"),
+		RegistryURL:             strings.TrimRight(os.Getenv("REGISTRY_URL"), "/"),
 		RegistryProxy:           os.Getenv("REGISTRY_PROXY"),
 		RegistryUsername:        os.Getenv("REGISTRY_USERNAME"),
 		RegistryPassword:        os.Getenv("REGISTRY_PASSWORD"),
@@ -86,6 +98,9 @@ func Load() (*Config, error) {
 			}
 		}
 	}
+	// Keep the registry data next to the credential vault by default (one volume
+	// covers both), while still allowing an explicit path / its own volume.
+	c.StorageDir = strEnv("REGISTRY_STORAGE_DIR", filepath.Join(c.CredentialsDir, "registry"))
 
 	if err := c.validate(); err != nil {
 		return nil, err
@@ -94,14 +109,16 @@ func Load() (*Config, error) {
 }
 
 func (c *Config) validate() error {
-	if c.RegistryURL == "" {
-		return errors.New("REGISTRY_URL is required (must be http(s)://... endpoint of the OCI Distribution we manage)")
-	}
-	if !strings.HasPrefix(c.RegistryURL, "http://") && !strings.HasPrefix(c.RegistryURL, "https://") {
-		return fmt.Errorf("REGISTRY_URL must start with http:// or https://, got %q", c.RegistryURL)
+	// REGISTRY_URL is optional: cairn manages its own embedded registry. When
+	// set it must still be a usable upstream base URL.
+	if c.RegistryURL != "" && !strings.HasPrefix(c.RegistryURL, "http://") && !strings.HasPrefix(c.RegistryURL, "https://") {
+		return fmt.Errorf("REGISTRY_URL must start with http:// or https://, got %q (leave it empty to manage the embedded registry only)", c.RegistryURL)
 	}
 	if c.Port <= 0 || c.Port > 65535 {
 		return fmt.Errorf("PORT out of range: %d", c.Port)
+	}
+	if c.StorageDir == "" {
+		return fmt.Errorf("REGISTRY_STORAGE_DIR resolved to an empty path")
 	}
 	if c.AllowDelete == false && c.AllowPull == false {
 		// not an error, just intentional read-only + no-pull mode

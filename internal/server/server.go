@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -20,7 +21,6 @@ import (
 	"cairn/internal/events"
 	"cairn/internal/proxies"
 	"cairn/internal/pull"
-	"cairn/internal/registry"
 	"cairn/internal/registryd"
 	"cairn/internal/storage"
 )
@@ -57,7 +57,13 @@ func Build(cfg *config.Config) (*Runtime, error) {
 	}
 
 	// 1. Storage layer — cairn's own filesystem backend.
-	store, err := storage.NewFilesystem(filepath.Join(dataDir, "registry"))
+	//    v0.5.0 honours REGISTRY_STORAGE_DIR (defaults to <dataDir>/registry
+	//    for back-compat with v0.4.x deployments).
+	storageDir := cfg.StorageDir
+	if storageDir == "" {
+		storageDir = filepath.Join(dataDir, "registry")
+	}
+	store, err := storage.NewFilesystem(storageDir)
 	if err != nil {
 		return nil, fmt.Errorf("server: open storage: %w", err)
 	}
@@ -100,37 +106,19 @@ func Build(cfg *config.Config) (*Runtime, error) {
 		proxyStore = ps
 	}
 
-	// 5. External registry client (used by pull jobs to fetch from upstream).
-	var externalRegistry registry.Registry
-	if cfg.RegistryURL != "" {
-		c, err := registry.NewClient(registry.Config{
-			BaseURL:  cfg.RegistryURL,
-			Username: cfg.RegistryUsername,
-			Password: cfg.RegistryPassword,
-			Proxy:    cfg.RegistryProxy,
-			Timeout:  60 * time.Second,
-		})
-		if err != nil {
-			slog.Warn("external registry client init failed; pull-from-external disabled", "err", err)
-		} else {
-			externalRegistry = registry.NewCached(c, cfg.CacheTTL)
-		}
+	// 5. Pull executor (always present in v0.5.0; per-job source is part of
+	// the request, not a server-wide setting. REGISTRY_URL merely seeds
+	// DefaultSourceURL for jobs that don't pin their own upstream).
+	orchestrator := &pull.Orchestrator{
+		Dest:                 store,
+		SrcResolve:           pull.DefaultSourceResolver(),
+		Vault:                vault,
+		Proxies:              proxyStore,
+		DB:                   store_db,
+		DefaultSourceURL:     strings.TrimRight(cfg.RegistryURL, "/"),
+		PullHistoryRetention: cfg.PullHistoryRetentionDay,
 	}
-
-	// 6. Pull executor (only meaningful if external registry is reachable).
-	var executor *pull.Executor
-	if externalRegistry != nil {
-		orchestrator := &pull.Orchestrator{
-			Dest:                 store,
-			ExternalRegistry:     externalRegistry,
-			SrcResolve:           pull.DefaultSourceResolver(),
-			Vault:                vault,
-			Proxies:              proxyStore,
-			DB:                   store_db,
-			PullHistoryRetention: cfg.PullHistoryRetentionDay,
-		}
-		executor = pull.NewExecutor(cfg.PullQueueSize, orchestrator.RunOne)
-	}
+	executor := pull.NewExecutor(cfg.PullQueueSize, orchestrator.RunOne)
 
 	// 7. Events handler (webhook receiver for registry notifications).
 	var eventsHandler *events.Handler
@@ -148,7 +136,6 @@ func Build(cfg *config.Config) (*Runtime, error) {
 	handlers := &api.Handlers{
 		Cfg:        cfg,
 		Store:      store,
-		Registry:   externalRegistry,
 		Vault:      vault,
 		Proxies:    proxyStore,
 		DB:         store_db,
@@ -160,6 +147,7 @@ func Build(cfg *config.Config) (*Runtime, error) {
 	extras := &api.ExtraHandlers{
 		Cfg: &api.ConfigExtras{
 			AllowPull:        cfg.AllowPull,
+			AllowDelete:      cfg.AllowDelete,
 			IgnoreUserAgents: cfg.StatsIgnoreUserAgents,
 			RegistryURL:      cfg.RegistryURL,
 		},
@@ -168,7 +156,6 @@ func Build(cfg *config.Config) (*Runtime, error) {
 		Proxies:    proxyStore,
 		DB:         store_db,
 		Events:     eventsHandler,
-		Registry:   externalRegistry,
 		Store:      store,
 		VaultErr:   vaultErr,
 		ProxiesErr: proxiesErr,
@@ -199,7 +186,9 @@ func Build(cfg *config.Config) (*Runtime, error) {
 		"data_dir", dataDir,
 		"cache_ttl", cfg.CacheTTL,
 		"db", store_db != nil,
-		"external_registry", externalRegistry != nil,
+		"allow_delete", cfg.AllowDelete,
+		"allow_pull", cfg.AllowPull,
+		"default_upstream", strings.TrimRight(cfg.RegistryURL, "/"),
 	)
 
 	pullCtx, pullCancel := context.WithCancel(context.Background())

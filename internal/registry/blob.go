@@ -19,7 +19,7 @@ func (c *Client) BlobExists(ctx context.Context, repo, digest string) (bool, err
 	if repo == "" || digest == "" {
 		return false, fmt.Errorf("registry: BlobExists: repo and digest required")
 	}
-	path := fmt.Sprintf("/v2/%s/blobs/%s", url.PathEscape(repo), url.PathEscape(digest))
+	path := fmt.Sprintf("/v2/%s/blobs/%s", escapeRepo(repo), url.PathEscape(digest))
 	resp, _, err := c.doRequest(ctx, http.MethodHead, path, "", nil)
 	if err != nil {
 		var re *Error
@@ -51,7 +51,7 @@ func (c *Client) GetBlob(ctx context.Context, repo, digest string) (io.ReadClose
 	if repo == "" || digest == "" {
 		return nil, 0, fmt.Errorf("registry: GetBlob: repo and digest required")
 	}
-	path := fmt.Sprintf("/v2/%s/blobs/%s", url.PathEscape(repo), url.PathEscape(digest))
+	path := fmt.Sprintf("/v2/%s/blobs/%s", escapeRepo(repo), url.PathEscape(digest))
 	resp, _, err := c.doRequest(ctx, http.MethodGet, path, "", nil)
 	if err != nil {
 		return nil, 0, err
@@ -76,7 +76,7 @@ func (c *Client) StartBlobUpload(ctx context.Context, repo string) (string, erro
 	if repo == "" {
 		return "", fmt.Errorf("registry: StartBlobUpload: repo required")
 	}
-	path := fmt.Sprintf("/v2/%s/blobs/uploads/", url.PathEscape(repo))
+	path := fmt.Sprintf("/v2/%s/blobs/uploads/", escapeRepo(repo))
 	resp, _, err := c.doRequest(ctx, http.MethodPost, path, "", nil)
 	if err != nil {
 		return "", err
@@ -124,7 +124,7 @@ func (c *Client) UploadBlob(ctx context.Context, repo, digest string, src io.Rea
 	}
 	const chunkSize = 4 << 20 // 4 MiB; matches registry default
 	buf := make([]byte, chunkSize)
-	basePath := fmt.Sprintf("/v2/%s/blobs/uploads/%s", url.PathEscape(repo), url.PathEscape(uuid))
+	basePath := fmt.Sprintf("/v2/%s/blobs/uploads/%s", escapeRepo(repo), url.PathEscape(uuid))
 	var offset int64
 
 	for {

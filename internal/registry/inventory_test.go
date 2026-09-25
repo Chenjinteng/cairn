@@ -161,7 +161,7 @@ func TestScanInventory(t *testing.T) {
 		t.Errorf("TagCount = %d, want 3", inv.Totals.TagCount)
 	}
 	// Sizes include image config size + layer sizes
-	wantSize := int64(100+1000 + 110+1100 + 200+2000)
+	wantSize := int64(100 + 1000 + 110 + 1100 + 200 + 2000)
 	if inv.Totals.TotalSize != wantSize {
 		t.Errorf("TotalSize = %d, want %d", inv.Totals.TotalSize, wantSize)
 	}

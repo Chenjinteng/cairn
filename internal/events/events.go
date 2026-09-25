@@ -50,7 +50,7 @@ import (
 // MANIFEST_MEDIA_TYPES is the whitelist (NOT blacklist). Anything not in
 // this set is dropped before counting. Unknown types should fail closed.
 var MANIFEST_MEDIA_TYPES = map[string]struct{}{
-	"application/vnd.docker.distribution.manifest.v2+json":       {},
+	"application/vnd.docker.distribution.manifest.v2+json":      {},
 	"application/vnd.docker.distribution.manifest.list.v2+json": {},
 	"application/vnd.docker.distribution.manifest.v1+json":      {}, // deprecated but seen in older registries
 	"application/vnd.oci.image.manifest.v1+json":                {},

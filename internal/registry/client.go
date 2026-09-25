@@ -143,6 +143,36 @@ func NewClient(cfg Config) (*Client, error) {
 	}, nil
 }
 
+// NormalizeBaseURL turns an operator-supplied registry address into something
+// NewClient accepts.
+//
+// Two shapes reach us from the UI and from env:
+//
+//   - "https://registry-1.docker.io" — already a URL, passed through (trailing
+//     slash trimmed so path joins don't double up).
+//   - "proxy.example.com:10001" — a bare host:port, which is how intranet registries
+//     are always written. There is no way to guess the scheme, and intranet
+//     registries are near-universally plain HTTP, so we assume http://.
+//
+// Anything with an explicit non-http(s) scheme is rejected rather than guessed.
+func NormalizeBaseURL(raw string) (string, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "", fmt.Errorf("registry: empty base URL")
+	}
+	if strings.Contains(s, "://") {
+		u, err := url.Parse(s)
+		if err != nil {
+			return "", fmt.Errorf("registry: parse BaseURL %q: %w", s, err)
+		}
+		if u.Scheme != "http" && u.Scheme != "https" {
+			return "", fmt.Errorf("registry: BaseURL must be http(s); got %q", u.Scheme)
+		}
+		return strings.TrimRight(s, "/"), nil
+	}
+	return "http://" + strings.TrimRight(s, "/"), nil
+}
+
 // doRequest performs an HTTP request and decodes a V2 error document on failure.
 //
 // The AcceptManifest header is set automatically when accept is empty and
@@ -286,4 +316,16 @@ func asErr(err error, target any) bool {
 		break
 	}
 	return false
+}
+
+// escapeRepo percent-escapes each path segment of a repository name
+// individually, keeping the "/" separators intact. Using url.PathEscape on
+// the whole name would encode "/" as %2F, which registries reject with
+// 404 NAME_UNKNOWN for multi-segment repos like "alpine/openssl".
+func escapeRepo(repo string) string {
+	segs := strings.Split(repo, "/")
+	for i, s := range segs {
+		segs[i] = url.PathEscape(s)
+	}
+	return strings.Join(segs, "/")
 }

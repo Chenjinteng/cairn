@@ -59,8 +59,8 @@ type Credential struct {
 
 // Vault is the encrypted credential store.
 type Vault struct {
-	path    string
-	key     []byte // 32-byte AES-256 key derived from cfg.Key
+	path string
+	key  []byte // 32-byte AES-256 key derived from cfg.Key
 
 	mu    sync.RWMutex
 	items map[string]Credential // id → Credential

@@ -37,10 +37,10 @@ var ErrInvalidDigest = errors.New("storage: invalid digest")
 // Digests are always the registry-computed sha256 from the body bytes;
 // references (tags) map to digests via the tags/ tree.
 type Manifest struct {
-	Repo      string    `json:"-"`        // path component, not stored
-	Digest    string    `json:"digest"`   // "sha256:..."
+	Repo      string    `json:"-"`      // path component, not stored
+	Digest    string    `json:"digest"` // "sha256:..."
 	MediaType string    `json:"mediaType"`
-	Body      []byte    `json:"-"`        // raw manifest JSON
+	Body      []byte    `json:"-"` // raw manifest JSON
 	CreatedAt time.Time `json:"createdAt"`
 }
 
@@ -59,7 +59,7 @@ type Upload struct {
 	UUID      string    `json:"uuid"`
 	Repo      string    `json:"repo"`
 	StartedAt time.Time `json:"startedAt"`
-	Size      int64     `json:"size"`     // bytes written so far
+	Size      int64     `json:"size"` // bytes written so far
 }
 
 // Storage is the abstraction handlers depend on. One impl per backend;
@@ -71,10 +71,19 @@ type Storage interface {
 	// TagDigest returns the digest a tag currently points at, or ErrNotFound.
 	TagDigest(ctx context.Context, repo, tag string) (string, error)
 
+	// TagsForDigest returns every tag in repo that currently points at digest.
+	// Used by the v0.5.0 "delete by digest" endpoint so callers can see which
+	// tags the delete will detach. ErrNotFound is NOT returned when no tag
+	// points at digest -- the result is simply []string{}.
+	TagsForDigest(ctx context.Context, repo, digest string) ([]string, error)
+
 	// Manifest
 	GetManifest(ctx context.Context, repo, ref string) (*Manifest, error)
 	PutManifest(ctx context.Context, repo, ref string, mediaType string, body []byte) (digest string, err error)
-	DeleteManifest(ctx context.Context, repo, digest string) error
+	// DeleteManifest removes the manifest at digest under repo and returns the
+	// tags that previously pointed at it (may be empty). ErrNotFound if the
+	// manifest doesn't exist; ErrInvalidDigest for malformed digest values.
+	DeleteManifest(ctx context.Context, repo, digest string) ([]string, error)
 
 	// Blob
 	BlobExists(ctx context.Context, repo, digest string) (bool, error)
@@ -96,17 +105,39 @@ type Storage interface {
 	// CancelUpload removes the upload session without committing.
 	CancelUpload(ctx context.Context, repo, uuid string) error
 
+	// Admin actions. These are the same operations the /v2 endpoints perform,
+	// exposed so the UI's delete button and a `docker push` can never disagree
+	// about what "delete" means.
+
+	// ManifestDigests lists every manifest stored under repo, including ones
+	// no tag points at any more (a tag move leaves the old manifest dangling).
+	ManifestDigests(ctx context.Context, repo string) ([]string, error)
+	// DeleteRepository drops a whole repository: manifests, tags, and any
+	// in-flight upload sessions. Blobs are shared and survive; run GC to
+	// reclaim their disk.
+	DeleteRepository(ctx context.Context, repo string) error
+	// GC reclaims blobs that no manifest references and abandons upload
+	// sessions older than 24h. Deleting a manifest never frees disk on its
+	// own — same semantics as `registry garbage-collect`.
+	GC(ctx context.Context) (*GCResult, error)
+
 	// Stats aggregates counts across repos / tags / manifests / blobs.
 	// Best-effort: may be slow on very large trees; cached for a few seconds
 	// upstream if needed.
 	Stats(ctx context.Context) (*StorageStats, error)
 }
 
+// GCResult reports what one garbage-collection sweep reclaimed.
+type GCResult struct {
+	RemovedBlobs int   `json:"removedBlobs"`
+	FreedBytes   int64 `json:"freedBytes"`
+}
+
 // StorageStats is a summary used by the admin UI's "清单概览" panel.
 type StorageStats struct {
-	RepoCount   int   `json:"repoCount"`
-	TagCount    int   `json:"tagCount"`
-	ManifestCount int  `json:"manifestCount"`
-	BlobCount   int   `json:"blobCount"`
-	TotalSize   int64 `json:"totalSize"`
+	RepoCount     int   `json:"repoCount"`
+	TagCount      int   `json:"tagCount"`
+	ManifestCount int   `json:"manifestCount"`
+	BlobCount     int   `json:"blobCount"`
+	TotalSize     int64 `json:"totalSize"`
 }

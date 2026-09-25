@@ -25,7 +25,7 @@ services:
         NODE_IMAGE: ${NODE_IMAGE:-node:22-alpine}
         NPM_REGISTRY: ${NPM_REGISTRY:-}
 
-    image: ${IMAGE:-cairn:0.4.0}
+    image: ${IMAGE:-cairn:0.5.0}
     container_name: cairn
     restart: unless-stopped
 
@@ -33,7 +33,11 @@ services:
       - "${HOST_PORT:-8787}:8787"
 
     environment:
-      REGISTRY_URL: ${REGISTRY_URL:?请在 .env 里设置 REGISTRY_URL，参考 .env.example}
+      # v0.5.0: REGISTRY_URL is OPTIONAL -- empty means "no managed upstream";
+      # the UI defaults to Docker Hub for pulls that don't pin a source.
+      # All REGISTRY_* names are kept for back-compat; only this one changed
+      # from required to optional.
+      REGISTRY_URL: ${REGISTRY_URL:-}
       REGISTRY_NAME: ${REGISTRY_NAME:-镜像仓库}
       REGISTRY_PROXY: ${REGISTRY_PROXY:-}
       REGISTRY_USERNAME: ${REGISTRY_USERNAME:-}
@@ -49,11 +53,21 @@ services:
       REGISTRY_STATS_IGNORE_USERAGENTS: ${REGISTRY_STATS_IGNORE_USERAGENTS:-}
       REGISTRY_CREDENTIAL_KEY: ${REGISTRY_CREDENTIAL_KEY:?请设置 REGISTRY_CREDENTIAL_KEY；任意随机 32+ 字符字符串，启动后切勿丢失}
       REGISTRY_CREDENTIALS_DIR: ${REGISTRY_CREDENTIALS_DIR:-/app/data}
+      # v0.5.0: where blobs/manifests/tags live. Kept on its own named volume
+      # so restarts don't drag the storage along with credentials (and vice
+      # versa); separate volumes also let you re-image the app without wiping
+      # either data set.
+      REGISTRY_STORAGE_DIR: ${REGISTRY_STORAGE_DIR:-/app/registry}
       GO_HUB_ENV: ${GO_HUB_ENV:-prod}
 
-    # 数据目录要持久化，否则凭据库 / 未来 SQLite 库就没了。
+    # Two named volumes so credentials and image storage can be backed up /
+    # reset independently. App data (credentials + proxies + SQLite heat
+    # DB) lives under /app/data; the actual registry content under
+    # /app/registry -- mirroring how Docker Registry splits config from data.
     volumes:
       - cairn-data:/app/data
+      - cairn-registry:/app/registry
 
 volumes:
   cairn-data:
+  cairn-registry:

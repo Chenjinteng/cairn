@@ -243,10 +243,10 @@ func (d *Db) GetSummary(ctx context.Context, since time.Time) (ActivitySummary, 
 
 // TopRepo is one entry in the top-repos view.
 type TopRepo struct {
-	Repo       string  `json:"repo"`
-	Pulls      int64   `json:"pulls"`
-	Pushes     int64   `json:"pushes"`
-	BytesTotal int64   `json:"bytesTotal"`
+	Repo       string `json:"repo"`
+	Pulls      int64  `json:"pulls"`
+	Pushes     int64  `json:"pushes"`
+	BytesTotal int64  `json:"bytesTotal"`
 }
 
 // GetTopRepos returns the busiest repositories in the window.
@@ -282,7 +282,7 @@ func (d *Db) GetTopRepos(ctx context.Context, since time.Time, limit int) ([]Top
 
 // ActivityPoint is one cell of the calendar heatmap.
 type ActivityPoint struct {
-	Day      string `json:"day"`      // 'YYYY-MM-DD'
+	Day      string `json:"day"` // 'YYYY-MM-DD'
 	Repo     string `json:"repo"`
 	Tag      string `json:"tag"`
 	Action   string `json:"action"`

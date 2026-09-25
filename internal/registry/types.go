@@ -24,6 +24,7 @@ import (
 type Manifest struct {
 	Digest       string          `json:"digest"`
 	MediaType    string          `json:"mediaType"`
+	ConfigDigest string          `json:"configDigest,omitempty"` // image config blob digest (single-arch manifests)
 	Tag          string          `json:"tag,omitempty"`
 	Created      *time.Time      `json:"created,omitempty"`
 	Architecture string          `json:"architecture,omitempty"`

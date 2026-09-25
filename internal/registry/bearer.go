@@ -16,12 +16,12 @@ import (
 //
 // Flow:
 //
-//	1. Send request without Authorization (or with basic auth).
-//	2. On 401 with `WWW-Authenticate: Bearer realm="...",service="...",scope="..."`,
-//	   parse the challenge.
-//	3. POST to realm with `?service=...&scope=...` (form-encoded or query),
-//	   receive {"token": "..."}.
-//	4. Retry the original request with `Authorization: Bearer <token>`.
+//  1. Send request without Authorization (or with basic auth).
+//  2. On 401 with `WWW-Authenticate: Bearer realm="...",service="...",scope="..."`,
+//     parse the challenge.
+//  3. POST to realm with `?service=...&scope=...` (form-encoded or query),
+//     receive {"token": "..."}.
+//  4. Retry the original request with `Authorization: Bearer <token>`.
 //
 // We cache tokens per (realm, service, scope, basic-auth) tuple until they
 // fail with another 401, at which point we evict and re-acquire once.

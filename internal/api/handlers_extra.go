@@ -33,7 +33,6 @@ type ExtraHandlers struct {
 	Proxies  *proxies.Store
 	DB       *db.Db
 	Events   *events.Handler
-	Registry registry.Registry
 	Store    storage.Storage
 
 	// v0.4.0: startup failure reasons for the optional stores ("" when
@@ -45,12 +44,16 @@ type ExtraHandlers struct {
 }
 
 // ConfigExtras holds the extra config fields the new handlers need.
+//
+// v0.5.0: RegistryURL is OPTIONAL -- it now means "default upstream for
+// pulls that don't pin their own source". Empty -> pull.DefaultUpstream
+// (Docker Hub). AllowDelete gates the destructive endpoints (repository
+// and manifest-by-digest deletion, GC).
 type ConfigExtras struct {
 	AllowPull        bool
+	AllowDelete      bool
 	IgnoreUserAgents []string
-	// RegistryURL is the externally reachable base URL of the local registry.
-	// TestProxy uses it as the default probe target (v0.4.0).
-	RegistryURL string
+	RegistryURL      string
 }
 
 // RegisterRoutes mounts the v0.2 + v0.3 + v0.4 endpoints on the chi router.
@@ -90,6 +93,14 @@ func (e *ExtraHandlers) RegisterRoutes(r chi.Router) {
 		// Webhook ingest (registry-side notification endpoint).
 		r.Post("/events", e.Events.ServeHTTP)
 	}
+
+	// v0.5.0: deletion is operational work, so it lives on the API surface
+	// (UI buttons) and is gated by AllowDelete.
+	r.Route("/repositories", func(r chi.Router) {
+		r.Delete("/{repo}", e.DeleteRepository)
+		r.Delete("/{repo}/manifests/{digest}", e.DeleteManifestByDigest)
+	})
+	r.Post("/gc", e.RunGC)
 
 	r.Route("/stats", func(r chi.Router) {
 		r.Get("/summary", e.StatsSummary)
@@ -133,27 +144,29 @@ func (e *ExtraHandlers) proxiesUnavailable(w http.ResponseWriter, r *http.Reques
 
 // --- Pull -------------------------------------------------------------------
 
-// CreatePullJobReq mirrors the UI's CreatePullJobRequest. Fields the v0.4.0
-// executor cannot honour yet (inline source url/auth, overwrite) are accepted
-// and ignored — the executor always pulls through its configured external
-// registry client. Deep contract lands in v0.5.0.
+// CreatePullJobReq mirrors the UI PullJobInput shape (web/src/types.ts):
+// source url, inline auth and proxy all travel with the job, because v0.5.0
+// has no configured external registry -- every pull states its own source
+// explicitly. Unset optional fields fall back to credential or default.
 type CreatePullJobReq struct {
-	SourceImage string `json:"sourceImage"`
-	DestRepo    string `json:"destRepo"`
-	DestTag     string `json:"destTag"`
-	Credential  string `json:"credential,omitempty"`
-	Proxy       string `json:"proxy,omitempty"`
-	Overwrite   bool   `json:"overwrite"`
-	SourceUrl   string `json:"sourceUrl,omitempty"`
-	SourceAuth  *struct {
-		Mode     string `json:"mode"`
+	SourceUrl          string `json:"sourceUrl,omitempty"`
+	SourceRef          string `json:"sourceRef"`
+	SourceProxy        string `json:"sourceProxy,omitempty"`
+	SourceProxyID      string `json:"sourceProxyId,omitempty"`
+	DestRepo           string `json:"destRepo"`
+	DestTag            string `json:"destTag"`
+	SourceCredentialID string `json:"sourceCredentialId,omitempty"`
+	// One-shot credential for this job only; never persisted.
+	SourceAuthInline *struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
-	} `json:"sourceAuth,omitempty"`
+	} `json:"sourceAuthInline,omitempty"`
 }
 
-// uiJobView maps pull.JobView onto the UI's PullJob shape (minimal viable
-// mapping for v0.4.0; phases/destStatus arrive with v0.5.0).
+// uiJobView maps pull.JobView onto the UI's PullJob shape (web/src/types.ts).
+// v0.5.0 keys match the UI exactly: destRepo/destTag (was targetRepo/targetTag),
+// errorMessage (was error), finalDigest. Per-stage phases[] arrive in v0.5.x
+// when the executor learns to emit them; for now we keep an empty array.
 func uiJobView(j pull.JobView) map[string]any {
 	sourceRepo, sourceTag, _ := splitSourceRef(j.SourceRef)
 	var startedAt, finishedAt any
@@ -164,33 +177,29 @@ func uiJobView(j pull.JobView) map[string]any {
 		finishedAt = j.EndedAt
 	}
 	return map[string]any{
-		"id":         j.ID,
-		"status":     string(j.State),
-		"sourceRepo": sourceRepo,
-		"sourceTag":  sourceTag,
-		"sourceUrl":  "",
-		"targetRepo": j.DestRepo,
-		"targetTag":  j.DestTag,
-		"credential": j.Credential,
-		"proxy":      j.Proxy,
-		"bytes":      j.BytesDone,
-		"totalBytes": j.BytesTotal,
-		"blobsDone":  j.BlobsDone,
-		"blobsTotal": j.BlobsTotal,
-		"createdAt":  j.CreatedAt,
-		"startedAt":  startedAt,
-		"finishedAt": finishedAt,
-		"error":      j.Error,
-		"phases":     []any{},
+		"id":           j.ID,
+		"status":       string(j.State),
+		"sourceRepo":   sourceRepo,
+		"sourceTag":    sourceTag,
+		"sourceUrl":    j.SourceURL,
+		"destRepo":     j.DestRepo,
+		"destTag":      j.DestTag,
+		"credential":   j.Credential,
+		"proxy":        j.Proxy,
+		"bytes":        j.BytesDone,
+		"totalBytes":   j.BytesTotal,
+		"blobsDone":    j.BlobsDone,
+		"blobsTotal":   j.BlobsTotal,
+		"finalDigest":  j.FinalDigest,
+		"errorMessage": j.Error,
+		"createdAt":    j.CreatedAt,
+		"startedAt":    startedAt,
+		"finishedAt":   finishedAt,
+		"phases":       []any{},
 	}
 }
 
 func (e *ExtraHandlers) CreatePullJob(w http.ResponseWriter, r *http.Request) {
-	if e.Executor == nil {
-		writeError(w, r, http.StatusServiceUnavailable,
-			errors.New("pull queue is not enabled (external registry unreachable)"))
-		return
-	}
 	if !e.Cfg.AllowPull {
 		writeError(w, r, http.StatusForbidden,
 			errors.New("pull is disabled (REGISTRY_ALLOW_PULL=false)"))
@@ -201,16 +210,34 @@ func (e *ExtraHandlers) CreatePullJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, err)
 		return
 	}
-	if _, _, ok := splitSourceRef(req.SourceImage); !ok {
+	if _, _, ok := splitSourceRef(req.SourceRef); !ok {
 		writeError(w, r, http.StatusBadRequest,
-			errors.New("sourceImage must be <repo>:<tag>"))
+			errors.New("sourceRef must be <repo>:<tag>"))
 		return
 	}
-	if strings.TrimSpace(req.DestRepo) == "" {
-		writeError(w, r, http.StatusBadRequest, errors.New("destRepo required"))
+	if strings.TrimSpace(req.DestRepo) == "" || strings.TrimSpace(req.DestTag) == "" {
+		writeError(w, r, http.StatusBadRequest, errors.New("destRepo and destTag are required"))
 		return
 	}
-	job := e.Executor.Submit(req.SourceImage, req.DestRepo, req.DestTag, req.Credential, req.Proxy)
+	nj := pull.NewJob{
+		SourceRef:    req.SourceRef,
+		DestRepo:     strings.TrimSpace(req.DestRepo),
+		DestTag:      strings.TrimSpace(req.DestTag),
+		CredentialID: req.SourceCredentialID,
+		ProxyID:      req.SourceProxyID,
+		SourceURL:    strings.TrimSpace(req.SourceUrl),
+	}
+	if req.SourceAuthInline != nil && req.SourceAuthInline.Username != "" {
+		nj.SourceUser = req.SourceAuthInline.Username
+		nj.SourcePass = req.SourceAuthInline.Password
+	}
+	if p := strings.TrimSpace(req.SourceProxy); p != "" {
+		nj.ProxyURL = p
+	}
+	if nj.SourceURL == "" && e.Cfg != nil {
+		nj.SourceURL = strings.TrimRight(e.Cfg.RegistryURL, "/")
+	}
+	job := e.Executor.Submit(nj)
 	writeJSON(w, http.StatusCreated, uiJobView(job))
 }
 
@@ -284,33 +311,38 @@ func (e *ExtraHandlers) DeletePullJob(w http.ResponseWriter, r *http.Request) {
 
 func (e *ExtraHandlers) ProbePullSource(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		URL        string `json:"url"`
-		SourceURL  string `json:"sourceUrl"`
-		Credential string `json:"credential,omitempty"`
+		SourceURL    string `json:"sourceUrl,omitempty"`
+		SourceProxy  string `json:"sourceProxy,omitempty"`
+		ProxyID      string `json:"proxyId,omitempty"`
+		CredentialID string `json:"credentialId,omitempty"`
+		SourceRef    string `json:"sourceRef,omitempty"`
+		DestRepo     string `json:"destRepo,omitempty"`
+		DestTag      string `json:"destTag,omitempty"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, r, http.StatusBadRequest, err)
 		return
 	}
-	target := strings.TrimSpace(req.URL)
-	if target == "" {
-		target = strings.TrimSpace(req.SourceURL)
+	target := strings.TrimSpace(req.SourceURL)
+	if target == "" && e.Cfg != nil {
+		target = strings.TrimRight(e.Cfg.RegistryURL, "/")
 	}
 	if target == "" {
-		writeError(w, r, http.StatusBadRequest, errors.New("url required"))
+		writeError(w, r, http.StatusBadRequest,
+			errors.New("sourceUrl required and REGISTRY_URL not set"))
 		return
 	}
 	if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
-		writeError(w, r, http.StatusBadRequest, errors.New("url must be http(s)://..."))
+		writeError(w, r, http.StatusBadRequest, errors.New("sourceUrl must be http(s)://..."))
 		return
 	}
 	cfg := registry.Config{BaseURL: target, Timeout: 5 * time.Second}
-	if req.Credential != "" {
+	if req.CredentialID != "" {
 		if e.Vault == nil {
 			writeError(w, r, http.StatusServiceUnavailable, errors.New("credential store unavailable"))
 			return
 		}
-		c, err := e.Vault.Get(req.Credential)
+		c, err := e.Vault.Get(req.CredentialID)
 		if err != nil {
 			writeError(w, r, http.StatusNotFound, err)
 			return
@@ -318,29 +350,42 @@ func (e *ExtraHandlers) ProbePullSource(w http.ResponseWriter, r *http.Request) 
 		cfg.Username = c.Username
 		cfg.Password = c.Password
 	}
+	// Inline proxy URL wins; stored proxy id is the fallback. Auth (if any)
+	// is baked into the URL by the caller so we don't see userinfo here.
+	if p := strings.TrimSpace(req.SourceProxy); p != "" {
+		cfg.Proxy = p
+	} else if req.ProxyID != "" && e.Proxies != nil {
+		if p, err := e.Proxies.Get(req.ProxyID); err == nil {
+			cfg.Proxy = strings.TrimSpace(p.URL)
+		}
+	}
 	client, err := registry.NewClient(cfg)
 	if err != nil {
 		writeError(w, r, http.StatusBadRequest, err)
 		return
 	}
 	start := time.Now()
-	if err := client.Probe(r.Context()); err != nil {
-		// Domain failure → 200 {ok:false} so the UI renders it inline.
-		writeJSON(w, http.StatusOK, map[string]any{
-			"ok":        false,
-			"error":     err.Error(),
-			"elapsedMs": time.Since(start).Milliseconds(),
-			"url":       target,
-		})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":         true,
-		"status":     "ok",
-		"elapsedMs":  time.Since(start).Milliseconds(),
-		"url":        target,
+	probeErr := client.Probe(r.Context())
+	out := map[string]any{
+		"ok":         probeErr == nil,
 		"apiVersion": "2",
-	})
+		"host":       target,
+		"sourceUrl":  target,
+		"usingProxy": cfg.Proxy != "",
+		"elapsedMs":  time.Since(start).Milliseconds(),
+	}
+	if probeErr != nil {
+		out["error"] = probeErr.Error()
+	}
+	// Probe the destination tag too so the UI can warn about overwrites.
+	if req.DestRepo != "" && req.DestTag != "" {
+		if dest, derr := e.probeDest(r.Context(), req.DestRepo, req.DestTag); derr != "" {
+			out["destError"] = derr
+		} else {
+			out["dest"] = dest
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func splitSourceRef(ref string) (repo, tag string, ok bool) {
@@ -358,6 +403,152 @@ func splitSourceRef(ref string) (repo, tag string, ok bool) {
 		return "", "", false
 	}
 	return repo, tag, true
+}
+
+// firstNonEmptyStr returns the first non-empty string (whitespace-trimmed).
+func firstNonEmptyStr(vals ...string) string {
+	for _, v := range vals {
+		if t := strings.TrimSpace(v); t != "" {
+			return t
+		}
+	}
+	return ""
+}
+
+// defaultUpstream returns the configured REGISTRY_URL when set, otherwise
+// pull.DefaultUpstream (Docker Hub). Safe to call when e is nil.
+func (e *ExtraHandlers) defaultUpstream() string {
+	if e == nil || e.Cfg == nil {
+		return pull.DefaultUpstream
+	}
+	if v := strings.TrimRight(e.Cfg.RegistryURL, "/"); v != "" {
+		return v
+	}
+	return pull.DefaultUpstream
+}
+
+// proxyLabel returns the proxy's name for a given id, or the id as-is. The
+// job view uses it so the UI never has to leak a stored proxy URL.
+func (e *ExtraHandlers) proxyLabel(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" || e.Proxies == nil {
+		return id
+	}
+	if p, err := e.Proxies.Get(id); err == nil && p.Name != "" {
+		return p.Name
+	}
+	return id
+}
+
+// probeDest reports whether destRepo:destTag already exists locally. Used
+// by ProbePullSource so the UI can flag a would-overwrite before submit.
+func (e *ExtraHandlers) probeDest(ctx context.Context, repo, tag string) (map[string]any, string) {
+	if e.Store == nil {
+		return nil, "storage backend unavailable"
+	}
+	digest, err := e.Store.TagDigest(ctx, repo, tag)
+	if errors.Is(err, storage.ErrNotFound) {
+		return map[string]any{
+			"destRepo":    repo,
+			"destTag":     tag,
+			"exists":      false,
+			"willReplace": false,
+		}, ""
+	}
+	if err != nil {
+		return nil, err.Error()
+	}
+	return map[string]any{
+		"destRepo":       repo,
+		"destTag":        tag,
+		"exists":         true,
+		"existingDigest": digest,
+		"willReplace":    true,
+	}, ""
+}
+
+// DeleteRepository drops an entire repository (all tags + manifests). Gated
+// by AllowDelete so a single env flag can lock down destructive ops.
+func (e *ExtraHandlers) DeleteRepository(w http.ResponseWriter, r *http.Request) {
+	if !e.Cfg.AllowDelete {
+		writeError(w, r, http.StatusForbidden,
+			errors.New("delete is disabled (REGISTRY_ALLOW_DELETE=false)"))
+		return
+	}
+	repo := chiURLParam(r, "repo")
+	if repo == "" {
+		writeError(w, r, http.StatusBadRequest, errors.New("repo required"))
+		return
+	}
+	if e.Store == nil {
+		writeError(w, r, http.StatusServiceUnavailable, errors.New("storage backend unavailable"))
+		return
+	}
+	if err := e.Store.DeleteRepository(r.Context(), repo); err != nil {
+		writeError(w, r, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"repo": repo, "deleted": true})
+}
+
+// DeleteManifestByDigest removes a manifest by digest and reports the tags
+// that previously pointed at it. Same AllowDelete gate as above.
+func (e *ExtraHandlers) DeleteManifestByDigest(w http.ResponseWriter, r *http.Request) {
+	if !e.Cfg.AllowDelete {
+		writeError(w, r, http.StatusForbidden,
+			errors.New("delete is disabled (REGISTRY_ALLOW_DELETE=false)"))
+		return
+	}
+	repo := chiURLParam(r, "repo")
+	digest := chiURLParam(r, "digest")
+	if repo == "" || digest == "" {
+		writeError(w, r, http.StatusBadRequest, errors.New("repo and digest required"))
+		return
+	}
+	if !strings.HasPrefix(digest, "sha256:") {
+		writeError(w, r, http.StatusBadRequest, errors.New("digest must be sha256:..."))
+		return
+	}
+	if e.Store == nil {
+		writeError(w, r, http.StatusServiceUnavailable, errors.New("storage backend unavailable"))
+		return
+	}
+	affected, err := e.Store.TagsForDigest(r.Context(), repo, digest)
+	if err != nil {
+		writeError(w, r, http.StatusInternalServerError, err)
+		return
+	}
+	if _, err := e.Store.DeleteManifest(r.Context(), repo, digest); err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			writeError(w, r, http.StatusNotFound, err)
+			return
+		}
+		writeError(w, r, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"repo":         repo,
+		"digest":       digest,
+		"affectedTags": affected,
+		"deleted":      true,
+	})
+}
+
+// RunGC triggers an inline storage GC sweep and returns the freed-blob stats.
+func (e *ExtraHandlers) RunGC(w http.ResponseWriter, r *http.Request) {
+	if e.Store == nil {
+		writeError(w, r, http.StatusServiceUnavailable, errors.New("storage backend unavailable"))
+		return
+	}
+	res, err := e.Store.GC(r.Context())
+	if err != nil {
+		writeError(w, r, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"removedBlobs": res.RemovedBlobs,
+		"freedBytes":   res.FreedBytes,
+	})
 }
 
 // --- Credentials ------------------------------------------------------------

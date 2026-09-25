@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Empty, Input, Segmented, Table, Tooltip } from 'antd';
+import { Alert, Button, Empty, Input, Popconfirm, Segmented, Table, Tooltip, message } from 'antd';
 import {
   ClockCircleOutlined,
   DatabaseOutlined,
+  DeleteOutlined,
   HddOutlined,
   ReloadOutlined,
   SyncOutlined,
@@ -10,7 +11,14 @@ import {
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 
-import { fetchConfig, fetchInventory, fetchRepositoryStats, refreshInventory } from '../api';
+import {
+  deleteRepository,
+  fetchConfig,
+  fetchInventory,
+  fetchRepositoryStats,
+  refreshInventory,
+  runGC,
+} from '../api';
 import ImageDetailDrawer from '../components/image-detail-drawer';
 import MetricCard from '../components/metric-card';
 import type {
@@ -212,12 +220,37 @@ export default function ImagesPage({
     {
       title: '操作',
       key: 'actions',
-      width: 80,
+      width: 140,
       fixed: 'right',
       render: (_, record) => (
-        <Button type="link" size="small" onClick={() => setDetailName(record.name)}>
-          详情
-        </Button>
+        <span style={{ display: 'inline-flex', gap: 4 }}>
+          <Button type="link" size="small" onClick={() => setDetailName(record.name)}>
+            详情
+          </Button>
+          {config?.allowDelete ? (
+            <Popconfirm
+              title={`确认删除仓库 ${record.name}？`}
+              description="将删除该仓库下的所有 tag、manifest 与受影响的 blob，不可恢复。"
+              okText="删除"
+              cancelText="取消"
+              okButtonProps={{ danger: true }}
+              onConfirm={async () => {
+                try {
+                  await deleteRepository(record.name);
+                  message.success(`已删除仓库 ${record.name}`);
+                  await load(false);
+                  if (statsEnabled) await loadHeat(statsDays);
+                } catch (e) {
+                  message.error(`删除失败：${(e as Error).message ?? e}`);
+                }
+              }}
+            >
+              <Button type="link" size="small" danger icon={<DeleteOutlined />}>
+                删除
+              </Button>
+            </Popconfirm>
+          ) : null}
+        </span>
       ),
     },
   ];
@@ -259,6 +292,29 @@ export default function ImagesPage({
           <Button type="primary" icon={<SyncOutlined />} loading={loading} onClick={() => void load(true)}>
             重新扫描
           </Button>
+          {config?.allowDelete ? (
+            <Popconfirm
+              title="确认运行 GC？"
+              description="扫描并清理孤儿 blob（24h 以上的孤立上传会话）。"
+              okText="运行"
+              cancelText="取消"
+              onConfirm={async () => {
+                const hide = message.loading('正在执行 GC 扫描…', 0);
+                try {
+                  const r = await runGC();
+                  message.success(
+                    `GC 完成：清理 ${r.removedBlobs} 个孤儿 blob，回收 ${(r.freedBytes / 1024 / 1024).toFixed(2)} MiB`
+                  );
+                } catch (e) {
+                  message.error(`GC 失败：${(e as Error).message ?? e}`);
+                } finally {
+                  hide();
+                }
+              }}
+            >
+              <Button icon={<DeleteOutlined />}>运行 GC</Button>
+            </Popconfirm>
+          ) : null}
         </div>
       </div>
 

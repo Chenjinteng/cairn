@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -51,21 +52,44 @@ func (f *Filesystem) Root() string { return f.root }
 
 // --- catalog ---------------------------------------------------------------
 
+// Repositories lists every repository under repos/. Repository names contain
+// slashes (docker.io/library/nginx), so the tree nests — walk it and treat any
+// directory that holds a tags/ or manifests/ subdir as a repository. Parent and
+// child can both be repositories (a/b and a/b/c are independent names).
 func (f *Filesystem) Repositories(_ context.Context) ([]string, error) {
 	reposDir := filepath.Join(f.root, "repos")
-	entries, err := os.ReadDir(reposDir)
-	if err != nil {
+	if _, err := os.Stat(reposDir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, err
 	}
-	var out []string
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
+	seen := map[string]struct{}{}
+	err := filepath.WalkDir(reposDir, func(p string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil || !d.IsDir() {
+			return nil // best-effort: skip unreadable subtrees
 		}
-		out = append(out, e.Name())
+		if p == reposDir {
+			return nil
+		}
+		if n := d.Name(); n != "tags" && n != "manifests" {
+			return nil
+		}
+		rel, relErr := filepath.Rel(reposDir, filepath.Dir(p))
+		if relErr != nil || rel == "." {
+			return nil
+		}
+		seen[filepath.ToSlash(rel)] = struct{}{}
+		// tags/ and manifests/ never contain nested repos, and pruning here
+		// keeps the walk off the (potentially huge) manifest trees.
+		return filepath.SkipDir
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(seen))
+	for r := range seen {
+		out = append(out, r)
 	}
 	sort.Strings(out)
 	return out, nil
@@ -188,9 +212,9 @@ func (f *Filesystem) PutManifest(_ context.Context, repo, ref, mediaType string,
 	return digest, nil
 }
 
-func (f *Filesystem) DeleteManifest(_ context.Context, repo, digest string) error {
+func (f *Filesystem) DeleteManifest(_ context.Context, repo, digest string) ([]string, error) {
 	if !looksLikeDigest(digest) {
-		return ErrInvalidDigest
+		return nil, ErrInvalidDigest
 	}
 	unlock := f.lockRepo(repo)
 	defer unlock()
@@ -198,12 +222,80 @@ func (f *Filesystem) DeleteManifest(_ context.Context, repo, digest string) erro
 	p := f.manifestPath(repo, digest)
 	if err := os.Remove(p); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return ErrNotFound
+			return nil, ErrNotFound
 		}
-		return err
+		return nil, err
 	}
 	_ = os.Remove(mediaTypePath(p))
-	return nil
+	// Drop the now-empty <algo>/<hex>/ husk so repeated push/delete cycles
+	// don't leave thousands of empty directories behind.
+	_ = os.Remove(filepath.Dir(p))
+	// One digest can be referenced by several tags. Leaving them behind would
+	// make tags/list advertise a tag whose manifest 404s, so dereference them.
+	affected := f.tagsForDigest(repo, digest)
+	f.pruneTagsForDigest(repo, digest)
+	return affected, nil
+}
+
+// tagsForDigest returns every tag under repos/<repo>/tags whose content
+// equals digest. The repository lock must already be held by the caller.
+func (f *Filesystem) tagsForDigest(repo, digest string) []string {
+	tagsDir := filepath.Join(f.root, "repos", repo, "tags")
+	entries, err := os.ReadDir(tagsDir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		p := filepath.Join(tagsDir, e.Name())
+		body, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		if strings.TrimSpace(string(body)) == digest {
+			out = append(out, e.Name())
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// TagsForDigest is the Storage interface entry point. It re-acquires the
+// repository lock so it can be called independently of DeleteManifest.
+func (f *Filesystem) TagsForDigest(_ context.Context, repo, digest string) ([]string, error) {
+	if !looksLikeDigest(digest) {
+		return nil, ErrInvalidDigest
+	}
+	unlock := f.lockRepo(repo)
+	defer unlock()
+	return f.tagsForDigest(repo, digest), nil
+}
+
+// pruneTagsForDigest deletes every tag file under repos/<repo>/tags whose
+// content equals digest. Best-effort: the caller's manifest delete already
+// succeeded, so I/O errors here must not turn into a 500.
+func (f *Filesystem) pruneTagsForDigest(repo, digest string) {
+	tagsDir := filepath.Join(f.root, "repos", repo, "tags")
+	entries, err := os.ReadDir(tagsDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		p := filepath.Join(tagsDir, e.Name())
+		body, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		if strings.TrimSpace(string(body)) == digest {
+			_ = os.Remove(p)
+		}
+	}
 }
 
 // --- blob ------------------------------------------------------------------
@@ -421,7 +513,6 @@ func (f *Filesystem) Stats(_ context.Context) (*StorageStats, error) {
 		if err == nil && !info.IsDir() && info.Name() == "data" {
 			s.BlobCount++
 			s.TotalSize += info.Size()
-			s.ManifestCount++ // approximate: count files in /blobs that aren't data
 		}
 		return nil
 	})
@@ -538,4 +629,174 @@ func newUUID() (string, error) {
 
 // Ensure JSON import is used (we'll use it for the storage stats later).
 var _ = json.Marshal
+
+// --- admin operations ------------------------------------------------------
+
+// reDigest matches the sha256 digests embedded in manifest bodies (config +
+// layer descriptors, and child manifests for an index). We scrape the raw
+// JSON instead of decoding because a manifest may be any of the four media
+// types and we only care about which blobs are still referenced.
+var reDigest = regexp.MustCompile(`sha256:[0-9a-f]{64}`)
+
+// ManifestDigests lists every manifest stored under repo — including ones no
+// tag points at any more (a tag move leaves the old manifest dangling, and
+// the UI's inventory should still show it so it can be cleaned up).
+func (f *Filesystem) ManifestDigests(_ context.Context, repo string) ([]string, error) {
+	base := filepath.Join(f.root, "repos", repo, "manifests", "sha256")
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var out []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(base, e.Name(), "data")); err != nil {
+			continue // husk without a body: not a manifest
+		}
+		out = append(out, "sha256:"+e.Name())
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// DeleteRepository drops an entire repository: every manifest, tag, and
+// in-flight upload session under it. Blobs are content-addressed and shared
+// between repositories, so they are left untouched — run GC to reclaim them.
+func (f *Filesystem) DeleteRepository(_ context.Context, repo string) error {
+	if err := cleanRepoName(repo); err != nil {
+		return err
+	}
+	unlock := f.lockRepo(repo)
+	defer unlock()
+
+	dir := filepath.Join(f.root, "repos", repo)
+	if _, err := os.Stat(dir); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return ErrNotFound
+		}
+		return err
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return err
+	}
+	_ = os.RemoveAll(filepath.Join(f.root, "uploads", repo))
+	pruneEmptyDirs(filepath.Dir(dir), filepath.Join(f.root, "repos"))
+	return nil
+}
+
+// GC sweeps the store and reclaims disk. Deleting a manifest only drops the
+// reference — the blob bytes stay on disk until a sweep runs, which is the
+// same contract as `registry garbage-collect` in CNCF Distribution. Two
+// passes:
+//
+//  1. blobs no stored manifest mentions are deleted;
+//  2. upload sessions abandoned mid-PUT (>24h) are discarded.
+func (f *Filesystem) GC(_ context.Context) (*GCResult, error) {
+	res := &GCResult{}
+
+	// Pass 1a: collect every digest a manifest body references. Manifest
+	// bodies live in repos/ and reference their config + layer descriptors
+	// (and their children, for an index), so this covers both cases.
+	live := map[string]struct{}{}
+	reposRoot := filepath.Join(f.root, "repos")
+	_ = filepath.Walk(reposRoot, func(p string, info os.FileInfo, err error) error {
+		if err != nil || info == nil || info.IsDir() || info.Name() != "data" {
+			return nil
+		}
+		body, err := os.ReadFile(p)
+		if err != nil {
+			return nil
+		}
+		for _, d := range reDigest.FindAllString(string(body), -1) {
+			live[d] = struct{}{}
+		}
+		return nil
+	})
+
+	// Pass 1b: walk blobs/ and drop anything nothing references.
+	blobsRoot := filepath.Join(f.root, "blobs", "sha256")
+	_ = filepath.Walk(blobsRoot, func(p string, info os.FileInfo, err error) error {
+		if err != nil || info == nil || info.IsDir() || info.Name() != "data" {
+			return nil
+		}
+		dir := filepath.Dir(p)
+		digest := "sha256:" + filepath.Base(dir)
+		if !looksLikeDigest(digest) {
+			return nil
+		}
+		if _, ok := live[digest]; ok {
+			return nil
+		}
+		res.RemovedBlobs++
+		res.FreedBytes += info.Size()
+		if err := os.Remove(p); err != nil {
+			res.RemovedBlobs--
+			res.FreedBytes -= info.Size()
+			return nil
+		}
+		pruneEmptyDirs(dir, blobsRoot)
+		return nil
+	})
+
+	// Pass 2: abandon old upload sessions. StartUpload writes a startedat
+	// marker precisely so this sweep can tell "in flight" from "client died".
+	uploadsRoot := filepath.Join(f.root, "uploads")
+	cutoff := time.Now().UTC().Add(-24 * time.Hour)
+	_ = filepath.Walk(uploadsRoot, func(p string, info os.FileInfo, err error) error {
+		if err != nil || info == nil || !info.IsDir() {
+			return nil
+		}
+		body, err := os.ReadFile(filepath.Join(p, "startedat"))
+		if err != nil {
+			return nil
+		}
+		ts, err := time.Parse(time.RFC3339, strings.TrimSpace(string(body)))
+		if err != nil || ts.After(cutoff) {
+			return nil
+		}
+		_ = os.RemoveAll(p)
+		pruneEmptyDirs(filepath.Dir(p), uploadsRoot)
+		return filepath.SkipDir
+	})
+
+	return res, nil
+}
+
+// cleanRepoName rejects repository paths that would escape the storage root.
+// Multi-segment names (docker.io/library/nginx) are fine; empty / "." / ".."
+// segments are not.
+func cleanRepoName(repo string) error {
+	if repo == "" || strings.HasPrefix(repo, "/") || strings.HasSuffix(repo, "/") {
+		return ErrNotFound
+	}
+	for _, seg := range strings.Split(repo, "/") {
+		if seg == "" || seg == "." || seg == ".." {
+			return ErrNotFound
+		}
+	}
+	return nil
+}
+
+// pruneEmptyDirs removes dir and its ancestors while they stay empty, never
+// ascending above stop. After a delete this clears the husks left behind
+// (blobs/sha256/aa/, repos/a/) without ever touching the roots themselves.
+func pruneEmptyDirs(dir, stop string) {
+	stop = filepath.Clean(stop)
+	for {
+		dir = filepath.Clean(dir)
+		if dir == stop || !strings.HasPrefix(dir, stop+string(filepath.Separator)) {
+			return
+		}
+		if err := os.Remove(dir); err != nil {
+			return // not empty, or already gone: stop here
+		}
+		dir = filepath.Dir(dir)
+	}
+}
+
 var _ = time.Now

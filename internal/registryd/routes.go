@@ -63,24 +63,15 @@ func New(store storage.Storage) http.Handler {
 	r.Get("/", h.apiVersion)
 	r.Get("/_catalog", h.catalog)
 
-	// Tags
-	r.Route("/{repo}", func(r chi.Router) {
-		r.Get("/tags/list", h.tagsList)
-		r.Get("/manifests/{ref}", h.manifestGet)
-		r.Head("/manifests/{ref}", h.manifestHead)
-		r.Put("/manifests/{ref}", h.manifestPut)
-		r.Delete("/manifests/{ref}", h.manifestDelete)
-
-		r.Get("/blobs/{digest}", h.blobGet)
-		r.Head("/blobs/{digest}", h.blobHead)
-
-		r.Route("/blobs/uploads", func(r chi.Router) {
-			r.Post("/", h.uploadStart)
-			r.Get("/{uuid}", h.uploadGet)
-			r.Patch("/{uuid}", h.uploadPatch)
-			r.Put("/{uuid}", h.uploadPut)
-		})
-	})
+	// Repository-scoped routes all go through one wildcard dispatcher.
+	//
+	// chi's named params cannot span "/", so the obvious
+	// r.Route("/{repo}", ...) only ever matched single-segment names
+	// ("nginx") and 404'd on every real-world one ("library/nginx",
+	// "team/app/api"). dispatchRepoRoute takes the whole remaining path
+	// and splits it itself, then hands the pieces to the very same
+	// handlers through chi's route context: no handler changes.
+	r.HandleFunc("/*", h.dispatchRepoRoute)
 	return r
 }
 
@@ -193,7 +184,7 @@ func (h *Handler) manifestDelete(w http.ResponseWriter, r *http.Request) {
 		writeV2Error(w, http.StatusBadRequest, "DIGEST_INVALID", "DELETE requires digest reference, not tag")
 		return
 	}
-	if err := h.Store.DeleteManifest(r.Context(), repo, ref); err != nil {
+	if _, err := h.Store.DeleteManifest(r.Context(), repo, ref); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			w.WriteHeader(http.StatusNotFound)
 			return
@@ -366,4 +357,134 @@ func digestMatches(body []byte, declared string) bool {
 	sum := sha256.Sum256(body)
 	actual := "sha256:" + hex.EncodeToString(sum[:])
 	return actual == declared
+}
+
+// --- repository dispatch ----------------------------------------------------
+
+// dispatchRepoRoute is the single entry point for every repository-scoped /v2
+// route.
+//
+// It splits the remaining path the same greedy way CNCF Distribution does --
+// most specific suffix first -- and injects "repo" plus the trailing
+// identifier into chi's route context, so the handlers below keep working
+// unchanged on chi.URLParam.
+//
+// The trailing identifier must be a single path segment: tag names, digests
+// and upload UUIDs never contain "/", so anything else is a malformed request
+// and gets a 404 rather than being silently folded into the repository name.
+func (h *Handler) dispatchRepoRoute(w http.ResponseWriter, r *http.Request) {
+	rest := strings.Trim(chi.URLParam(r, "*"), "/")
+	if rest == "" {
+		writeV2Error(w, http.StatusNotFound, "NAME_UNKNOWN", "repository name required")
+		return
+	}
+
+	if repo, ok := strings.CutSuffix(rest, "/tags/list"); ok && repo != "" {
+		if r.Method != http.MethodGet {
+			writeV2MethodNotAllowed(w, http.MethodGet)
+			return
+		}
+		injectRouteParams(r, "repo", repo)
+		h.tagsList(w, r)
+		return
+	}
+
+	// Upload session start: POST /v2/<name>/blobs/uploads/
+	if repo, ok := strings.CutSuffix(rest, "/blobs/uploads"); ok && repo != "" {
+		if r.Method != http.MethodPost {
+			writeV2MethodNotAllowed(w, http.MethodPost)
+			return
+		}
+		injectRouteParams(r, "repo", repo)
+		h.uploadStart(w, r)
+		return
+	}
+
+	if repo, ref, ok := splitRepoScoped(rest, "/manifests/"); ok {
+		injectRouteParams(r, "repo", repo, "ref", ref)
+		switch r.Method {
+		case http.MethodGet:
+			h.manifestGet(w, r)
+		case http.MethodHead:
+			h.manifestHead(w, r)
+		case http.MethodPut:
+			h.manifestPut(w, r)
+		case http.MethodDelete:
+			h.manifestDelete(w, r)
+		default:
+			writeV2MethodNotAllowed(w, http.MethodGet, http.MethodHead, http.MethodPut, http.MethodDelete)
+		}
+		return
+	}
+
+	// Checked after /manifests/ and before /blobs/ so that
+	// "<repo>/blobs/uploads/<uuid>" is never read as a blob called
+	// "uploads/<uuid>" -- same ordering as Distribution's route parser.
+	if repo, uuid, ok := splitRepoScoped(rest, "/blobs/uploads/"); ok {
+		injectRouteParams(r, "repo", repo, "uuid", uuid)
+		switch r.Method {
+		case http.MethodGet:
+			h.uploadGet(w, r)
+		case http.MethodPatch:
+			h.uploadPatch(w, r)
+		case http.MethodPut:
+			h.uploadPut(w, r)
+		default:
+			writeV2MethodNotAllowed(w, http.MethodGet, http.MethodPatch, http.MethodPut)
+		}
+		return
+	}
+
+	if repo, digest, ok := splitRepoScoped(rest, "/blobs/"); ok {
+		injectRouteParams(r, "repo", repo, "digest", digest)
+		switch r.Method {
+		case http.MethodGet:
+			h.blobGet(w, r)
+		case http.MethodHead:
+			h.blobHead(w, r)
+		default:
+			writeV2MethodNotAllowed(w, http.MethodGet, http.MethodHead)
+		}
+		return
+	}
+
+	writeV2Error(w, http.StatusNotFound, "NAME_UNKNOWN", "unsupported registry path")
+}
+
+// splitRepoScoped splits "<repo><marker><tail>" at the LAST occurrence of
+// marker. Both halves must be non-empty and the tail must be a single segment,
+// which is what makes "a/manifests/b/manifests/c" resolve to repo
+// "a/manifests/b" with ref "c" instead of repo "a".
+func splitRepoScoped(rest, marker string) (repo, tail string, ok bool) {
+	i := strings.LastIndex(rest, marker)
+	if i <= 0 {
+		return "", "", false
+	}
+	repo, tail = rest[:i], rest[i+len(marker):]
+	if repo == "" || tail == "" || strings.Contains(tail, "/") {
+		return "", "", false
+	}
+	return repo, tail, true
+}
+
+// injectRouteParams pushes path params into chi's route context.
+//
+// chi.URLParam scans the params backwards and returns the last match, so what
+// we add here wins over the mount point's own (blanked) "*" param.
+func injectRouteParams(r *http.Request, kv ...string) {
+	rctx := chi.RouteContext(r.Context())
+	if rctx == nil {
+		return
+	}
+	for i := 0; i+1 < len(kv); i += 2 {
+		rctx.URLParams.Add(kv[i], kv[i+1])
+	}
+}
+
+// writeV2MethodNotAllowed answers with a V2 error document and the Allow
+// header. The wildcard route matches every method, so chi's own 405 handler
+// never fires for repository paths -- we do it here.
+func writeV2MethodNotAllowed(w http.ResponseWriter, allow ...string) {
+	w.Header().Set("Allow", strings.Join(allow, ", "))
+	writeV2Error(w, http.StatusMethodNotAllowed, "UNSUPPORTED", "method not allowed")
 }

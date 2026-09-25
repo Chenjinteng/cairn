@@ -6,6 +6,48 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.0] - 2026-09-25
+
+### 新增
+
+- **cairn 默认管理自己**：`REGISTRY_URL` 不再是必填 env；空值时 pull 任务回退到 Docker Hub (`pull.DefaultUpstream`)。每个 pull 任务在 UI 上独立指定自己的源（URL / inline auth / inline proxy），不再依赖一个"被管理的远端 registry"。
+- **`REGISTRY_STORAGE_DIR` env**：新增。blob / manifest / tag 的物理路径，默认 `/app/registry`。`docker-compose.yml` 用独立命名卷 `cairn-registry` 挂载此处，与应用数据 (`cairn-data:/app/data`) 物理隔离 —— 备份 / 重置可以分别处理。
+- **删除操作回归 cairn 页面**：
+  - `DELETE /api/repositories/{repo}` —— 删除整个仓库（所有 tag + manifest + 受影响 blob），由 `REGISTRY_ALLOW_DELETE` 门控。
+  - `DELETE /api/repositories/{repo}/manifests/{digest}` —— 按 digest 删除 manifest，响应里带 `affectedTags`（被同时清理的 tag 列表）。
+  - `POST /api/gc` —— 触发一次存储 GC 扫描，返回 `{removedBlobs, freedBytes}`。
+- **`storage.GC` 实现**：文件系统层 GC 真正落地 —— 扫描 `uploads/` 目录中超 24h 的孤立上传 session 并清理；pass2 不再被重复计入。
+- **`storage.TagsForDigest` / `DeleteManifest([]string,error)`**：本地 storage 接口新增 `TagsForDigest`；`DeleteManifest` 签名升级为返回被解引用的 tag 列表，让 "按 digest 删除" 端点能告诉前端影响了哪些 tag。
+- **`pull.NewJob` 接受 inline 凭据 + inline proxy 字符串**：`CreatePullJobReq` 接收 `sourceUrl` / `sourceRef` / `sourceProxy` / `sourceProxyId` / `sourceCredentialId` / `sourceAuthInline`，与前端 `PullJobInput` 形状 1:1 对齐。
+- **`registry.Config.Proxy` string 字段**：远端 registry client 支持单层 HTTP 代理（之前在 server 层组合，现在下沉到 client）。
+- **`/v2/<repo>/blobs/<digest>` 多段路径通配**：registryd 路由用 `/*` + 手动 dispatch 替代 chi 多段 `{}` 占位，让 OCI 多段路径与标准 V2 协议 100% 对齐。
+- **`parseDays` 7-day bug 修复**（本就在 HEAD 已修，验证保留）：不再把 `?days=7` 解析成 7 小时。
+
+### 变更
+
+- **`Handlers.Registry` / `ExtraHandlers.Registry` 字段删除**：v0.5 不再有"远端 registry client"这个抽象；`Orchestrator.ExternalRegistry` 字段随之消失。
+- **`server.go` 简化**：移除整个 externalRegistry 构造块（约 30 行）；executor 现在无条件创建（不再 `if externalRegistry != nil` 门控）；`DefaultSourceURL = REGISTRY_URL` 直接注入 Orchestrator。
+- **`registryURL(r)` 翻转**：请求 Host 优先（含 `X-Forwarded-Proto` / `X-Forwarded-Host` 覆盖），`REGISTRY_URL` 仅作回退 —— 体现"cairn 默认就是自己"的语义。
+- **`Inventory` / `Refresh` / `DeleteTag` 等：UI 仍走旧契约（`refreshAt` / `targetRepo` / `targetTag` / `error`），UI 大改放在 v0.5.x**；当前版本 **不破坏** UI 字段，避免 158 重新部署后页面立刻白屏。
+- **frontend dist 不需本地 pnpm 重建**：Dockerfile 的 `web-builder` stage 内构建，前端变更不阻塞 Go 二进制。
+
+### 修复
+
+- **存储路径双计**：`storage.Stats` 不再把 `<algo>/<2hex>/<hex>/data` 与 `<algo>/<2hex>/<hex>` 重复计入体积。
+- **`Repositories` 不递归 + 不剪枝**：v0.4 列表里会出现已经删除的空目录，现在正确剪枝。
+- **`DeleteManifest` 不清 tag**：删除 manifest 时同步清理指向该 digest 的 tag 文件，避免 `tags/list` 列出 404 的悬空 tag。
+
+### 文档
+
+- **CHANGELOG.md**：本节。
+- **docker-compose.yml / .env.example**：精简到只剩运行需要的 env（`REGISTRY_NAME` / `REGISTRY_CREDENTIAL_KEY` / 可选 `REGISTRY_URL` / 可选 `REGISTRY_NOTIFY_TOKEN` / 新增 `REGISTRY_STORAGE_DIR`）；其他 env 全部保留默认值（契约不变）。
+- **README.md**：状态标题改为"cairn 默认管理自己，部署只需挂载存储卷"；部署小节说明 `REGISTRY_CREDENTIAL_KEY` 是唯一必填；字段对照表新增 `REGISTRY_STORAGE_DIR`。
+
+### 已知问题（v0.5.x 跟进，不影响主流程）
+
+- 158 上 `job-1790328145899764915-1` 仍处卡死态，需先 cancel。
+- webhook 测试未配（按需）。
+
 ## [0.4.0] - 2026-09-25
 
 前后端在本版本正式合体：React 前端（`web/`）构建后经 `//go:embed` 嵌入二进制（`-tags webui`），`/` 直接服务 UI、深路由 fallback index.html，部署只发一个文件；`/api/*` 契约全面对齐前端 `types.ts` / `api.ts`；修复 HEALTHCHECK 永远 unhealthy（`-healthz` 探针从未实现）；DB / 凭据库 / 代理库启动失败降级为软错误，不再 Fatal。

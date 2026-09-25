@@ -96,6 +96,26 @@ export interface DeleteTagPayload {
   repository: RegistryRepository;
 }
 
+// v0.5.0: 删除整个仓库的结果（不可逆；UI 要二次确认）。
+export interface DeleteRepositoryPayload {
+  repo: string;
+  deleted: true;
+}
+
+// v0.5.0: 按 digest 删除 manifest 的结果。
+export interface DeleteManifestPayload {
+  repo: string;
+  digest: string;
+  affectedTags: string[];
+  deleted: true;
+}
+
+// v0.5.0: 存储 GC 一次扫描的回收量。
+export interface GCResult {
+  removedBlobs: number;
+  freedBytes: number;
+}
+
 export type PullJobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 
 export type PullPhaseStatus = 'pending' | 'running' | 'success' | 'failed' | 'skipped';

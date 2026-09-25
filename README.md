@@ -20,7 +20,7 @@
 3. **库式后端**：HTTP handler 通过 `cmd/server` 装配，业务逻辑在 `internal/` 下，方便后续挂到别人的服务里
 4. **可观测性**：自带 `/healthz` `/readyz`
 
-## 当前状态：v0.4.0（2026-09-25）—— **cairn 现在是 registry 本身，且自带 Web UI**
+## 当前状态：v0.5.0（2026-09-25）—— **cairn 默认管理自己，部署只需挂载存储卷**
 
 ✅ 已实现（v0.1 – v0.4）：
 
@@ -56,7 +56,7 @@
 ⏳ 后续 TODO：
 
 - 鉴权（basic / Bearer token）—— 当前 `/v2/*` 匿名，靠 reverse proxy 守住
-- Garbage collection（孤儿 blob 不会自动清）
+
 - 多架构 index 拉取（registry-manager 也跳过，cairn 沿用）
 - v0.2 / v0.3 单元测试（v0.3 已有集成测试覆盖）
 
@@ -72,7 +72,7 @@
 4. `README.md` 里所有 `docker build/tag/push` 示例
 5. `CHANGELOG.md` 新增一节
 
-当前版本：`0.4.0`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
+当前版本：`0.5.0`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
 
 ## 项目结构
 
@@ -166,11 +166,12 @@ docker compose build --no-cache
 ## 部署
 
 ```bash
-cp .env.example .env       # 填好 REGISTRY_URL + REGISTRY_CREDENTIAL_KEY
+cp .env.example .env       # 必填: REGISTRY_CREDENTIAL_KEY(随机 32 字节)
                            # 受限网络:把 GOPROXY 改成 https://goproxy.cn,direct
                            # 内网代理:把 BUILD_HTTP_PROXY/HTTPS_PROXY 设成 http://proxy.example.com:7890
                            # 前端依赖镜像:NPM_REGISTRY=https://registry.npmmirror.com(受限网络)
                            # 访问端口:改 HOST_PORT(示例 80 = http://<宿主机>:80;不设回退 8787)
+                           # 自定义 registry 内容路径:改 REGISTRY_STORAGE_DIR
 docker compose up -d --build
 ```
 
@@ -189,7 +190,8 @@ docker compose up -d --build
 | `REGISTRY_ALLOW_DELETE/PULL` | ✅ | 能力开关 |
 | `REGISTRY_NOTIFY_TOKEN` | ✅（v0.3） | webhook 共享密钥 |
 | `REGISTRY_CREDENTIAL_KEY` | ✅（v0.2） | 凭据库加密密钥 |
-| `REGISTRY_CREDENTIALS_DIR` | ✅ | 数据目录 |
+| `REGISTRY_CREDENTIALS_DIR` | ✅ | 应用数据目录（凭据 / SQLite） |
+| `REGISTRY_STORAGE_DIR` | ✅（v0.5） | registry 内容目录（blobs / manifests） |
 | `REGISTRY_PROXY` | ✅ | 访问本 registry 的 HTTP 代理 |
 
 ---

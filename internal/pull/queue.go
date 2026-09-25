@@ -59,6 +59,15 @@ type JobView struct {
 	BlobsDone  int       `json:"blobsDone"`
 	BlobsTotal int       `json:"blobsTotal"`
 	CreatedAt  time.Time `json:"createdAt"`
+
+	// Source overrides captured at submit time (v0.5): the executor resolves
+	// the upstream in this order: SourceURL > credential URL > REGISTRY_URL
+	// default > docker.io. Secrets are never serialized.
+	SourceURL   string `json:"sourceUrl,omitempty"`
+	SourceUser  string `json:"sourceUser,omitempty"`
+	SourcePass  string `json:"-"`
+	ProxyURL    string `json:"-"`
+	FinalDigest string `json:"finalDigest,omitempty"`
 }
 
 // Job is one pull task. The mutex/cancelFn are private; handlers receive
@@ -105,7 +114,7 @@ type Executor struct {
 	jobs      map[string]*Job // id → Job (full history within queue size)
 	order     []string        // FIFO insertion order (capped at queueSize)
 	queueSize int
-	runCh     chan struct{}   // signals "there's a queued job to run"
+	runCh     chan struct{} // signals "there's a queued job to run"
 
 	runJob func(ctx context.Context, j *Job) error // injected by orchestrator
 }
@@ -124,16 +133,34 @@ func NewExecutor(queueSize int, runJob func(ctx context.Context, j *Job) error) 
 	}
 }
 
+// NewJob is the submit-time description of a pull job. SourceURL/SourceUser/
+// SourcePass/ProxyURL are optional overrides resolved by the executor.
+type NewJob struct {
+	SourceRef    string
+	DestRepo     string
+	DestTag      string
+	CredentialID string
+	ProxyID      string
+	SourceURL    string
+	SourceUser   string
+	SourcePass   string
+	ProxyURL     string
+}
+
 // Submit creates a new Job in state=queued and returns its view.
-func (e *Executor) Submit(sourceRef, destRepo, destTag, credentialID, proxyID string) JobView {
+func (e *Executor) Submit(nj NewJob) JobView {
 	j := &Job{
 		view: JobView{
 			ID:         newJobID(),
-			SourceRef:  sourceRef,
-			DestRepo:   destRepo,
-			DestTag:    destTag,
-			Credential: credentialID,
-			Proxy:      proxyID,
+			SourceRef:  nj.SourceRef,
+			DestRepo:   nj.DestRepo,
+			DestTag:    nj.DestTag,
+			Credential: nj.CredentialID,
+			Proxy:      nj.ProxyID,
+			SourceURL:  nj.SourceURL,
+			SourceUser: nj.SourceUser,
+			SourcePass: nj.SourcePass,
+			ProxyURL:   nj.ProxyURL,
 			State:      StateQueued,
 			CreatedAt:  time.Now().UTC(),
 		},

@@ -64,6 +64,24 @@ export const deleteTag = (repository: string, tag: string) =>
     { method: 'DELETE' }
   );
 
+// v0.5.0: 删除整个仓库（不可逆；UI 必须二次确认）。
+export const deleteRepository = (repo: string) =>
+  request<DeleteRepositoryPayload>(
+    `/api/repositories/${encodeURIComponent(repo)}`,
+    { method: 'DELETE' }
+  );
+
+// v0.5.0: 按 digest 删除 manifest，返回受影响 tag 列表。
+export const deleteManifestByDigest = (repo: string, digest: string) =>
+  request<DeleteManifestPayload>(
+    `/api/repositories/${encodeURIComponent(repo)}/manifests/${encodeURIComponent(digest)}`,
+    { method: 'DELETE' }
+  );
+
+// v0.5.0: 触发一次存储 GC 扫描，返回本次回收的 blob 数与字节数。
+export const runGC = () =>
+  request<GCResult>('/api/gc', { method: 'POST' });
+
 export const createPullJob = (input: PullJobInput) =>
   request<PullJob>('/api/pull/jobs', {
     method: 'POST',
