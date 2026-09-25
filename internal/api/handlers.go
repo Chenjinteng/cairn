@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -85,17 +86,42 @@ type AppConfig struct {
 	MutableSettings MutableSettings `json:"mutable"`
 }
 
-// MutableSettings is the v0.5.1 editable subset of AppConfig. Anything
+// src returns "db" if Mutable has a saved override for key, "env"
+// otherwise. The settings page renders this as a tag next to each
+// editable row so operators can tell at a glance whether the value
+// they're looking at is a runtime override or the bootstrap default.
+func src(m *config.Mutable, key string) string {
+	if m == nil {
+		return "env"
+	}
+	if m.Has(key) {
+		return "db"
+	}
+	return "env"
+}
+
+// MutableSettings is the v0.5.2 editable subset of AppConfig. Anything
 // here can be changed from the settings page without restarting the
-// service; env remains the bootstrap default on first boot.
+// service; env remains the bootstrap default on first boot. Each field
+// is paired with a "source" label ("env"/"db") so the UI can show
+// whether the displayed value is a live override or the bootstrap.
 type MutableSettings struct {
-	// RegistryURL is the default upstream for pulls that don't pin one
-	// themselves (matches Config.RegistryURL semantics). Empty == Docker
-	// Hub (pull.DefaultUpstream).
-	RegistryURL string `json:"registryUrl"`
-	// RegistryURLSource is "db" if the value was last edited on the
-	// settings page, "env" if it's still the bootstrap default.
-	RegistryURLSource string `json:"registryUrlSource"`
+	RegistryURL           string `json:"registryUrl"`
+	RegistryURLSource     string `json:"registryUrlSource"`
+	RegistryProxy         string `json:"registryProxy,omitempty"`
+	RegistryProxySource   string `json:"registryProxySource"`
+	RegistryName          string `json:"registryName"`
+	RegistryNameSource    string `json:"registryNameSource"`
+	CacheTTLSeconds       int    `json:"cacheTtlSeconds"`
+	CacheTTLSecondsSource string `json:"cacheTtlSecondsSource"`
+	AllowDelete           bool   `json:"allowDelete"`
+	AllowDeleteSource     string `json:"allowDeleteSource"`
+	AllowPull             bool   `json:"allowPull"`
+	AllowPullSource       string `json:"allowPullSource"`
+	AllowRegistryEvents   bool   `json:"allowRegistryEvents"`
+	AllowRegistryEvtsSrc  string `json:"allowRegistryEventsSource"`
+	StatsRetentionDays    int    `json:"statsRetentionDays"`
+	StatsRetentionSrc     string `json:"statsRetentionDaysSource"`
 }
 
 // GetConfig returns the safe-to-expose runtime configuration.
@@ -132,15 +158,10 @@ func (h *Handlers) GetConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// v0.5.1: URL/Host/Mutable reflect whichever source wins right now
-	// (Mutable override > env). source tag is the only mutable URL field
-	// we expose today; add more here when more settings become editable.
-	mutableURL := h.Cfg.EffectiveRegistryURL()
-	mutableSrc := "env"
-	if h.Cfg.Mutable != nil {
-		mutableSrc = h.Cfg.Mutable.RegistryURLSource()
-	}
-	displayURL := mutableURL
+	// v0.5.2: URL/Host reflect whichever source wins right now (Mutable
+	// override > env). displayURL is the v0.5 "manage itself" fallback
+	// when no upstream is configured anywhere.
+	displayURL := h.Cfg.EffectiveRegistryURL()
 	if displayURL == "" {
 		displayURL = "http://" + r.Host // cairn now manages itself; no upstream set
 	}
@@ -167,17 +188,34 @@ func (h *Handlers) GetConfig(w http.ResponseWriter, r *http.Request) {
 		StatsRetentionDays:    h.Cfg.StatsRetentionDay,
 		StatsIgnoreUseragents: ignore,
 		MutableSettings: MutableSettings{
-			RegistryURL:       mutableURL,
-			RegistryURLSource: mutableSrc,
+			RegistryURL:           h.Cfg.EffectiveRegistryURL(),
+			RegistryURLSource:     src(h.Cfg.Mutable, "registry.url"),
+			RegistryProxy:         h.Cfg.EffectiveRegistryProxy(),
+			RegistryProxySource:   src(h.Cfg.Mutable, "registry.proxy"),
+			RegistryName:          h.Cfg.EffectiveRegistryName(),
+			RegistryNameSource:    src(h.Cfg.Mutable, "registry.name"),
+			CacheTTLSeconds:       h.Cfg.EffectiveCacheTTLSeconds(),
+			CacheTTLSecondsSource: src(h.Cfg.Mutable, "cache.ttl.seconds"),
+			AllowDelete:           h.Cfg.EffectiveAllowDelete(),
+			AllowDeleteSource:     src(h.Cfg.Mutable, "allow.delete"),
+			AllowPull:             h.Cfg.EffectiveAllowPull(),
+			AllowPullSource:       src(h.Cfg.Mutable, "allow.pull"),
+			AllowRegistryEvents:   h.Cfg.EffectiveAllowRegistryEvents(),
+			AllowRegistryEvtsSrc:  src(h.Cfg.Mutable, "allow.registry_events"),
+			StatsRetentionDays:    h.Cfg.EffectiveStatsRetentionDays(),
+			StatsRetentionSrc:     src(h.Cfg.Mutable, "stats.retention.days"),
 		},
 	})
 }
 
-// UpdateConfig persists editable settings (v0.5.1: only registryUrl).
-// URL: PATCH /api/config  body: {"mutable":{"registryUrl":"..."}}
+// UpdateConfig persists editable settings (v0.5.2: anything in
+// config.MutableKeys). URL: PATCH /api/config
+// body: {"mutable": {"<key>": "<value>", ...}}
 //
 // 503 if the SQLite backing store is unavailable -- without it, the new
-// value wouldn't survive a restart.
+// value would not survive a restart. 400 on any key not in MutableKeys
+// or failing type validation; accepted types are bool / int / string /
+// url (the latter must start with http:// or https://).
 func (h *Handlers) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 	if h.DB == nil {
 		reason := h.DBErr
@@ -188,35 +226,57 @@ func (h *Handlers) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Mutable struct {
-			RegistryURL *string `json:"registryUrl"`
-		} `json:"mutable"`
+		Mutable map[string]string `json:"mutable"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeError(w, r, http.StatusBadRequest, err)
 		return
 	}
-	if body.Mutable.RegistryURL != nil {
-		v := strings.TrimSpace(*body.Mutable.RegistryURL)
-		if v != "" && !strings.HasPrefix(v, "http://") && !strings.HasPrefix(v, "https://") {
+	if len(body.Mutable) == 0 {
+		writeError(w, r, http.StatusBadRequest, errors.New("mutable payload is empty"))
+		return
+	}
+	for key, rawVal := range body.Mutable {
+		if _, ok := config.MutableKeysSet[key]; !ok {
 			writeError(w, r, http.StatusBadRequest,
-				errors.New("registryUrl must start with http:// or https://, or be empty (== Docker Hub)"))
+				errors.New("unknown setting: "+key+" (allowed: "+strings.Join(config.MutableKeys, ", ")+")"))
 			return
 		}
+		val := strings.TrimSpace(rawVal)
+		switch config.MutableFieldType[key] {
+		case "url":
+			if val != "" && !strings.HasPrefix(val, "http://") && !strings.HasPrefix(val, "https://") {
+				writeError(w, r, http.StatusBadRequest,
+					errors.New(key+" must start with http:// or https://, or be empty"))
+				return
+			}
+		case "int":
+			if n, err := strconv.Atoi(val); err != nil || n <= 0 {
+				writeError(w, r, http.StatusBadRequest,
+					errors.New(key+" must be a positive integer"))
+				return
+			}
+		case "bool":
+			if val != "true" && val != "false" && val != "1" && val != "0" {
+				writeError(w, r, http.StatusBadRequest,
+					errors.New(key+" must be true/false"))
+				return
+			}
+		}
 		// Persist + apply. Empty string means "clear the override".
-		if v == "" {
-			if err := h.DB.DeleteSetting(r.Context(), "registry.url"); err != nil {
+		if val == "" {
+			if err := h.DB.DeleteSetting(r.Context(), key); err != nil {
 				writeError(w, r, http.StatusInternalServerError, err)
 				return
 			}
 		} else {
-			if err := h.DB.SetSetting(r.Context(), "registry.url", v); err != nil {
+			if err := h.DB.SetSetting(r.Context(), key, val); err != nil {
 				writeError(w, r, http.StatusInternalServerError, err)
 				return
 			}
 		}
 		if h.Cfg.Mutable != nil {
-			h.Cfg.Mutable.SetRegistryURL(v)
+			h.Cfg.Mutable.Set(key, val)
 		}
 	}
 	// Return the freshly-applied view so the UI updates without a refetch.

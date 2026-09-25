@@ -52,14 +52,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<ApiResult<T
 export const fetchConfig = () => request<AppConfig>('/api/config');
 
 /**
- * v0.5.1: persist a runtime-editable setting on the server. Currently only
- * `mutable.registryUrl` is honoured; the server-side UpdateConfig handler
- * validates + writes SQLite + reloads the in-memory Mutable pointer in
- * one step, so the new value takes effect on the next queued pull job.
+ * v0.5.2: persist runtime-editable settings. The server-side UpdateConfig
+ * accepts a map of key->stringValue pairs and validates each key against
+ * config.MutableKeys (env-secret / restart-required fields are rejected).
+ * Pass an empty string to clear an override (falls back to env).
  */
-export interface MutablePatch {
-  registryUrl?: string;
-}
+export type MutablePatch = Record<string, string | undefined>;
+
 export interface ConfigPatch {
   mutable?: MutablePatch;
 }

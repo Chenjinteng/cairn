@@ -109,13 +109,19 @@ func Build(cfg *config.Config) (*Runtime, error) {
 	// 5. Pull executor (always present in v0.5.0; per-job source is part of
 	// the request, not a server-wide setting. REGISTRY_URL merely seeds
 	// DefaultSourceURL for jobs that don't pin their own upstream).
-	// v0.5.1: hydrate runtime-editable settings from SQLite so a previously
-	// edited default upstream survives restart. Env is the bootstrap
-	// default when the row is absent.
+	// v0.5.2: hydrate every MutableKey from SQLite at startup so previous
+	// settings-page edits survive restart. Env is the bootstrap default
+	// when the row is absent.
 	if store_db != nil && cfg.Mutable != nil {
-		if v, err := store_db.GetSetting(context.Background(), "registry.url"); err == nil && v != "" {
-			cfg.Mutable.SetRegistryURL(v)
-			slog.Info("loaded runtime-mutable settings", "registry.url.source", "db")
+		n := 0
+		for _, key := range config.MutableKeys {
+			if v, err := store_db.GetSetting(context.Background(), key); err == nil && v != "" {
+				cfg.Mutable.Set(key, v)
+				n++
+			}
+		}
+		if n > 0 {
+			slog.Info("loaded runtime-mutable settings", "count", n)
 		}
 	}
 	orchestrator := &pull.Orchestrator{

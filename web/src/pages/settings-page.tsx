@@ -1,5 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, App, Button, Descriptions, Empty, Input, Space, Table, Tag, Tooltip } from 'antd';
+import {
+  Alert,
+  App,
+  Button,
+  Descriptions,
+  Empty,
+  Form,
+  Input,
+  InputNumber,
+  Space,
+  Switch,
+  Table,
+  Tag,
+  Tooltip,
+} from 'antd';
 import { ApiOutlined, DeleteOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 
@@ -23,6 +37,17 @@ interface Props {
   onInventoryChange: (inventory: Inventory) => void;
 }
 
+/** v0.5.2: small "env / db" tag reused on every editable row. */
+function SourceTag({ source }: { source?: 'env' | 'db' }) {
+  if (source === 'db') return <Tag color="purple">界面设置（已覆盖）</Tag>;
+  return <Tag>环境变量</Tag>;
+}
+
+/** v0.5.2: inline style so the Form labels can render the SourceTag inline. */
+function SourceTagStyles() {
+  return <style>{`.ant-form-item-label label { display: inline-flex; align-items: center; gap: 6px; }`}</style>;
+}
+
 export default function SettingsPage({ config, onConfigChange, inventory, onInventoryChange }: Props) {
   const { message, modal } = App.useApp();
   const [probing, setProbing] = useState(false);
@@ -37,6 +62,17 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
   // 写 SQLite + 热替换 cfg.Mutable，新值对下一个入队的 pull job 立即生效。
   const [registryUrlDraft, setRegistryUrlDraft] = useState<string>('');
   const [savingRegistryUrl, setSavingRegistryUrl] = useState(false);
+
+  // v0.5.2: drafts for every other editable field. Server-side keys mirror
+  // config.MutableKeys so the PATCH payload is just {mutable: {key: val}}.
+  const [registryProxyDraft, setRegistryProxyDraft] = useState<string>('');
+  const [registryNameDraft, setRegistryNameDraft] = useState<string>('');
+  const [cacheTtlDraft, setCacheTtlDraft] = useState<number>(60);
+  const [allowDeleteDraft, setAllowDeleteDraft] = useState<boolean>(true);
+  const [allowPullDraft, setAllowPullDraft] = useState<boolean>(true);
+  const [allowRegistryEventsDraft, setAllowRegistryEventsDraft] = useState<boolean>(true);
+  const [statsRetentionDraft, setStatsRetentionDraft] = useState<number>(365);
+  const [savingBulk, setSavingBulk] = useState(false);
 
   const handleProbe = async () => {
     setProbing(true);
@@ -72,7 +108,16 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
 
   // 规则与预览素材各取一次。热度不可用时服务端会回空结构，不用单独降级。
   useEffect(() => {
-    if (config) setRegistryUrlDraft(config.mutable.registryUrl);
+    if (!config) return;
+    const m = config.mutable;
+    setRegistryUrlDraft(m.registryUrl);
+    setRegistryProxyDraft(m.registryProxy ?? '');
+    setRegistryNameDraft(m.registryName ?? '');
+    setCacheTtlDraft(m.cacheTtlSeconds ?? 60);
+    setAllowDeleteDraft(m.allowDelete ?? false);
+    setAllowPullDraft(m.allowPull ?? false);
+    setAllowRegistryEventsDraft(m.allowRegistryEvents ?? false);
+    setStatsRetentionDraft(m.statsRetentionDays ?? 365);
   }, [config]);
 
   const handleSaveRegistryUrl = async () => {
@@ -95,6 +140,59 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
       message.error(`保存失败：${(e as Error).message ?? e}`);
     } finally {
       setSavingRegistryUrl(false);
+    }
+  };
+
+  // v0.5.2: save all non-URL settings in one PATCH. Only sends keys whose
+  // draft differs from the current effective value, so re-clicking save
+  // without changes is a no-op (saves a round-trip + db write).
+  const handleSaveBulk = async () => {
+    if (!config) return;
+    const m = config.mutable;
+    const patch: Record<string, string> = {};
+    const trimmedProxy = registryProxyDraft.trim();
+    if (trimmedProxy !== (m.registryProxy ?? '')) {
+      if (trimmedProxy !== '' && !/^https?:\/\//.test(trimmedProxy)) {
+        message.error('HTTP 代理地址必须以 http:// 或 https:// 开头');
+        return;
+      }
+      patch['registry.proxy'] = trimmedProxy;
+    }
+    if (registryNameDraft.trim() !== (m.registryName ?? '')) {
+      patch['registry.name'] = registryNameDraft.trim();
+    }
+    if (cacheTtlDraft !== (m.cacheTtlSeconds ?? 60)) {
+      patch['cache.ttl.seconds'] = String(cacheTtlDraft);
+    }
+    if (allowDeleteDraft !== (m.allowDelete ?? false)) {
+      patch['allow.delete'] = allowDeleteDraft ? 'true' : 'false';
+    }
+    if (allowPullDraft !== (m.allowPull ?? false)) {
+      patch['allow.pull'] = allowPullDraft ? 'true' : 'false';
+    }
+    if (allowRegistryEventsDraft !== (m.allowRegistryEvents ?? false)) {
+      patch['allow.registry_events'] = allowRegistryEventsDraft ? 'true' : 'false';
+    }
+    if (statsRetentionDraft !== (m.statsRetentionDays ?? 365)) {
+      patch['stats.retention.days'] = String(statsRetentionDraft);
+    }
+    if (Object.keys(patch).length === 0) {
+      message.info('没有变更');
+      return;
+    }
+    setSavingBulk(true);
+    try {
+      const r = await updateConfig({ mutable: patch });
+      if (r.success && r.data) {
+        onConfigChange(r.data);
+        message.success(`已保存 ${Object.keys(patch).length} 项设置`);
+      } else {
+        message.error(r.message ?? '保存失败');
+      }
+    } catch (e) {
+      message.error(`保存失败：${(e as Error).message ?? e}`);
+    } finally {
+      setSavingBulk(false);
     }
   };
 
@@ -239,13 +337,20 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
       ) : null}
 
       <div className="panel" style={{ padding: 16 }}>
-        <Descriptions column={1} size="small" bordered>
-          <Descriptions.Item label="名称">{config?.name ?? '--'}</Descriptions.Item>
-          <Descriptions.Item label="默认上游地址">
+        <Form layout="vertical" size="middle" colon={false}>
+          <Form.Item
+            label={
+              <span>
+                默认上游地址{' '}
+                <SourceTag source={config?.mutable.registryUrlSource} />
+              </span>
+            }
+            extra="留空则使用 Docker Hub（pull.DefaultUpstream）。变更对下一个入队的拉取任务立即生效。"
+          >
             <Space.Compact style={{ width: '100%', maxWidth: 560 }}>
               <Input
                 className="mono"
-                placeholder="留空则使用 Docker Hub（pull.DefaultUpstream）"
+                placeholder="http://my-mirror.example.com:5000"
                 value={registryUrlDraft}
                 onChange={(e) => setRegistryUrlDraft(e.target.value)}
                 disabled={savingRegistryUrl}
@@ -255,59 +360,114 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
                 type="primary"
                 loading={savingRegistryUrl}
                 onClick={() => void handleSaveRegistryUrl()}
-                disabled={
-                  !config ||
-                  (registryUrlDraft.trim() === (config.mutable.registryUrl ?? ''))
-                }
+                disabled={!config || registryUrlDraft.trim() === (config.mutable.registryUrl ?? '')}
               >
                 保存
               </Button>
             </Space.Compact>
-            <div style={{ marginTop: 6, color: 'var(--color-text-3)', fontSize: 12 }}>
-              当前生效：
-              {config?.mutable.registryUrlSource === 'db' ? (
-                <Tag color="purple" style={{ marginInlineStart: 6 }}>界面设置（已覆盖）</Tag>
-              ) : (
-                <Tag style={{ marginInlineStart: 6 }}>环境变量</Tag>
-              )}
-              <span className="mono" style={{ marginInlineStart: 8 }}>
-                {config?.mutable.registryUrl || '(空 → Docker Hub)'}
-              </span>
-              <span style={{ marginInlineStart: 12 }}>
-                变更对下一个入队的拉取任务立即生效，不需要重启服务
-              </span>
-            </div>
-          </Descriptions.Item>
-          <Descriptions.Item label="镜像引用前缀">
-            <span className="mono">{config?.host ?? '--'}</span>
-            <span style={{ marginLeft: 8, color: 'var(--color-text-3)' }}>
-              例：{config?.host ?? '<host>'}/library/nginx:1.25
+          </Form.Item>
+
+          <Form.Item
+            label={<span>HTTP 代理 <SourceTag source={config?.mutable.registryProxySource} /></span>}
+            extra="访问外部 registry 时走的上游 HTTP 代理。留空 = 直连。"
+          >
+            <Input
+              className="mono"
+              placeholder="http://proxy.example.com:8080"
+              value={registryProxyDraft}
+              onChange={(e) => setRegistryProxyDraft(e.target.value)}
+              allowClear
+            />
+          </Form.Item>
+
+          <Form.Item
+            label={<span>展示名称 <SourceTag source={config?.mutable.registryNameSource} /></span>}
+            extra="顶部 / 设置页显示名"
+          >
+            <Input
+              value={registryNameDraft}
+              onChange={(e) => setRegistryNameDraft(e.target.value)}
+              placeholder="内网离线镜像源"
+            />
+          </Form.Item>
+
+          <Form.Item
+            label={<span>清单缓存（秒） <SourceTag source={config?.mutable.cacheTtlSecondsSource} /></span>}
+            extra="清单拉取后在内存里保留多长时间"
+          >
+            <InputNumber
+              min={1}
+              max={86400}
+              value={cacheTtlDraft}
+              onChange={(v) => setCacheTtlDraft(v ?? 60)}
+              style={{ width: 180 }}
+            />
+          </Form.Item>
+
+          <Form.Item
+            label={<span>允许删除 <SourceTag source={config?.mutable.allowDeleteSource} /></span>}
+            extra="关闭后所有删除端点（仓库 / manifest-by-digest / GC）返回 403"
+          >
+            <Switch
+              checked={allowDeleteDraft}
+              onChange={setAllowDeleteDraft}
+              checkedChildren="启用"
+              unCheckedChildren="只读"
+            />
+          </Form.Item>
+
+          <Form.Item
+            label={<span>允许拉取 <SourceTag source={config?.mutable.allowPullSource} /></span>}
+            extra="关闭后 /api/pull/* 写入端点拒绝"
+          >
+            <Switch
+              checked={allowPullDraft}
+              onChange={setAllowPullDraft}
+              checkedChildren="启用"
+              unCheckedChildren="禁用"
+            />
+          </Form.Item>
+
+          <Form.Item
+            label={<span>接收 registry events <SourceTag source={config?.mutable.allowRegistryEventsSource} /></span>}
+            extra="关闭后 /api/events 直接 403；webhook 仍然配置但不会生效"
+          >
+            <Switch
+              checked={allowRegistryEventsDraft}
+              onChange={setAllowRegistryEventsDraft}
+              checkedChildren="启用"
+              unCheckedChildren="禁用"
+            />
+          </Form.Item>
+
+          <Form.Item
+            label={<span>热度保留天数 <SourceTag source={config?.mutable.statsRetentionDaysSource} /></span>}
+            extra="超过的天数会被 /api/stats/heat 自动清掉"
+          >
+            <InputNumber
+              min={1}
+              max={3650}
+              value={statsRetentionDraft}
+              onChange={(v) => setStatsRetentionDraft(v ?? 365)}
+              style={{ width: 180 }}
+            />
+          </Form.Item>
+
+          <Form.Item>
+            <Button
+              type="primary"
+              loading={savingBulk}
+              onClick={() => void handleSaveBulk()}
+              disabled={!config}
+            >
+              保存全部设置
+            </Button>
+            <span style={{ marginInlineStart: 12, color: 'var(--color-text-3)', fontSize: 12 }}>
+              只提交实际发生变更的字段
             </span>
-          </Descriptions.Item>
-          <Descriptions.Item label="访问方式">
-            {config?.usingProxy ? <Tag color="gold">经 HTTP 代理</Tag> : <Tag>直连</Tag>}
-          </Descriptions.Item>
-          <Descriptions.Item label="清单缓存">
-            {config ? `${config.cacheTtlSeconds} 秒` : '--'}
-          </Descriptions.Item>
-          <Descriptions.Item label="删除能力">
-            {config?.allowDelete ? <Tag color="red">已启用</Tag> : <Tag color="green">只读模式</Tag>}
-          </Descriptions.Item>
-          <Descriptions.Item label="清单状态">
-            {inventory ? (
-              <Space size={8}>
-                <span>
-                  {inventory.repositories.length} 个仓库 / {inventory.errorCount} 项读取失败
-                </span>
-                <span style={{ color: 'var(--color-text-3)' }}>
-                  刷新于 {formatDateTime(inventory.refreshedAt)}
-                </span>
-              </Space>
-            ) : (
-              '尚未扫描'
-            )}
-          </Descriptions.Item>
-        </Descriptions>
+          </Form.Item>
+        </Form>
+        <SourceTagStyles />
       </div>
 
       <Alert

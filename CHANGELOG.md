@@ -6,6 +6,35 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.2] - 2026-09-25
+
+### 新增
+
+- **设置页全部可热改**：除 `REGISTRY_CREDENTIAL_KEY` / `PORT` / `HOST_PORT` / `REGISTRY_CREDENTIALS_DIR` / `REGISTRY_STORAGE_DIR` 这几个"改动后必须重启"的字段外，所有其他 `REGISTRY_*` env 都可以在设置页直接编辑，写到 SQLite，热替换 `cfg.Mutable`，无需重启。
+- **新增可改字段**：`registry.proxy` / `registry.name` / `cache.ttl.seconds` / `allow.delete` / `allow.pull` / `allow.registry_events` / `stats.retention.days`（加上已有的 `registry.url`，共 8 个）。
+- **`config.MutableKeys` 白名单**：服务端只接受这 8 个 key 的 PATCH；其它字段（包括 secret / 路径）一律 400 拒绝。
+- **通用 `PATCH /api/config`**：body 改为 `{"mutable": {"<key>": "<value>"}}`，一次可改多个字段，按 key 验证类型（`bool` / `int` / `url` / `string`）。
+- **UI 重构**：
+  - Descriptions 描述式只读布局 → Form 表单式可编辑布局
+  - 每个可改字段旁挂 **「界面设置 (已覆盖) / 环境变量」** SourceTag，明示当前生效值的来源
+  - "保存全部设置"按钮：diff 提交，只 PATCH 实际改动的字段（节省 db 写入）
+
+### 变更
+
+- `config.Mutable` 内部从单字段 `registryURL` 改造成 `map[string]string` 通用 key->value 存储；`Has(key)` / `Get(key)` / `Set(key, val)` 是统一接口。
+- `Config.EffectiveXxx()` 现在覆盖 8 个字段，每个都有"db 覆盖 > env 回退"语义，集中在一处。
+- `handlers.UpdateConfig` 用 `MutableKeys` 白名单 + `MutableFieldType` 类型映射做校验；不再写死 `registryUrl` 一个分支。
+
+### 测试
+
+- `go build ./...` ✅ · `go vet ./...` ✅ · `go test ./...` 全绿
+- `gofmt -l internal/` 0 个未格式化
+
+### 已知问题（v0.5.x 跟进）
+
+- 158 上 `intranet-53` 测试凭据 / webhook / 卡死 job 待清理（沿用 v0.5.1）
+- `REGISTRY_USERNAME/PASSWORD` 在 v0.5 已不再使用（cairn 自管仓库），未暴露到设置页
+
 ## [0.5.1] - 2026-09-25
 
 ### 新增
