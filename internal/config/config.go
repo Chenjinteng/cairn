@@ -46,6 +46,8 @@ var MutableKeys = []string{
 	"registry.url",          // Config.EffectiveRegistryURL
 	"registry.proxy",        // Config.EffectiveRegistryProxy
 	"registry.name",         // Config.EffectiveRegistryName
+	"registry.username",     // Config.EffectiveRegistryUsername
+	"registry.password",     // Config.EffectiveRegistryPassword (stored plaintext in SQLite; UI never echoes it back)
 	"cache.ttl.seconds",     // Config.EffectiveCacheTTLSeconds
 	"allow.delete",          // Config.EffectiveAllowDelete
 	"allow.pull",            // Config.EffectiveAllowPull
@@ -68,6 +70,8 @@ var MutableFieldType = map[string]string{
 	"registry.url":          "url",
 	"registry.proxy":        "url",
 	"registry.name":         "string",
+	"registry.username":     "string",
+	"registry.password":     "string",
 	"cache.ttl.seconds":     "int",
 	"allow.delete":          "bool",
 	"allow.pull":            "bool",
@@ -214,6 +218,33 @@ func (c *Config) EffectiveStatsRetentionDays() int {
 		}
 	}
 	return c.StatsRetentionDay
+}
+
+func (c *Config) EffectiveRegistryUsername() string {
+	if c == nil {
+		return ""
+	}
+	if v := c.Mutable.Get("registry.username"); v != "" {
+		return v
+	}
+	return c.RegistryUsername
+}
+
+func (c *Config) EffectiveRegistryPassword() string {
+	if c == nil {
+		return ""
+	}
+	if v := c.Mutable.Get("registry.password"); v != "" {
+		return v
+	}
+	return c.RegistryPassword
+}
+
+// EffectiveUsingAuth is true iff both username and password are configured
+// (either via env or via Mutable override). registryd uses this to decide
+// whether to gate /v2/* behind Basic auth.
+func (c *Config) EffectiveUsingAuth() bool {
+	return c.EffectiveRegistryUsername() != "" && c.EffectiveRegistryPassword() != ""
 }
 
 // Config is the resolved runtime configuration for cairn.

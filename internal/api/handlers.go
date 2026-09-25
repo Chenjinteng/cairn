@@ -106,12 +106,20 @@ func src(m *config.Mutable, key string) string {
 // is paired with a "source" label ("env"/"db") so the UI can show
 // whether the displayed value is a live override or the bootstrap.
 type MutableSettings struct {
-	RegistryURL           string `json:"registryUrl"`
-	RegistryURLSource     string `json:"registryUrlSource"`
-	RegistryProxy         string `json:"registryProxy,omitempty"`
-	RegistryProxySource   string `json:"registryProxySource"`
-	RegistryName          string `json:"registryName"`
-	RegistryNameSource    string `json:"registryNameSource"`
+	RegistryURL         string `json:"registryUrl"`
+	RegistryURLSource   string `json:"registryUrlSource"`
+	RegistryProxy       string `json:"registryProxy,omitempty"`
+	RegistryProxySource string `json:"registryProxySource"`
+	RegistryName        string `json:"registryName"`
+	RegistryNameSource  string `json:"registryNameSource"`
+	// RegistryUsername mirrors the Basic-auth user; the UI uses it to
+	// show whether auth is configured. The password itself is never
+	// echoed back to the client -- the UI only sends it on save.
+	RegistryUsername    string `json:"registryUsername"`
+	RegistryUsernameSrc string `json:"registryUsernameSource"`
+	// UsingAuth is true when both username + password are set (env or
+	// Mutable). Drives the basic-auth toggle indicator on the UI.
+	UsingAuth             bool   `json:"usingAuth"`
 	CacheTTLSeconds       int    `json:"cacheTtlSeconds"`
 	CacheTTLSecondsSource string `json:"cacheTtlSecondsSource"`
 	AllowDelete           bool   `json:"allowDelete"`
@@ -171,7 +179,7 @@ func (h *Handlers) GetConfig(w http.ResponseWriter, r *http.Request) {
 		URL:                   displayURL,
 		Host:                  hostOf(displayURL),
 		UsingProxy:            h.Cfg.RegistryProxy != "",
-		UsingAuth:             h.Cfg.RegistryUsername != "",
+		UsingAuth:             h.Cfg.EffectiveUsingAuth(),
 		CacheTTLSeconds:       int(h.Cfg.CacheTTL.Seconds()),
 		AllowDelete:           h.Cfg.AllowDelete,
 		AllowPull:             h.Cfg.AllowPull,
@@ -194,6 +202,9 @@ func (h *Handlers) GetConfig(w http.ResponseWriter, r *http.Request) {
 			RegistryProxySource:   src(h.Cfg.Mutable, "registry.proxy"),
 			RegistryName:          h.Cfg.EffectiveRegistryName(),
 			RegistryNameSource:    src(h.Cfg.Mutable, "registry.name"),
+			RegistryUsername:      h.Cfg.EffectiveRegistryUsername(),
+			RegistryUsernameSrc:   src(h.Cfg.Mutable, "registry.username"),
+			UsingAuth:             h.Cfg.EffectiveUsingAuth(),
 			CacheTTLSeconds:       h.Cfg.EffectiveCacheTTLSeconds(),
 			CacheTTLSecondsSource: src(h.Cfg.Mutable, "cache.ttl.seconds"),
 			AllowDelete:           h.Cfg.EffectiveAllowDelete(),

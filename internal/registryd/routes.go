@@ -35,6 +35,8 @@ package registryd
 
 import (
 	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -48,38 +50,122 @@ import (
 	"cairn/internal/storage"
 )
 
+// basicAuthCreds returns (user, pass) the registry should accept. nil means
+// auth is disabled (every /v2/* request passes through).
+type basicAuthCreds func() (user, pass string)
+
 // Handler bundles the storage and serves /v2/*. Build it via New and mount
 // the returned http.Handler at /v2/* in your router.
 type Handler struct {
-	Store storage.Storage
+	Store    storage.Storage
+	getCreds basicAuthCreds // nil == auth disabled
+	realm    string         // WWW-Authenticate realm; defaults to "cairn"
 }
 
 // New returns a chi router pre-configured with the V2 protocol routes.
 // Mount it at /v2/* — the routes are written relative to that prefix.
-func New(store storage.Storage) http.Handler {
-	h := &Handler{Store: store}
+//
+// getCreds is invoked on every request so v0.5.2+ settings-page edits
+// (registry.username / registry.password via PATCH /api/config) take
+// effect immediately without restarting the server. Pass nil to
+// disable authentication entirely (the v0.4.0 default).
+func New(store storage.Storage, getCreds basicAuthCreds) http.Handler {
+	h := &Handler{Store: store, getCreds: getCreds, realm: "cairn"}
 	r := chi.NewRouter()
 
+	// /v2/ is the protocol "ping" endpoint. The OCI spec lets it 200 even
+	// when auth is required, so we deliberately do NOT put it behind the
+	// auth middleware -- docker / skopeo rely on a 200 here to detect
+	// "this server speaks V2" before issuing authenticated requests.
 	r.Get("/", h.apiVersion)
-	r.Get("/_catalog", h.catalog)
 
-	// Repository-scoped routes all go through one wildcard dispatcher.
-	//
-	// chi's named params cannot span "/", so the obvious
-	// r.Route("/{repo}", ...) only ever matched single-segment names
-	// ("nginx") and 404'd on every real-world one ("library/nginx",
-	// "team/app/api"). dispatchRepoRoute takes the whole remaining path
-	// and splits it itself, then hands the pieces to the very same
-	// handlers through chi's route context: no handler changes.
-	r.HandleFunc("/*", h.dispatchRepoRoute)
+	// Everything else (catalog, tags/list, manifest, blob, upload) goes
+	// through requireBasicAuth when credentials are configured.
+	r.Group(func(r chi.Router) {
+		if h.getCreds != nil {
+			r.Use(h.requireBasicAuth)
+		}
+		r.Get("/_catalog", h.catalog)
+
+		// Repository-scoped routes all go through one wildcard dispatcher.
+		//
+		// chi's named params cannot span "/", so the obvious
+		// r.Route("/{repo}", ...) only ever matched single-segment names
+		// ("nginx") and 404'd on every real-world one ("library/nginx",
+		// "team/app/api"). dispatchRepoRoute takes the whole remaining
+		// path and splits it itself, then hands the pieces to the very
+		// same handlers through chi's route context: no handler changes.
+		r.HandleFunc("/*", h.dispatchRepoRoute)
+	})
 	return r
 }
 
 // --- /v2/ -------------------------------------------------------------------
 
-func (h *Handler) apiVersion(w http.ResponseWriter, _ *http.Request) {
+func (h *Handler) apiVersion(w http.ResponseWriter, r *http.Request) {
+	// OCI spec: GET /v2/ must return 200 with an empty body. We advertise
+	// our auth realm even on success so clients that probe the challenge
+	// before retrying (e.g. skopeo --creds) get a consistent answer.
+	if h.getCreds != nil {
+		w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Basic realm="%s"`, h.realm))
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write([]byte(`{}`))
+}
+
+// --- basic auth middleware --------------------------------------------------
+
+// requireBasicAuth returns 401 + WWW-Authenticate: Basic when either:
+//
+//   - the Authorization header is missing
+//   - it doesn't parse as Basic <base64(user:pass)>
+//   - the user/pass doesn't match the configured credentials
+//
+// On success it sets r.Header so handlers can audit who did what. Uses
+// subtle.ConstantTimeCompare on the password to avoid leaking length via
+// timing.
+func (h *Handler) requireBasicAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		wantUser, wantPass := h.getCreds()
+		if wantUser == "" || wantPass == "" {
+			// credentials got cleared at runtime; fall through (treat as
+			// no auth). The settings page can re-enable by editing again.
+			next.ServeHTTP(w, r)
+			return
+		}
+		const prefix = "Basic "
+		auth := r.Header.Get("Authorization")
+		if !strings.HasPrefix(auth, prefix) {
+			challenge(w, h.realm)
+			return
+		}
+		raw, err := base64.StdEncoding.DecodeString(auth[len(prefix):])
+		if err != nil {
+			challenge(w, h.realm)
+			return
+		}
+		user, pass, ok := strings.Cut(string(raw), ":")
+		if !ok {
+			challenge(w, h.realm)
+			return
+		}
+		if subtle.ConstantTimeCompare([]byte(user), []byte(wantUser)) != 1 ||
+			subtle.ConstantTimeCompare([]byte(pass), []byte(wantPass)) != 1 {
+			challenge(w, h.realm)
+			return
+		}
+		// Tag the request with the authenticated user for handler-side
+		// auditing (handlers can read r.Header.Get("X-Auth-User")).
+		r.Header.Set("X-Auth-User", user)
+		next.ServeHTTP(w, r)
+	})
+}
+
+func challenge(w http.ResponseWriter, realm string) {
+	w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Basic realm="%s"`, realm))
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusUnauthorized)
+	_, _ = w.Write([]byte(`{"errors":[{"code":"UNAUTHORIZED","message":"authentication required"}]}`))
 }
 
 // --- /v2/_catalog -----------------------------------------------------------

@@ -185,7 +185,7 @@ func Build(cfg *config.Config) (*Runtime, error) {
 	// apiMux is a *chi.Mux (http.Handler that satisfies chi.Router); mount
 	// the registryd sub-router under /v2/*.
 	chiRouter := apiMux.(chi.Router)
-	chiRouter.Mount("/v2", registryd.New(store))
+	chiRouter.Mount("/v2", registryd.New(store, func() (string, string) { return cfg.EffectiveRegistryUsername(), cfg.EffectiveRegistryPassword() }))
 	mux := apiMux.(http.Handler)
 
 	srv := &http.Server{

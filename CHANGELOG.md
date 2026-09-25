@@ -6,6 +6,38 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.3] - 2026-09-25
+
+### 新增
+
+- **Registry 自认证（docker login）**：`/v2/*` 现在支持 Basic auth；客户端 `docker login <url>` 后才能 push/pull。`GET /v2/` 总是返回 200（OCI spec ping），但带 `WWW-Authenticate: Basic realm="cairn"`，触发 docker daemon 用 basic creds 重试。
+- **设置页可热改**：`registry.username` / `registry.password` 加到 MutableKeys，UI 上是 Input + Input.Password；密码不回显（服务端从不把 password 字段写进 GET /api/config 的响应），用户输入即覆盖。
+- **`basicAuthCreds` callback** 注入到 `registryd.New(store, getCreds)`：每次请求都调 `cfg.EffectiveRegistryUsername/Password()`，所以 settings-page 改完立即生效，**不需要重启**。
+
+### 变更
+
+- `config.MutableKeys` 从 8 加到 10。
+- `Config.EffectiveUsingAuth()` 派生方法：username + password 都非空时为 true。
+- `AppConfig.MutableSettings` 加 `usingAuth` 字段（`Mutable` 不再藏 bool，由服务器算出）。
+- `UsingAuth` 字段改为读 `EffectiveUsingAuth()` 而不是 `cfg.RegistryUsername != ""`。
+- `internal/api/api_test.go`：调用 `registryd.New(store, nil)`（测试不启用 auth）。
+- 文档：`REGISTRY_USERNAME/PASSWORD` 从 v0.5.0 commit message 里的"已废弃"恢复为 v0.5.3 的"v0.5+ 是 registry 自身 Basic auth"。
+
+### 安全
+
+- 密码以**明文**写入 SQLite settings 表（`/app/data/cairn.db`）。cairn 当前数据卷保护靠 docker + 宿主机 FS 权限，不假设 SQLite 内部加密。
+- 密码比较用 `crypto/subtle.ConstantTimeCompare`，避免 timing 侧信道泄露长度。
+- 401 响应统一 `{errors:[{code:UNAUTHORIZED,message:authentication required}]}` + `WWW-Authenticate: Basic realm="cairn"`。
+
+### 测试
+
+- `go build ./...` ✅ · `go vet ./...` ✅ · `go test ./...` 全绿
+- `gofmt -l internal/` 0 个未格式化
+
+### 已知问题（v0.5.x 跟进）
+
+- 158 上 `intranet-53` 测试凭据 / webhook / 卡死 job 待清理（沿用 v0.5.1）
+- 现在密码以 plaintext 存于 SQLite；如要加密后续加 KMS / SOPS / OS keyring 适配
 ## [0.5.2] - 2026-09-25
 
 ### 新增

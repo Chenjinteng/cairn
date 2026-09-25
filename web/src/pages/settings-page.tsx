@@ -72,6 +72,11 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
   const [allowPullDraft, setAllowPullDraft] = useState<boolean>(true);
   const [allowRegistryEventsDraft, setAllowRegistryEventsDraft] = useState<boolean>(true);
   const [statsRetentionDraft, setStatsRetentionDraft] = useState<number>(365);
+  // v0.5.3: registry self-auth (Basic). Password is NEVER seeded from
+  // config -- server deliberately doesn't echo it back, so we always
+  // start blank; user typing = "set", blank on save = "clear override".
+  const [registryUsernameDraft, setRegistryUsernameDraft] = useState<string>('');
+  const [registryPasswordDraft, setRegistryPasswordDraft] = useState<string>('');
   const [savingBulk, setSavingBulk] = useState(false);
 
   const handleProbe = async () => {
@@ -118,6 +123,8 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
     setAllowPullDraft(m.allowPull ?? false);
     setAllowRegistryEventsDraft(m.allowRegistryEvents ?? false);
     setStatsRetentionDraft(m.statsRetentionDays ?? 365);
+    setRegistryUsernameDraft(m.registryUsername ?? '');
+    // Password: intentionally blank (server doesn't echo stored value).
   }, [config]);
 
   const handleSaveRegistryUrl = async () => {
@@ -175,6 +182,15 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
     }
     if (statsRetentionDraft !== (m.statsRetentionDays ?? 365)) {
       patch['stats.retention.days'] = String(statsRetentionDraft);
+    }
+    if (registryUsernameDraft.trim() !== (m.registryUsername ?? '')) {
+      patch['registry.username'] = registryUsernameDraft.trim();
+    }
+    if (registryPasswordDraft !== '') {
+      patch['registry.password'] = registryPasswordDraft;
+    } else if (m.usingAuth) {
+      // User cleared the password field while auth is on: explicit clear.
+      patch['registry.password'] = '';
     }
     if (Object.keys(patch).length === 0) {
       message.info('没有变更');
@@ -378,6 +394,30 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
               onChange={(e) => setRegistryProxyDraft(e.target.value)}
               allowClear
             />
+          </Form.Item>
+
+          <Form.Item
+            label={<span>Registry 认证 <SourceTag source={config?.mutable.usingAuth ? 'db' : 'env'} /></span>}
+            extra={
+              config?.mutable.usingAuth
+                ? '当前已开启 Basic 认证；客户端需要先 docker login 才能 push/pull。修改后立即生效，不需要重启。'
+                : '留空 = 关闭认证（任何人可访问）。配了之后客户端需要 docker login。密码不回显，提交时输入即覆盖。'
+            }
+          >
+            <Space.Compact style={{ width: '100%', maxWidth: 560 }}>
+              <Input
+                placeholder="username"
+                value={registryUsernameDraft}
+                onChange={(e) => setRegistryUsernameDraft(e.target.value)}
+                allowClear
+                style={{ width: '40%' }}
+              />
+              <Input.Password
+                placeholder="password（输入即覆盖；留空保留原值；当前已开启认证时清空输入框 = 关闭）"
+                value={registryPasswordDraft}
+                onChange={(e) => setRegistryPasswordDraft(e.target.value)}
+              />
+            </Space.Compact>
           </Form.Item>
 
           <Form.Item

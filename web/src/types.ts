@@ -91,13 +91,21 @@ export interface AppConfig {
 }
 
 /**
- * v0.5.1: editable settings. Right now only the default upstream URL --
- * more fields can be added later without a backend migration as long as
- * each new key gets a corresponding `Mutable.*` field + setter.
+ * v0.5.3: editable settings (full set). The server-side update config
+ * handler validates each key against config.MutableKeys; this type only
+ * surfaces the fields the UI actually edits. The password is stored
+ * plaintext in SQLite and is NEVER echoed back -- the UI sends it on
+ * save and the server applies it.
  */
 export interface MutableSettings {
   registryUrl: string;
   registryUrlSource: 'env' | 'db';
+  registryProxy: string;
+  registryProxySource: 'env' | 'db';
+  registryName: string;
+  registryNameSource: 'env' | 'db';
+  registryUsername: string;
+  registryUsernameSource: 'env' | 'db';
 }
 
 export interface ApiResult<T> {
