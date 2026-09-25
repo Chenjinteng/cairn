@@ -136,7 +136,7 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
     }
     setSavingRegistryUrl(true);
     try {
-      const r = await updateConfig({ mutable: { registryUrl: v } });
+      const r = await updateConfig({ mutable: { 'registry.url': v } });
       if (r.success && r.data) {
         onConfigChange(r.data);
         message.success(v === '' ? '已清除覆盖，恢复使用环境变量默认' : '已保存；新值对后续 pull 任务立即生效');
