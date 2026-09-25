@@ -6,6 +6,22 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.5] - 2026-09-25
+
+本轮主题：**修好 Docker Hub 匿名拉取**。外部源（Docker Hub 等）配了代理仍 401 的根因是匿名 token 请求误带空 Basic 凭据头。
+
+### 修复
+
+- **Docker Hub 匿名拉取 401 `incorrect username or password`（表现为 `401 unauthorized (no bearer challenge)`）**：`fetchTokenOnce` 只判断 `basicAuth != nil`，而拉取链路对匿名源恒传非 nil 的空结构体，导致匿名 token 请求带上 `Authorization: Basic Og==`（base64 的空用户名:空密码）。auth.docker.io 把空 Basic 头当错误凭据拒绝（158 实测 curl：无头 → 200 拿到 token，空头 → 401 "incorrect username or password"），外部源拉取全部失败。修复对齐 registry-manager 的 node 实现（`server/registry-client.mjs` 只在 `auth.username` 非空时拼 Basic 头）：username 为空一律不带 `Authorization` 头。影响所有匿名 Docker Hub / ghcr / quay 源的拉取。
+- **bearer token 获取失败时报错张冠李戴**：`client.go` 的 401 处理在 `terr != nil`（token 获取失败）时也报 "(no bearer challenge)"，且请求失败分支 wrap 的是恒为 nil 的 `terr`，真实原因被吞成 `request failed` 裸文案。现在 token 获取失败报 `bearer token fetch failed: <真实错误>`，挑战头缺失才报 `no bearer challenge in WWW-Authenticate`，排查不再被误导。
+- `cmd/server/main.go` 补文件尾换行（gofmt 达标，纯格式）。
+
+### 新增
+
+- `internal/registry/bearer_test.go`：3 个回归测试——匿名（空用户名）请求不得携带 `Authorization` 头（测试服务器模拟 auth.docker.io 拒绝任何 Authorization 头的行为，即本 bug 场景）、带凭据时必须携带 Basic 头、`Bearer realm="...",service="..."`（逗号后无空格，Docker Hub 实际格式）的挑战头解析。
+
+---
+
 ## [0.5.4] - 2026-09-25
 
 本轮主题：**让"设置页可改的字段"真正在运行时生效**。此前多处代码读的是启动时缓存的 env 值，而不是 SQLite 里的热改覆盖，导致设置页改了不生效。

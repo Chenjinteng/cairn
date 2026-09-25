@@ -147,8 +147,8 @@ func NewClient(cfg Config) (*Client, error) {
 			Timeout:   timeout,
 			Transport: transport,
 		},
-		user: cfg.Username,
-		pass: cfg.Password,
+		user:   cfg.Username,
+		pass:   cfg.Password,
 		bearer: b,
 	}, nil
 }
@@ -251,11 +251,16 @@ func (c *Client) doRequest(ctx context.Context, method, path, accept string, res
 					defer resp.Body.Close()
 					// Fall through to the body/status read below.
 				} else {
-					return nil, nil, fmt.Errorf("registry: bearer token: %w", terr)
+					return nil, nil, fmt.Errorf("registry: %s %s: rebuild request for bearer retry: %w", method, full.Path, rerr)
 				}
+			} else if terr != nil {
+				// The challenge parsed fine but the token endpoint failed
+				// (network, realm 401, bad JSON...). Surface the real
+				// cause -- blaming the challenge here is misleading and
+				// masked the empty-Basic-auth bug in v0.5.4.
+				return nil, nil, fmt.Errorf("registry: %s %s: 401 unauthorized (bearer token fetch failed: %v)", method, full.Path, terr)
 			} else {
-				// 401 without a usable challenge -> surface the original 401.
-				return nil, nil, fmt.Errorf("registry: %s %s: 401 unauthorized (no bearer challenge)", method, full.Path)
+				return nil, nil, fmt.Errorf("registry: %s %s: 401 unauthorized (bearer token response empty)", method, full.Path)
 			}
 		}
 	}

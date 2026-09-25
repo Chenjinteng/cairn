@@ -150,7 +150,13 @@ func (b *BearerAuth) fetchTokenOnce(ctx context.Context, ch Challenge, basicAuth
 		return "", err
 	}
 	req.Header.Set("User-Agent", UserAgent)
-	if basicAuth != nil {
+	// Only send Basic auth when a username is actually configured.
+	// auth.docker.io rejects an empty-credential header (base64(":"))
+	// with 401 "incorrect username or password" instead of ignoring it,
+	// which broke every anonymous Docker Hub pull (v0.5.5). The
+	// registry-manager node client has the same guard:
+	// `if (auth && auth.username)`.
+	if basicAuth != nil && basicAuth.Username != "" {
 		req.SetBasicAuth(basicAuth.Username, basicAuth.Password)
 	}
 
