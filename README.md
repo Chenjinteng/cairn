@@ -20,25 +20,34 @@
 3. **库式后端**：HTTP handler 通过 `cmd/server` 装配，业务逻辑在 `internal/` 下，方便后续挂到别人的服务里
 4. **可观测性**：自带 `/healthz` `/readyz`
 
-## 当前状态：v0.1（2026-09-25）
+## 当前状态：v0.2（2026-09-25）
 
-✅ 已实现：
+✅ 已实现（v0.1 + v0.2 + v0.3）：
 
 - chi 路由 + structured logging (slog)
-- V2 协议客户端（basic auth + 代理支持）
+- V2 协议客户端（basic auth + 代理 + Bearer token 流程）
 - 清单浏览：列出仓库、列出 tag、获取 manifest
 - 删除：按 digest 删除 manifest，返回受影响的 tag
-- 配置探测、强制刷新
-- 内存缓存（TTL 可配）
+- **拉取队列**：FIFO + 单并发 + cooperative cancel + ring buffer
+- **Blob 传输**：4 MiB chunked PATCH + PUT commit
+- **凭据库**：AES-256-GCM 加密（SHA-256 派生 key、原子写）
+- **代理库**：明文 JSON
+- **SQLite 热度库**（modernc.org/sqlite 纯 Go，无 CGO）
+- **webhook 接收**：HMAC-SHA256 签名、manifest 白名单、HEAD/PUT 方法白名单、User-Agent 忽略规则
+- 配置探测、强制刷新、内存 TTL 缓存
+- **前端**：从 registry-manager/web 复制（React + AntD + Vite）
+- API 响应统一包在 `{success, code, message, data}` 信封
 - 单版本号源（`internal/version/version.go`）+ AGENTS.md 开发规范 + CHANGELOG
-- Dockerfile（多阶段，scratch 基础，运行镜像 ~15MB）+ docker-compose
-- 14 个单元 / 集成测试，全绿
+- Dockerfile（多阶段，scratch 基础，运行镜像 ~20MB）+ docker-compose
+- 14 个 v0.1 测试 + v0.2/v0.3 测试尚未补（v0.1 测试仍全绿）
 
-⏳ 待办：
+⏳ 后续 TODO：
 
-- v0.2：拉取队列（FIFO + 流式 PATCH）+ 凭据库 + 代理库
-- v0.3：webhook 接收 + SQLite 热度聚合 + 忽略规则
-- 前端：copy 自 registry-manager/web，改 vite.config.ts 代理 `/api` 到 :8787
+- v0.2/v0.3 的单元 / 集成测试（v0.1 测试已覆盖浏览 + 删除）
+- 前端 dist 通过 `//go:embed` 嵌入二进制（目前前端需要单独跑 `pnpm build` + nginx 反代 / cairn 静态托管）
+- 拉取队列的多并发配置（registry-manager 也是单并发，cairn 沿用）
+- 后台 retention 清理 goroutine（手动 `DELETE /api/stats/heat` 触发）
+- 多 registry 聚合 / Helm chart / OCI artifact 浏览（明确**不做**，见 AGENTS.md）
 
 ## 版本管理
 
@@ -52,7 +61,7 @@
 4. `README.md` 里所有 `docker build/tag/push` 示例
 5. `CHANGELOG.md` 新增一节
 
-当前版本：`0.1.0`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
+当前版本：`0.2.0`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
 
 ## 项目结构
 

@@ -12,7 +12,7 @@ services:
       args:
         GO_IMAGE: ${GO_IMAGE:-golang:1.26-alpine}
 
-    image: ${IMAGE:-cairn:0.1.0}
+    image: ${IMAGE:-cairn:0.2.0}
     container_name: cairn
     restart: unless-stopped
 

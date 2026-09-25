@@ -30,9 +30,9 @@ type ErrorPayload struct {
 	Detail  string `json:"detail,omitempty"`
 }
 
-// writeError emits an ErrorBody with the given HTTP status. If the error
-// is a *registry.Error, its code + message are surfaced; otherwise the
-// generic INTERNAL_ERROR code is used.
+// writeError emits an ErrorBody wrapped in the {success:false, code, message}
+// shape the frontend expects. If the error is a *registry.Error, its code
+// + message are surfaced; otherwise the generic INTERNAL_ERROR code is used.
 func writeError(w http.ResponseWriter, r *http.Request, status int, err error) {
 	body := ErrorBody{Error: ErrorPayload{
 		Code:    codeForStatus(status),
@@ -49,9 +49,15 @@ func writeError(w http.ResponseWriter, r *http.Request, status int, err error) {
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
+	// Wrap in the ApiResult shape the frontend parses:
+	// { success: false, code, message, error: {code, message, detail} }
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"success": false,
+		"code":    body.Error.Code,
+		"message": body.Error.Message,
+		"error":   body.Error,
+	})
 
-	// Log internal failures with stack context; client-facing 4xx is just debug.
 	if status >= 500 {
 		slog.ErrorContext(r.Context(), "api error", "status", status, "code", body.Error.Code, "err", err)
 	} else {
@@ -83,9 +89,17 @@ func codeForStatus(status int) string {
 	}
 }
 
-// writeJSON is the success-path helper. It sets Content-Type and writes body.
+// writeJSON wraps body in the {success, code, message, data} envelope the
+// frontend's request<T>() helper expects. body becomes response.data; the
+// spread at top level is dropped because the frontend accesses .data, not
+// the bare fields.
 func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"success": true,
+		"code":    "OK",
+		"message": "",
+		"data":    body,
+	})
 }

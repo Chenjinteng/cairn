@@ -95,6 +95,11 @@ func (c *CachedRegistry) Invalidate() {
 func (c *CachedRegistry) Probe(ctx context.Context) error {
 	return c.inner.Probe(ctx)
 }
+
+// Inner returns the underlying Registry (unwraps the cache). Used by the
+// pull executor to access blob-upload methods that aren't part of the
+// read-mostly Registry interface.
+func (c *CachedRegistry) Inner() Registry { return c.inner }
 func (c *CachedRegistry) ListRepositories(ctx context.Context) ([]string, error) {
 	return c.inner.ListRepositories(ctx)
 }

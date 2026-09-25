@@ -39,6 +39,49 @@ type Client struct {
 	pass    string
 }
 
+// GetBaseURL returns the registry base URL as a string. Used by the pull
+// orchestrator to inspect the source URL (e.g. for Docker Hub detection).
+func (c *Client) GetBaseURL() string { return c.baseURL.String() }
+
+// HTTP returns the underlying http.Client. Used by handlers that need to
+// issue arbitrary requests through the configured transport (e.g. proxy
+// connectivity tests that hit an unrelated endpoint).
+func (c *Client) HTTP() *http.Client { return c.http }
+
+// PutRaw issues an arbitrary method+path with an explicit Content-Type and
+// raw JSON body. Used by the pull orchestrator to PUT a manifest verbatim.
+func (c *Client) PutRaw(ctx context.Context, method, path, contentType string, body []byte) (*http.Response, error) {
+	full := c.absURL(path)
+	req, err := http.NewRequestWithContext(ctx, method, full, ioReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", UserAgent)
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	if c.user != "" {
+		req.SetBasicAuth(c.user, c.pass)
+	}
+	return c.http.Do(req)
+}
+
+func ioReader(b []byte) io.Reader { return &byteSliceReader{b: b} }
+
+type byteSliceReader struct {
+	b []byte
+	i int
+}
+
+func (r *byteSliceReader) Read(p []byte) (int, error) {
+	if r.i >= len(r.b) {
+		return 0, io.EOF
+	}
+	n := copy(p, r.b[r.i:])
+	r.i += n
+	return n, nil
+}
+
 // Config is what NewClient requires. All fields except BaseURL are optional.
 type Config struct {
 	BaseURL  string        // required, must parse as URL
