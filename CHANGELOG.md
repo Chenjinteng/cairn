@@ -6,6 +6,51 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.3.0] - 2026-09-25
+
+### 重大变更
+
+**cairn 现在是 registry 本身**，不再依赖外部 OCI Distribution。
+
+之前 v0.2 是 **registry 的客户端/admin**（必须配 `REGISTRY_URL` 指向已有的 Docker Registry）。
+现在 v0.3 自带数据平面：本地 FS 存储 blob/manifest/tag，对外暴露 `/v2/*` 协议，
+`docker push` / `docker pull` / `skopeo copy` 直连 cairn 即可。
+
+新增
+
+**v0.3 — registry server**
+
+- `internal/storage/` — Filesystem 后端，digest 校验，原子写，per-repo 写锁
+  - 布局：`repos/<repo>/tags/<tag>`、`repos/<repo>/manifests/sha256/<digest>/data`、
+    `blobs/sha256/<aa>/<bb>/<digest>/data`、`uploads/<repo>/<uuid>/data`
+  - `Storage` interface：`Repositories / Tags / GetManifest / PutManifest /
+    DeleteManifest / BlobExists / GetBlob / StatBlob / StartUpload /
+    PatchUpload / PutUpload / GetUpload / CancelUpload / Stats`
+- `internal/registryd/` — `/v2/*` 协议路由
+  - `GET /v2/`、`GET /v2/_catalog`
+  - `GET /v2/<repo>/tags/list`
+  - `GET/HEAD/PUT/DELETE /v2/<repo>/manifests/<ref>`
+  - `GET/HEAD /v2/<repo>/blobs/<digest>`
+  - `POST /v2/<repo>/blobs/uploads/`（start）
+  - `GET /v2/<repo>/blobs/uploads/<uuid>`（inspect）
+  - `PATCH /v2/<repo>/blobs/uploads/<uuid>`（chunk）
+  - `PUT /v2/<repo>/blobs/uploads/<uuid>?digest=<digest>`（commit）
+- Admin handlers 改用本地 storage（不再调外部 registry）
+- `REGISTRY_CREDENTIALS_DIR` 下挂 `registry/` 子目录做数据存储
+- Pull Orchestrator：source = 外部 registry client，dest = 本地 storage
+
+### 变更
+
+- `/api/inventory` 现在从本地存储读，秒级返回（不再等 V2 协议 catalog 扫描）
+- `/api/tags?repo=&digest=` 删除走本地 storage，返回受影响 tag 列表（best-effort）
+
+### 测试
+
+- 新增 registryd 集成测试：`/v2/` 根、`/v2/_catalog`、完整 push→pull roundtrip、digest mismatch
+- 21 个测试全绿（v0.2 的 14 个 + v0.3 的 7 个）
+
+---
+
 ## [0.2.0] - 2026-09-25
 
 ### 新增

@@ -16,6 +16,7 @@ import (
 	"cairn/internal/proxies"
 	"cairn/internal/pull"
 	"cairn/internal/registry"
+	"cairn/internal/storage"
 )
 
 // ExtraHandlers bundles deps that aren't in Handlers yet (so the v0.1
@@ -28,6 +29,7 @@ type ExtraHandlers struct {
 	DB       *db.Db
 	Events   *events.Handler
 	Registry registry.Registry
+	Store    storage.Storage
 }
 
 // ConfigExtras holds the extra config fields the new handlers need.

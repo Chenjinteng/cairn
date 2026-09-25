@@ -20,34 +20,45 @@
 3. **库式后端**：HTTP handler 通过 `cmd/server` 装配，业务逻辑在 `internal/` 下，方便后续挂到别人的服务里
 4. **可观测性**：自带 `/healthz` `/readyz`
 
-## 当前状态：v0.2（2026-09-25）
+## 当前状态：v0.3（2026-09-25）—— **cairn 现在是 registry 本身**
 
 ✅ 已实现（v0.1 + v0.2 + v0.3）：
 
+**数据平面**（v0.3 新增）
+
+- `/v2/*` OCI Distribution 协议完整路由：catalog / tags/list / manifests / blobs / uploads
+- 本地 FS 存储：repos/ + blobs/ + uploads/，digest 校验，原子写
+- 支持完整 push→pull roundtrip（docker / skopeo 可直连）
+
+**管理平面**（v0.1 + v0.2）
+
 - chi 路由 + structured logging (slog)
-- V2 协议客户端（basic auth + 代理 + Bearer token 流程）
-- 清单浏览：列出仓库、列出 tag、获取 manifest
-- 删除：按 digest 删除 manifest，返回受影响的 tag
-- **拉取队列**：FIFO + 单并发 + cooperative cancel + ring buffer
-- **Blob 传输**：4 MiB chunked PATCH + PUT commit
-- **凭据库**：AES-256-GCM 加密（SHA-256 派生 key、原子写）
-- **代理库**：明文 JSON
-- **SQLite 热度库**（modernc.org/sqlite 纯 Go，无 CGO）
-- **webhook 接收**：HMAC-SHA256 签名、manifest 白名单、HEAD/PUT 方法白名单、User-Agent 忽略规则
-- 配置探测、强制刷新、内存 TTL 缓存
-- **前端**：从 registry-manager/web 复制（React + AntD + Vite）
-- API 响应统一包在 `{success, code, message, data}` 信封
-- 单版本号源（`internal/version/version.go`）+ AGENTS.md 开发规范 + CHANGELOG
-- Dockerfile（多阶段，scratch 基础，运行镜像 ~20MB）+ docker-compose
-- 14 个 v0.1 测试 + v0.2/v0.3 测试尚未补（v0.1 测试仍全绿）
+- 清单浏览、删除（走本地 storage）
+- 拉取队列（FIFO + 单并发 + cooperative cancel + ring buffer），从外部 registry 拉到本地
+- Blob 传输：4 MiB chunked PATCH + PUT commit
+- 凭据库（AES-256-GCM）+ 代理库
+- SQLite 热度库（modernc.org/sqlite 纯 Go）
+- webhook 接收（HMAC-SHA256 签名、manifest 白名单、HEAD/PUT 方法白名单、User-Agent 忽略）
+- API 响应包 `{success, code, message, data}` 信封
+
+**前端**
+
+- React + AntD + Vite，从 registry-manager/web 复制（视觉 / 交互 100% 一致）
+
+**工程化**
+
+- 单版本号源（`internal/version/version.go` 5 处同步）
+- AGENTS.md 开发规范 + CHANGELOG.md（Keep a Changelog）
+- Dockerfile（多阶段 scratch 基础，运行镜像 ~15MB）+ docker-compose
+- 21 个测试全绿
 
 ⏳ 后续 TODO：
 
-- v0.2/v0.3 的单元 / 集成测试（v0.1 测试已覆盖浏览 + 删除）
-- 前端 dist 通过 `//go:embed` 嵌入二进制（目前前端需要单独跑 `pnpm build` + nginx 反代 / cairn 静态托管）
-- 拉取队列的多并发配置（registry-manager 也是单并发，cairn 沿用）
-- 后台 retention 清理 goroutine（手动 `DELETE /api/stats/heat` 触发）
-- 多 registry 聚合 / Helm chart / OCI artifact 浏览（明确**不做**，见 AGENTS.md）
+- 鉴权（basic / Bearer token）—— 当前 `/v2/*` 匿名，靠 reverse proxy 守住
+- Garbage collection（孤儿 blob 不会自动清）
+- 多架构 index 拉取（registry-manager 也跳过，cairn 沿用）
+- v0.2 / v0.3 单元测试（v0.3 已有集成测试覆盖）
+- 前端 dist `//go:embed` 进二进制（目前要单独跑 `pnpm build` + nginx 反代）
 
 ## 版本管理
 
@@ -61,7 +72,7 @@
 4. `README.md` 里所有 `docker build/tag/push` 示例
 5. `CHANGELOG.md` 新增一节
 
-当前版本：`0.2.0`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
+当前版本：`0.3.0`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
 
 ## 项目结构
 

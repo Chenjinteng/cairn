@@ -1,7 +1,7 @@
 {
   "name": "cairn-web",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "cairn 前端（copy 自 registry-manager/web）",
   "type": "module",
   "engines": {
