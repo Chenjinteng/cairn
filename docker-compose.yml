@@ -11,8 +11,12 @@ services:
       context: .
       args:
         GO_IMAGE: ${GO_IMAGE:-golang:1.26-alpine}
+        # Go 模块代理：构建机访问 proxy.golang.org 受限/慢时,在 .env 里改成
+        #   GOPROXY=https://goproxy.cn,direct
+        #   GOPROXY=https://goproxy.io,direct
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
 
-    image: ${IMAGE:-cairn:0.3.0}
+    image: ${IMAGE:-cairn:0.3.1}
     container_name: cairn
     restart: unless-stopped
 

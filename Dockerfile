@@ -8,12 +8,22 @@
 # 基础镜像可覆盖：构建机拉不到 Docker Hub 时换成内网镜像。
 #   docker build --build-arg GO_IMAGE=proxy.example.com:10001/golang:1.26-alpine .
 
+# Go 模块代理：构建机访问 proxy.golang.org 受限/慢时改成国内镜像。
+#   docker build --build-arg GOPROXY=https://goproxy.cn,direct .
+#   docker build --build-arg GOPROXY=https://goproxy.io,direct .
+# 默认仍是 proxy.golang.org,direct(从 Go 1.21 起等价于 GOPROXY=proxy.golang.org,direct)。
 ARG GO_IMAGE=golang:1.26-alpine
+ARG GOPROXY=https://proxy.golang.org,direct
 
 # ---------------------------------------------------------------------------
 # 1) 构建二进制
 # ---------------------------------------------------------------------------
 FROM ${GO_IMAGE} AS builder
+
+# 在 builder stage 里再 ARG 一次,确保 ENV 能引用(全局 ARG 在 stage 内对 ENV 也可见,
+# 但显式声明更直观,也方便以后想关掉全局只在这一阶段覆盖)。
+ARG GOPROXY
+ENV GOPROXY=${GOPROXY}
 
 WORKDIR /src
 

@@ -20,7 +20,7 @@
 3. **库式后端**：HTTP handler 通过 `cmd/server` 装配，业务逻辑在 `internal/` 下，方便后续挂到别人的服务里
 4. **可观测性**：自带 `/healthz` `/readyz`
 
-## 当前状态：v0.3（2026-09-25）—— **cairn 现在是 registry 本身**
+## 当前状态：v0.3.1（2026-09-25）—— **cairn 现在是 registry 本身**
 
 ✅ 已实现（v0.1 + v0.2 + v0.3）：
 
@@ -72,7 +72,7 @@
 4. `README.md` 里所有 `docker build/tag/push` 示例
 5. `CHANGELOG.md` 新增一节
 
-当前版本：`0.3.0`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
+当前版本：`0.3.1`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
 
 ## 项目结构
 
@@ -120,10 +120,27 @@ go test ./...
 docker build -t cairn:dev .
 ```
 
+### 网络受限环境的构建（Go proxy）
+
+`go build` / `go mod download` 默认走 `proxy.golang.org`。在受限网络下会 timeout，两种方式覆盖：
+
+```bash
+# 1) 本地 go 命令直接覆盖(只影响当前 shell)
+GOPROXY=https://goproxy.cn,direct go mod download
+GOPROXY=https://goproxy.cn,direct go build -o cairn ./cmd/server
+
+# 2) docker build 时通过 build-arg 覆盖,影响 Dockerfile 里的 go mod download
+docker build --build-arg GOPROXY=https://goproxy.cn,direct -t cairn:dev .
+# 或:在 .env 里设 GOPROXY=https://goproxy.cn,direct 再 docker compose build --no-cache
+```
+
+常用代理：`https://goproxy.cn,direct`（国内七牛）、`https://goproxy.io,direct`（国内官方推荐）、`https://mirrors.aliyun.com/goproxy/,direct`（阿里云）。
+
 ## 部署
 
 ```bash
 cp .env.example .env       # 填好 REGISTRY_URL + REGISTRY_CREDENTIAL_KEY
+                           # 受限网络:把 GOPROXY 改成 https://goproxy.cn,direct
 docker compose up -d --build
 ```
 

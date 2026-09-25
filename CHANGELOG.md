@@ -6,6 +6,22 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.3.1] - 2026-09-25
+
+### 新增
+
+- **构建期 Go 模块代理可配置**：`Dockerfile` 新增 `ARG GOPROXY=https://proxy.golang.org,direct` + `ENV GOPROXY=${GOPROXY}`,影响 `go mod download` 阶段。
+  - `docker-compose.yml` 通过 `${GOPROXY:-https://proxy.golang.org,direct}` 透传到 build-arg
+  - `.env.example` 新增 `GOPROXY=` 配置项,默认留空走 `proxy.golang.org,direct`
+  - 受限网络下,在 `.env` 把 `GOPROXY` 改成 `https://goproxy.cn,direct` 或 `https://goproxy.io,direct` 即可,无需改代码
+
+### 文档
+
+- `README.md` 开发章节新增「网络受限环境的构建(Go proxy)」小节,列出本地 / docker build 两种覆盖方式 + 常用国内代理
+- `AGENTS.md` 保持不变(版本号规则已覆盖本次改动的小版本 +1 判定)
+
+---
+
 ## [0.3.0] - 2026-09-25
 
 ### 重大变更
