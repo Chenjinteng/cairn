@@ -67,7 +67,6 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
   // config.MutableKeys so the PATCH payload is just {mutable: {key: val}}.
   const [registryProxyDraft, setRegistryProxyDraft] = useState<string>('');
   const [registryNameDraft, setRegistryNameDraft] = useState<string>('');
-  const [cacheTtlDraft, setCacheTtlDraft] = useState<number>(60);
   const [allowDeleteDraft, setAllowDeleteDraft] = useState<boolean>(true);
   const [allowPullDraft, setAllowPullDraft] = useState<boolean>(true);
   const [allowRegistryEventsDraft, setAllowRegistryEventsDraft] = useState<boolean>(true);
@@ -118,7 +117,6 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
     setRegistryUrlDraft(m.registryUrl);
     setRegistryProxyDraft(m.registryProxy ?? '');
     setRegistryNameDraft(m.registryName ?? '');
-    setCacheTtlDraft(m.cacheTtlSeconds ?? 60);
     setAllowDeleteDraft(m.allowDelete ?? false);
     setAllowPullDraft(m.allowPull ?? false);
     setAllowRegistryEventsDraft(m.allowRegistryEvents ?? false);
@@ -167,9 +165,6 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
     }
     if (registryNameDraft.trim() !== (m.registryName ?? '')) {
       patch['registry.name'] = registryNameDraft.trim();
-    }
-    if (cacheTtlDraft !== (m.cacheTtlSeconds ?? 60)) {
-      patch['cache.ttl.seconds'] = String(cacheTtlDraft);
     }
     if (allowDeleteDraft !== (m.allowDelete ?? false)) {
       patch['allow.delete'] = allowDeleteDraft ? 'true' : 'false';
@@ -428,19 +423,6 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
               value={registryNameDraft}
               onChange={(e) => setRegistryNameDraft(e.target.value)}
               placeholder="内网离线镜像源"
-            />
-          </Form.Item>
-
-          <Form.Item
-            label={<span>清单缓存（秒） <SourceTag source={config?.mutable.cacheTtlSecondsSource} /></span>}
-            extra="清单拉取后在内存里保留多长时间"
-          >
-            <InputNumber
-              min={1}
-              max={86400}
-              value={cacheTtlDraft}
-              onChange={(v) => setCacheTtlDraft(v ?? 60)}
-              style={{ width: 180 }}
             />
           </Form.Item>
 

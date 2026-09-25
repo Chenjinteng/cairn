@@ -217,6 +217,12 @@ type Handler struct {
 	Store *db.Db
 	Token string
 
+	// enabled (v0.5.4) is an optional live predicate consulted on every
+	// request. nil means "always enabled". server.go installs
+	// cfg.EffectiveAllowRegistryEvents so flipping allow.registry_events on
+	// the settings page starts/stops ingestion without a restart.
+	enabled func() bool
+
 	mu        sync.Mutex
 	ignoreUAs []string
 	recent    []RecentEvent
@@ -302,6 +308,23 @@ func (h *Handler) SetIgnoreUAs(uas []string) {
 	h.mu.Unlock()
 }
 
+// SetEnabled installs a live on/off predicate (v0.5.4). Passing nil
+// restores "always enabled". The predicate is invoked OUTSIDE h.mu so it
+// may safely take locks of its own (config.Mutable does).
+func (h *Handler) SetEnabled(fn func() bool) {
+	h.mu.Lock()
+	h.enabled = fn
+	h.mu.Unlock()
+}
+
+// isEnabled reports whether webhook ingestion is switched on right now.
+func (h *Handler) isEnabled() bool {
+	h.mu.Lock()
+	fn := h.enabled
+	h.mu.Unlock()
+	return fn == nil || fn()
+}
+
 // currentIgnore returns a copy of the live ignore list.
 func (h *Handler) currentIgnore() []string {
 	h.mu.Lock()
@@ -315,6 +338,14 @@ func (h *Handler) currentIgnore() []string {
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		h.writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	// v0.5.4: honour allow.registry_events at request time. Before this the
+	// handler was simply not constructed when the env flag was false, so a
+	// runtime override could never switch ingestion back on (and switching
+	// it off needed a restart).
+	if !h.isEnabled() {
+		h.writeErr(w, http.StatusForbidden, "registry events are disabled (allow.registry_events=false)")
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // cap at 1 MiB

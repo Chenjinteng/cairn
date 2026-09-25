@@ -24,7 +24,7 @@ func chiURLParam(r *http.Request, key string) string {
 // Sentinel errors used by handlers. Centralized so /api/tags 403/400 messages
 // are stable and easy to grep in the frontend.
 var (
-	errDeleteDisabled = errors.New("delete is disabled (REGISTRY_ALLOW_DELETE=false)")
+	errDeleteDisabled = errors.New("delete is disabled (allow.delete=false)")
 	errMissingParam   = errors.New("missing required query parameter")
 )
 

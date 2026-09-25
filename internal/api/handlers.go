@@ -119,17 +119,15 @@ type MutableSettings struct {
 	RegistryUsernameSrc string `json:"registryUsernameSource"`
 	// UsingAuth is true when both username + password are set (env or
 	// Mutable). Drives the basic-auth toggle indicator on the UI.
-	UsingAuth             bool   `json:"usingAuth"`
-	CacheTTLSeconds       int    `json:"cacheTtlSeconds"`
-	CacheTTLSecondsSource string `json:"cacheTtlSecondsSource"`
-	AllowDelete           bool   `json:"allowDelete"`
-	AllowDeleteSource     string `json:"allowDeleteSource"`
-	AllowPull             bool   `json:"allowPull"`
-	AllowPullSource       string `json:"allowPullSource"`
-	AllowRegistryEvents   bool   `json:"allowRegistryEvents"`
-	AllowRegistryEvtsSrc  string `json:"allowRegistryEventsSource"`
-	StatsRetentionDays    int    `json:"statsRetentionDays"`
-	StatsRetentionSrc     string `json:"statsRetentionDaysSource"`
+	UsingAuth            bool   `json:"usingAuth"`
+	AllowDelete          bool   `json:"allowDelete"`
+	AllowDeleteSource    string `json:"allowDeleteSource"`
+	AllowPull            bool   `json:"allowPull"`
+	AllowPullSource      string `json:"allowPullSource"`
+	AllowRegistryEvents  bool   `json:"allowRegistryEvents"`
+	AllowRegistryEvtsSrc string `json:"allowRegistryEventsSource"`
+	StatsRetentionDays   int    `json:"statsRetentionDays"`
+	StatsRetentionSrc    string `json:"statsRetentionDaysSource"`
 }
 
 // GetConfig returns the safe-to-expose runtime configuration.
@@ -174,47 +172,51 @@ func (h *Handlers) GetConfig(w http.ResponseWriter, r *http.Request) {
 		displayURL = "http://" + r.Host // cairn now manages itself; no upstream set
 	}
 	writeJSON(w, http.StatusOK, AppConfig{
-		Name:                  h.Cfg.RegistryName,
-		Version:               version.Version,
-		URL:                   displayURL,
-		Host:                  hostOf(displayURL),
-		UsingProxy:            h.Cfg.EffectiveRegistryProxy() != "",
-		UsingAuth:             h.Cfg.EffectiveUsingAuth(),
+		// v0.5.4: every field the settings page can edit is read through
+		// Effective*() here, so the top-level view and the `mutable` block
+		// can no longer disagree and the UI reflects a saved override
+		// immediately instead of the env bootstrap value.
+		Name:       h.Cfg.EffectiveRegistryName(),
+		Version:    version.Version,
+		URL:        displayURL,
+		Host:       hostOf(displayURL),
+		UsingProxy: h.Cfg.EffectiveRegistryProxy() != "",
+		UsingAuth:  h.Cfg.EffectiveUsingAuth(),
+		// CacheTTLSeconds is env-only and display-only: nothing consumes it
+		// since v0.5.0 reads the inventory straight from local storage.
 		CacheTTLSeconds:       int(h.Cfg.CacheTTL.Seconds()),
-		AllowDelete:           h.Cfg.AllowDelete,
-		AllowPull:             h.Cfg.AllowPull,
+		AllowDelete:           h.Cfg.EffectiveAllowDelete(),
+		AllowPull:             h.Cfg.EffectiveAllowPull(),
 		PullQueueSize:         h.Cfg.PullQueueSize,
 		AllowCredentials:      h.Vault != nil,
 		AllowProxies:          h.Proxies != nil,
 		CredentialsDir:        h.Cfg.CredentialsDir,
 		CredentialError:       credErr,
-		StatsEnabled:          h.Cfg.AllowRegistryEvents && h.DB != nil,
-		AllowRegistryEvents:   h.Cfg.AllowRegistryEvents,
+		StatsEnabled:          h.Cfg.EffectiveAllowRegistryEvents() && h.DB != nil,
+		AllowRegistryEvents:   h.Cfg.EffectiveAllowRegistryEvents(),
 		StatsError:            statsErr,
 		NotifyTokenConfigured: h.Cfg.NotifyToken != "",
 		StatsSince:            statsSince,
-		StatsRetentionDays:    h.Cfg.StatsRetentionDay,
+		StatsRetentionDays:    h.Cfg.EffectiveStatsRetentionDays(),
 		StatsIgnoreUseragents: ignore,
 		MutableSettings: MutableSettings{
-			RegistryURL:           h.Cfg.EffectiveRegistryURL(),
-			RegistryURLSource:     src(h.Cfg.Mutable, "registry.url"),
-			RegistryProxy:         h.Cfg.EffectiveRegistryProxy(),
-			RegistryProxySource:   src(h.Cfg.Mutable, "registry.proxy"),
-			RegistryName:          h.Cfg.EffectiveRegistryName(),
-			RegistryNameSource:    src(h.Cfg.Mutable, "registry.name"),
-			RegistryUsername:      h.Cfg.EffectiveRegistryUsername(),
-			RegistryUsernameSrc:   src(h.Cfg.Mutable, "registry.username"),
-			UsingAuth:             h.Cfg.EffectiveUsingAuth(),
-			CacheTTLSeconds:       h.Cfg.EffectiveCacheTTLSeconds(),
-			CacheTTLSecondsSource: src(h.Cfg.Mutable, "cache.ttl.seconds"),
-			AllowDelete:           h.Cfg.EffectiveAllowDelete(),
-			AllowDeleteSource:     src(h.Cfg.Mutable, "allow.delete"),
-			AllowPull:             h.Cfg.EffectiveAllowPull(),
-			AllowPullSource:       src(h.Cfg.Mutable, "allow.pull"),
-			AllowRegistryEvents:   h.Cfg.EffectiveAllowRegistryEvents(),
-			AllowRegistryEvtsSrc:  src(h.Cfg.Mutable, "allow.registry_events"),
-			StatsRetentionDays:    h.Cfg.EffectiveStatsRetentionDays(),
-			StatsRetentionSrc:     src(h.Cfg.Mutable, "stats.retention.days"),
+			RegistryURL:          h.Cfg.EffectiveRegistryURL(),
+			RegistryURLSource:    src(h.Cfg.Mutable, "registry.url"),
+			RegistryProxy:        h.Cfg.EffectiveRegistryProxy(),
+			RegistryProxySource:  src(h.Cfg.Mutable, "registry.proxy"),
+			RegistryName:         h.Cfg.EffectiveRegistryName(),
+			RegistryNameSource:   src(h.Cfg.Mutable, "registry.name"),
+			RegistryUsername:     h.Cfg.EffectiveRegistryUsername(),
+			RegistryUsernameSrc:  src(h.Cfg.Mutable, "registry.username"),
+			UsingAuth:            h.Cfg.EffectiveUsingAuth(),
+			AllowDelete:          h.Cfg.EffectiveAllowDelete(),
+			AllowDeleteSource:    src(h.Cfg.Mutable, "allow.delete"),
+			AllowPull:            h.Cfg.EffectiveAllowPull(),
+			AllowPullSource:      src(h.Cfg.Mutable, "allow.pull"),
+			AllowRegistryEvents:  h.Cfg.EffectiveAllowRegistryEvents(),
+			AllowRegistryEvtsSrc: src(h.Cfg.Mutable, "allow.registry_events"),
+			StatsRetentionDays:   h.Cfg.EffectiveStatsRetentionDays(),
+			StatsRetentionSrc:    src(h.Cfg.Mutable, "stats.retention.days"),
 		},
 	})
 }
@@ -654,7 +656,9 @@ func sumIndexMembers(ctx context.Context, store storage.Storage, repo string, do
 //
 // URL: DELETE /api/tags?repository=<name>&tag=<tag>
 //
-// 403 if cfg.AllowDelete is false. 400 if a parameter is missing.
+// 403 if allow.delete is false -- either the env bootstrap
+// (REGISTRY_ALLOW_DELETE) or a runtime override saved from the settings
+// page. 400 if a parameter is missing.
 // 200 returns the UI's DeleteTagPayload: which tag was asked for, the
 // digest it resolved to, ALL tags that shared the digest (the blast
 // radius, computed before deletion), and the rebuilt repository view.
@@ -662,7 +666,7 @@ func sumIndexMembers(ctx context.Context, store storage.Storage, repo string, do
 // Note: deleting a manifest only removes references — registryd's storage
 // keeps the blobs until a GC pass runs (out of scope for v0.4.0).
 func (h *Handlers) DeleteTag(w http.ResponseWriter, r *http.Request) {
-	if !h.Cfg.AllowDelete {
+	if !h.Cfg.EffectiveAllowDelete() {
 		writeError(w, r, http.StatusForbidden, errDeleteDisabled)
 		return
 	}

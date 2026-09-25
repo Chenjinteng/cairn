@@ -48,18 +48,27 @@ type ExtraHandlers struct {
 	DBErr      string
 }
 
-// ConfigExtras holds the extra config fields the new handlers need.
+// ConfigExtras holds the ENV-ONLY config the extra handlers need.
 //
-// v0.5.0: RegistryURL is OPTIONAL -- it now means "default upstream for
-// pulls that don't pin their own source". Empty -> pull.DefaultUpstream
-// (Docker Hub). AllowDelete gates the destructive endpoints (repository
-// and manifest-by-digest deletion, GC).
+// v0.5.4 dropped AllowPull / AllowDelete / RegistryURL from here. They were
+// startup snapshots copied out of *config.Config, so an override saved from
+// the settings page never reached the request path: the gates kept reading
+// the env bootstrap value for the whole process lifetime. Everything
+// runtime-editable is now read through Full.Effective*() -- see
+// allowPull()/allowDelete() below.
+//
+// IgnoreUserAgents stays: the env half of the ignore list really is
+// immutable, and the panel half lives in SQLite and is merged per request
+// (envIgnore() + writeIgnoreRules()).
 type ConfigExtras struct {
-	AllowPull        bool
-	AllowDelete      bool
 	IgnoreUserAgents []string
-	RegistryURL      string
 }
+
+// allowPull / allowDelete are the runtime-effective switches (v0.5.4).
+// Full is the live *config.Config; Effective* is nil-safe and fails closed,
+// so a missing Full means "disabled" rather than "wide open".
+func (e *ExtraHandlers) allowPull() bool   { return e.Full.EffectiveAllowPull() }
+func (e *ExtraHandlers) allowDelete() bool { return e.Full.EffectiveAllowDelete() }
 
 // RegisterRoutes mounts the v0.2 + v0.3 + v0.4 endpoints on the chi router.
 //
@@ -205,9 +214,9 @@ func uiJobView(j pull.JobView) map[string]any {
 }
 
 func (e *ExtraHandlers) CreatePullJob(w http.ResponseWriter, r *http.Request) {
-	if !e.Cfg.AllowPull {
+	if !e.allowPull() {
 		writeError(w, r, http.StatusForbidden,
-			errors.New("pull is disabled (REGISTRY_ALLOW_PULL=false)"))
+			errors.New("pull is disabled (allow.pull=false)"))
 		return
 	}
 	var req CreatePullJobReq
@@ -477,9 +486,9 @@ func (e *ExtraHandlers) probeDest(ctx context.Context, repo, tag string) (map[st
 // DeleteRepository drops an entire repository (all tags + manifests). Gated
 // by AllowDelete so a single env flag can lock down destructive ops.
 func (e *ExtraHandlers) DeleteRepository(w http.ResponseWriter, r *http.Request) {
-	if !e.Cfg.AllowDelete {
+	if !e.allowDelete() {
 		writeError(w, r, http.StatusForbidden,
-			errors.New("delete is disabled (REGISTRY_ALLOW_DELETE=false)"))
+			errors.New("delete is disabled (allow.delete=false)"))
 		return
 	}
 	repo := chiURLParam(r, "repo")
@@ -501,9 +510,9 @@ func (e *ExtraHandlers) DeleteRepository(w http.ResponseWriter, r *http.Request)
 // DeleteManifestByDigest removes a manifest by digest and reports the tags
 // that previously pointed at it. Same AllowDelete gate as above.
 func (e *ExtraHandlers) DeleteManifestByDigest(w http.ResponseWriter, r *http.Request) {
-	if !e.Cfg.AllowDelete {
+	if !e.allowDelete() {
 		writeError(w, r, http.StatusForbidden,
-			errors.New("delete is disabled (REGISTRY_ALLOW_DELETE=false)"))
+			errors.New("delete is disabled (allow.delete=false)"))
 		return
 	}
 	repo := chiURLParam(r, "repo")

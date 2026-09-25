@@ -27,7 +27,11 @@ import (
 
 // Runtime bundles the long-lived dependencies.
 type Runtime struct {
-	HTTP       *http.Server
+	HTTP *http.Server
+	// Cfg (v0.5.4) is the live config. Background loops read runtime
+	// overrides through it -- stats.retention.days is re-read on every
+	// retention pass so a settings-page change applies without a restart.
+	Cfg        *config.Config
 	DB         *db.Db
 	Vault      *credentials.Vault
 	Proxies    *proxies.Store
@@ -132,7 +136,7 @@ func Build(cfg *config.Config) (*Runtime, error) {
 		DB:         store_db,
 		// v0.5.1: pull source now flows through cfg.Mutable, so changes
 		// via PATCH /api/config take effect on the next queued job.
-		Mutable:              cfg.Mutable,
+		Mutable: cfg.Mutable,
 		// v0.5.4: live cfg pointer so resolveSource can read the global
 		// HTTP proxy (registry.proxy setting). nil-safe.
 		Cfg:                  cfg,
@@ -141,8 +145,15 @@ func Build(cfg *config.Config) (*Runtime, error) {
 	executor := pull.NewExecutor(cfg.PullQueueSize, orchestrator.RunOne)
 
 	// 7. Events handler (webhook receiver for registry notifications).
+	//
+	// v0.5.4: the handler is built whenever the real prerequisites exist
+	// (SQLite + notify token). allow.registry_events is no longer a
+	// BUILD-time condition but a live predicate installed via SetEnabled,
+	// so flipping it on the settings page starts/stops ingestion without a
+	// restart. Before this, a false env flag meant the route was never
+	// mounted at all and the runtime override could not switch it back on.
 	var eventsHandler *events.Handler
-	if store_db != nil && cfg.NotifyToken != "" && cfg.AllowRegistryEvents {
+	if store_db != nil && cfg.NotifyToken != "" {
 		// effective ignore = env ∪ panel (panel rules persist in SQLite and
 		// are merged in at startup so they survive restarts).
 		ignore := cfg.StatsIgnoreUserAgents
@@ -150,6 +161,7 @@ func Build(cfg *config.Config) (*Runtime, error) {
 			ignore = events.MergeIgnore(ignore, panel)
 		}
 		eventsHandler = events.NewHandler(store_db, cfg.NotifyToken, ignore, 200)
+		eventsHandler.SetEnabled(cfg.EffectiveAllowRegistryEvents)
 	}
 
 	// 8. Admin handlers (browse/delete talk to local storage; pull uses external client).
@@ -166,11 +178,10 @@ func Build(cfg *config.Config) (*Runtime, error) {
 
 	extras := &api.ExtraHandlers{
 		Full: cfg,
+		// v0.5.4: only the genuinely env-only field is snapshotted here.
+		// The gates themselves read cfg.Effective*() per request via Full.
 		Cfg: &api.ConfigExtras{
-			AllowPull:        cfg.AllowPull,
-			AllowDelete:      cfg.AllowDelete,
 			IgnoreUserAgents: cfg.StatsIgnoreUserAgents,
-			RegistryURL:      cfg.RegistryURL,
 		},
 		Executor:   executor,
 		Vault:      vault,
@@ -202,20 +213,25 @@ func Build(cfg *config.Config) (*Runtime, error) {
 			MinVersion: tls.VersionTLS12,
 		},
 	}
+	// v0.5.4: log the values actually in force (SQLite overrides are
+	// already hydrated above), not the env bootstrap. cache_ttl is gone
+	// from this line on purpose -- it has no consumer any more.
 	slog.Info("server built",
 		"port", cfg.Port,
 		"data_dir", dataDir,
-		"cache_ttl", cfg.CacheTTL,
 		"db", store_db != nil,
-		"allow_delete", cfg.AllowDelete,
-		"allow_pull", cfg.AllowPull,
-		"default_upstream", strings.TrimRight(cfg.RegistryURL, "/"),
+		"allow_delete", cfg.EffectiveAllowDelete(),
+		"allow_pull", cfg.EffectiveAllowPull(),
+		"registry_events", cfg.EffectiveAllowRegistryEvents(),
+		"stats_retention_days", cfg.EffectiveStatsRetentionDays(),
+		"default_upstream", strings.TrimRight(cfg.EffectiveRegistryURL(), "/"),
 	)
 
 	pullCtx, pullCancel := context.WithCancel(context.Background())
 
 	return &Runtime{
 		HTTP:       srv,
+		Cfg:        cfg,
 		DB:         store_db,
 		Vault:      vault,
 		Proxies:    proxyStore,
@@ -231,6 +247,12 @@ func Build(cfg *config.Config) (*Runtime, error) {
 func (r *Runtime) Start(ctx context.Context) error {
 	if r.Executor != nil {
 		go r.Executor.Run(r.PullCtx)
+	}
+	// v0.5.4: stats.retention.days finally has a consumer. Before this,
+	// db.RetentionCleanup existed but nothing ever called it, so
+	// activity_daily grew without bound no matter what the setting said.
+	if r.DB != nil && r.Cfg != nil {
+		go r.retentionLoop(r.PullCtx)
 	}
 
 	errCh := make(chan error, 1)
@@ -248,6 +270,52 @@ func (r *Runtime) Start(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+// retentionLoop prunes activity_daily rows older than the runtime
+// stats.retention.days setting. It runs once shortly after startup (so a
+// restart applies the current value) and then every 24h. The setting is
+// re-read on each pass, so changing it on the settings page takes effect on
+// the next pass without a restart.
+//
+// The DB call gets its own short-lived context: using r.PullCtx directly
+// would turn a normal shutdown into a scary "cleanup failed" warning.
+func (r *Runtime) retentionLoop(ctx context.Context) {
+	const interval = 24 * time.Hour
+
+	timer := time.NewTimer(30 * time.Second) // first pass: let startup settle
+	defer timer.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+		if ctx.Err() != nil {
+			return
+		}
+
+		days := r.Cfg.EffectiveStatsRetentionDays()
+		if days <= 0 {
+			days = 365
+		}
+		cutoff := time.Now().UTC().AddDate(0, 0, -days)
+
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		n, err := r.DB.RetentionCleanup(cleanupCtx, cutoff)
+		cancel()
+
+		if err != nil {
+			slog.Warn("stats retention cleanup failed", "err", err, "cutoff", cutoff.Format("2006-01-02"))
+		} else if n > 0 {
+			slog.Info("stats retention cleanup",
+				"deleted", n,
+				"cutoff", cutoff.Format("2006-01-02"),
+				"retention_days", days)
+		}
+		timer.Reset(interval)
+	}
 }
 
 // Stop tears down background goroutines + the HTTP server with a 30s grace.

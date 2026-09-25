@@ -38,6 +38,13 @@ type Mutable struct {
 // would need a restart to take effect (e.g. PORT, REGISTRY_CREDENTIALS_DIR,
 // REGISTRY_STORAGE_DIR, REGISTRY_CREDENTIAL_KEY).
 //
+// NOTE (v0.5.4): cache.ttl.seconds was REMOVED from this list. Since v0.5.0
+// the inventory is read straight from local storage, so registry.CachedRegistry
+// is no longer in any request path and the TTL had no consumer whatsoever --
+// saving it changed nothing, which is worse than not offering it. The env var
+// REGISTRY_CACHE_TTL_SECONDS is kept as a display-only value in
+// GET /api/config so existing .env files keep loading.
+//
 // Adding a new editable field is three steps:
 //  1. add the key here
 //  2. add a Config.Effective<Field>() that falls back to the env value
@@ -48,7 +55,6 @@ var MutableKeys = []string{
 	"registry.name",         // Config.EffectiveRegistryName
 	"registry.username",     // Config.EffectiveRegistryUsername
 	"registry.password",     // Config.EffectiveRegistryPassword (stored plaintext in SQLite; UI never echoes it back)
-	"cache.ttl.seconds",     // Config.EffectiveCacheTTLSeconds
 	"allow.delete",          // Config.EffectiveAllowDelete
 	"allow.pull",            // Config.EffectiveAllowPull
 	"allow.registry_events", // Config.EffectiveAllowRegistryEvents
@@ -72,7 +78,6 @@ var MutableFieldType = map[string]string{
 	"registry.name":         "string",
 	"registry.username":     "string",
 	"registry.password":     "string",
-	"cache.ttl.seconds":     "int",
 	"allow.delete":          "bool",
 	"allow.pull":            "bool",
 	"allow.registry_events": "bool",
@@ -164,18 +169,6 @@ func (c *Config) EffectiveRegistryName() string {
 		return v
 	}
 	return c.RegistryName
-}
-
-func (c *Config) EffectiveCacheTTLSeconds() int {
-	if c == nil {
-		return 60
-	}
-	if v := c.Mutable.Get("cache.ttl.seconds"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			return n
-		}
-	}
-	return int(c.CacheTTL / time.Second)
 }
 
 func (c *Config) EffectiveAllowDelete() bool {

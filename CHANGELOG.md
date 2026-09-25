@@ -6,6 +6,31 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.4] - 2026-09-25
+
+本轮主题：**让"设置页可改的字段"真正在运行时生效**。此前多处代码读的是启动时缓存的 env 值，而不是 SQLite 里的热改覆盖，导致设置页改了不生效。
+
+### 修复
+
+- **设置真生效**：`GetConfig` 顶层的 `Name` / `AllowDelete` / `AllowPull` / `StatsEnabled` / `AllowRegistryEvents` / `StatsRetentionDays` 改为读 `Effective*()`（Mutable 覆盖优先，回落 env）。之前读的是 `cfg.Xxx` 启动快照，设置页改完 `/api/config` 仍显示旧值。
+- **权限闸门接上热改**：`DeleteTag`（删除）、代理拉取、registry events 三处闸门改读 `Effective*()`，nil-safe 且 fail-closed（`Full` 为空时拒绝）。之前只在启动时读一次 env，运行中改 `allow.delete` / `allow.pull` 不影响已构造的 handler。
+- **events 运行时开关**：`events.Handler` 新增 `SetEnabled(func() bool)` 谓词，`ServeHTTP` 在方法检查后加 403 闸门；server 构造时注入 `cfg.EffectiveAllowRegistryEvents`。一处覆盖 `/events` 与 `/api/events` 两个挂载点，改 `allow.registry_events` 立即生效，不用重启。
+- **删调试残留**：`internal/registry/client.go` 删除 3 行 `DEBUG bearer` 日志（token 获取路径上的临时打印）。
+
+### 变更
+
+- **`cache.ttl.seconds` 从可编辑集摘除**：v0.5.0 后清单直读本地存储，`registry.CachedRegistry` 已无构造点，这个 TTL 没有任何消费方，设置页改它完全没效果。从 `config.MutableKeys` / `MutableFieldType` 和设置页输入框移除；`EffectiveCacheTTLSeconds()` 一并删除。`REGISTRY_CACHE_TTL_SECONDS` env 与 `AppConfig.cacheTtlSeconds` 保留为**只读展示**，不破坏既有 `.env` 契约。
+- **`stats.retention.days` 终于有消费点**：新增 `retentionLoop`（启动后延迟 30s 首跑，之后每 24h 一轮，每轮重读 `EffectiveStatsRetentionDays()`），调用 `db.RetentionCleanup` 按 cutoff 删除过期的 `activity_daily` 行。此前该函数全仓无调用点，热度表无限增长，设置形同虚设。
+- **`ConfigExtras` 精简**：只保留 env-only 的 `IgnoreUserAgents`；凡可热改的字段一律走 `Full.Effective*()`，避免 env 快照与 DB 覆盖两套来源打架。
+- **`Runtime` 持有 `Cfg *config.Config`**：让 `resolveSource` 等运行期逻辑能读到全局 HTTP 代理（`registry.proxy` 设置）等热改值。
+- **前端契约对齐**：`web/src/types.ts` 的 `MutableSettings` 补齐 `usingAuth` / `allowDelete(+Source)` / `allowPull(+Source)` / `allowRegistryEvents(+Source)` / `statsRetentionDays(+Source)`；`settings-page.tsx` 移除 `cache.ttl.seconds` 输入框与相关 state/patch 段。
+
+### 升级提示
+
+- 若 SQLite 里已存在覆盖值（例如 `allow.delete=false`、`allow.registry_events=false`、`registry.name`、`registry.proxy`），升级到 v0.5.4 后这些覆盖会**真正生效**：删除端点返回 403、事件采集停止、代理拉取走覆盖的 proxy。如需恢复默认，在设置页改回或清空对应覆盖即可。
+
+---
+
 ## [0.5.3] - 2026-09-25
 
 ### 新增
