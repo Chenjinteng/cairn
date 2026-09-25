@@ -178,7 +178,7 @@ func (h *Handlers) GetConfig(w http.ResponseWriter, r *http.Request) {
 		Version:               version.Version,
 		URL:                   displayURL,
 		Host:                  hostOf(displayURL),
-		UsingProxy:            h.Cfg.RegistryProxy != "",
+		UsingProxy:            h.Cfg.EffectiveRegistryProxy() != "",
 		UsingAuth:             h.Cfg.EffectiveUsingAuth(),
 		CacheTTLSeconds:       int(h.Cfg.CacheTTL.Seconds()),
 		AllowDelete:           h.Cfg.AllowDelete,

@@ -495,6 +495,7 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
 
           <Form.Item>
             <Button
+              htmlType="button"
               type="primary"
               loading={savingBulk}
               onClick={() => void handleSaveBulk()}
