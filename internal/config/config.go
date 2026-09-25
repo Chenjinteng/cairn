@@ -154,6 +154,11 @@ func Load() (*Config, error) {
 	// covers both), while still allowing an explicit path / its own volume.
 	c.StorageDir = strEnv("REGISTRY_STORAGE_DIR", filepath.Join(c.CredentialsDir, "registry"))
 
+	// v0.5.1: always seed Mutable so handlers can call .SetRegistryURL() etc.
+	// without a nil-pointer guard. The server later overwrites registryURL from
+	// SQLite at startup when a settings row exists.
+	c.Mutable = &Mutable{}
+
 	if err := c.validate(); err != nil {
 		return nil, err
 	}
