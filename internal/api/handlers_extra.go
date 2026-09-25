@@ -179,8 +179,9 @@ type CreatePullJobReq struct {
 
 // uiJobView maps pull.JobView onto the UI's PullJob shape (web/src/types.ts).
 // v0.5.0 keys match the UI exactly: destRepo/destTag (was targetRepo/targetTag),
-// errorMessage (was error), finalDigest. Per-stage phases[] arrive in v0.5.x
-// when the executor learns to emit them; for now we keep an empty array.
+// errorMessage (was error), finalDigest. v0.5.7: phases[] carries the live
+// per-step detail (manifest / config / blob:N / child-manifests) that the
+// expanded task row renders.
 func uiJobView(j pull.JobView) map[string]any {
 	sourceRepo, sourceTag, _ := splitSourceRef(j.SourceRef)
 	var startedAt, finishedAt any
@@ -209,8 +210,18 @@ func uiJobView(j pull.JobView) map[string]any {
 		"createdAt":    j.CreatedAt,
 		"startedAt":    startedAt,
 		"finishedAt":   finishedAt,
-		"phases":       []any{},
+		"phases":       uiPhases(j.Phases),
 	}
+}
+
+// uiPhases guarantees a JSON array (never null) for the UI's PullPhase[]:
+// pull-page.tsx reads job.phases.length without a guard.
+func uiPhases(phases []pull.Phase) []any {
+	out := make([]any, 0, len(phases))
+	for _, p := range phases {
+		out = append(out, p)
+	}
+	return out
 }
 
 func (e *ExtraHandlers) CreatePullJob(w http.ResponseWriter, r *http.Request) {

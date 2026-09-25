@@ -6,6 +6,28 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.7] - 2026-09-25
+
+本轮主题：**拉取任务的阶段明细**。展开一个拉取任务行，现在能看到每一步的进度——与 registry-manager 的展开视图对齐——而不是只有一条总进度。
+
+### 新增
+
+- **拉取任务 phases[] 阶段明细**（UI v0.5.0 就预留、后端一直返回空数组的数据通路补上）：执行器为每个步骤 emit 一条 phase——`manifest`（抓取/展开源 manifest，多架构索引标注平台数）、`config`（单平台镜像的 config blob，独占一行）、`blob #N`（每层 digest + 实时字节进度 `done / total`）、`child-manifests`（多架构索引写子 manifest）。每行显示 digest 短形式、字节进度与状态；digest 悬停可见完整值。
+- **blob 级实时进度**：`transferBlob` 用计数 reader 包装源响应体，边读边上报累计字节——大层在传输中即显示中间态（如 `12.3 MiB / 27.0 MiB`），任务总进度条也改为按实际传输字节推进（此前每个 blob 完成后才整块累加 announced size；跳过的 blob 仍计入总量，保证进度条能到 100%）。
+- **已存在的 blob 标为 `已存在，跳过`**（灰色）而非假装重新下载——同一镜像第二个 tag 的拉取能清楚看到哪些层复用了。
+- **终态收尾**：任务失败 / 取消后，running / pending 的 phase 不再停留在"进行中"，统一标为 failed 并写明停在哪一步（`执行失败` / `任务已取消`），展开区直接看到任务死在哪一步。
+
+### 变更
+
+- `/api/pull/jobs` 系列响应的 `phases` 字段从恒为空数组变为真实数据（`pull.JobView.Phases` 以 copy-on-write 更新，轮询拿到的快照不会被后续变更污染）；**前端零改动**——`JobPhases` 渲染组件 v0.5.0 起就在等这份数据。
+- `transferBlob` 签名变更：返回 `(written, skipped, err)` 并接受进度回调；不再使用的 `size` 参数移除。
+
+### 测试
+
+- `internal/pull/phase_test.go`：5 个测试——Phase JSON 键与前端 `PullPhase` 完全一致（含 `totalBytes: null` 语义）、copy-on-write 快照不被后续变更污染、Submit 预置 pending manifest phase、失败任务收尾把 straggler phase 标为 `执行失败`、取消任务把 in-flight phase 标为 `任务已取消`。
+
+---
+
 ## [0.5.6] - 2026-09-25
 
 本轮主题：**修好 blob 下载流**。0.5.5 修掉 Docker Hub 匿名 401 后，拉取第一次走到 blob 阶段，暴露出 v0.2 就存在的流式误用。

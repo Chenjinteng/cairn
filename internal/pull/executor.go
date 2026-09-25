@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -147,15 +148,46 @@ func (o *Orchestrator) RunOne(ctx context.Context, j *Job) error {
 		return fmt.Errorf("source resolver: %w", err)
 	}
 
+	updatePhase(j, 0, func(p *Phase) {
+		p.Status = PhaseRunning
+		p.Message = "Fetching source manifest..."
+	})
 	srcManifest, err := src.GetManifest(ctx, srcRepo, srcTag)
 	if err != nil {
+		updatePhase(j, 0, func(p *Phase) {
+			p.Status = PhaseFailed
+			p.Message = "Failed to fetch source manifest"
+		})
 		return fmt.Errorf("fetch source manifest %s:%s from %s: %w", srcRepo, srcTag, srcURL, err)
 	}
 
 	plan, err := planTransfer(ctx, src, srcRepo, srcManifest)
 	if err != nil {
+		updatePhase(j, 0, func(p *Phase) {
+			p.Status = PhaseFailed
+			p.Message = "Failed to expand manifest"
+		})
 		return err
 	}
+
+	// Classify the root: an index has children (each with its own config,
+	// so no single config blob to label); a single-arch manifest has
+	// exactly one config blob we can call out like registry-manager does.
+	doc, docErr := decodeSourceDoc(srcManifest.Raw)
+	isIndex := docErr == nil && len(doc.Manifests) > 0
+	configDigest := ""
+	if docErr == nil && doc.Config != nil {
+		configDigest = doc.Config.Digest
+	}
+	manifestMsg := "Manifest downloaded"
+	if isIndex {
+		manifestMsg = fmt.Sprintf("Manifest index downloaded (%d platforms)", len(plan.children))
+	}
+	updatePhase(j, 0, func(p *Phase) {
+		p.Status = PhaseSuccess
+		p.Digest = srcManifest.Digest
+		p.Message = manifestMsg
+	})
 
 	j.MutexHeld(func(vv *JobView) {
 		vv.BlobsTotal = len(plan.blobs)
@@ -172,24 +204,76 @@ func (o *Orchestrator) RunOne(ctx context.Context, j *Job) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := o.transferBlob(ctx, src, srcRepo, destRepo, b.Digest, b.Size); err != nil {
-			return fmt.Errorf("blob %d/%d (%s): %w", i+1, len(plan.blobs), b.Digest, err)
+		name := fmt.Sprintf("blob:%d", i)
+		if !isIndex && b.Digest == configDigest {
+			name = "config"
 		}
+		sz := b.Size
+		phaseIdx := appendPhase(j, Phase{
+			Name:       name,
+			Digest:     b.Digest,
+			Status:     PhaseRunning,
+			TotalBytes: &sz,
+		})
+		n, skipped, terr := o.transferBlob(ctx, src, srcRepo, destRepo, b.Digest,
+			func(done int64) {
+				updatePhase(j, phaseIdx, func(p *Phase) { p.Bytes = done })
+			})
 		j.MutexHeld(func(vv *JobView) {
 			vv.BlobsDone++
-			vv.BytesDone += b.Size
+			if skipped {
+				// Counted toward the total even though nothing moved:
+				// the progress bar must still reach 100%.
+				vv.BytesDone += b.Size
+			} else {
+				vv.BytesDone += n
+			}
 		})
+		if terr != nil {
+			updatePhase(j, phaseIdx, func(p *Phase) {
+				p.Status = PhaseFailed
+				p.Bytes = n
+				p.Message = "Transfer failed"
+			})
+			return fmt.Errorf("blob %d/%d (%s): %w", i+1, len(plan.blobs), b.Digest, terr)
+		}
+		if skipped {
+			updatePhase(j, phaseIdx, func(p *Phase) {
+				p.Status = PhaseSkipped
+				p.Message = "Already exists, skipped"
+			})
+		} else {
+			updatePhase(j, phaseIdx, func(p *Phase) {
+				p.Status = PhaseSuccess
+				p.Bytes = n
+			})
+		}
 	}
 
 	// 2. Child manifests must exist before the index that points at them,
 	//    or a concurrent pull would 404 on the child digest.
-	for _, child := range plan.children {
-		if err := ctx.Err(); err != nil {
-			return err
+	if len(plan.children) > 0 {
+		childIdx := appendPhase(j, Phase{
+			Name:    "child-manifests",
+			Status:  PhaseRunning,
+			Message: fmt.Sprintf("Writing %d child manifests...", len(plan.children)),
+		})
+		for ci, child := range plan.children {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if _, err := o.Dest.PutManifest(ctx, destRepo, child.Ref, child.MediaType, child.Raw); err != nil {
+				updatePhase(j, childIdx, func(p *Phase) {
+					p.Status = PhaseFailed
+					p.Message = fmt.Sprintf("Child manifest %d/%d write failed", ci+1, len(plan.children))
+				})
+				return fmt.Errorf("write child manifest %s: %w", child.Ref, err)
+			}
 		}
-		if _, err := o.Dest.PutManifest(ctx, destRepo, child.Ref, child.MediaType, child.Raw); err != nil {
-			return fmt.Errorf("write child manifest %s: %w", child.Ref, err)
-		}
+		updatePhase(j, childIdx, func(p *Phase) {
+			p.Status = PhaseSuccess
+			p.Message = fmt.Sprintf("%d child manifests written", len(plan.children))
+		})
 	}
 
 	// 3. Write the manifest the user asked for, under the destination tag.
@@ -457,37 +541,66 @@ func firstNonEmpty(vals ...string) string {
 // We do not reuse the multi-step upload API: we start an upload, PATCH the
 // whole body once, then PUT-commit with the digest — the same three calls the
 // /v2/* routes make, so the resulting on-disk state is identical.
-func (o *Orchestrator) transferBlob(ctx context.Context, src *registry.Client, srcRepo, destRepo, digest string, size int64) error {
+//
+// Returns the bytes written and whether the blob was skipped (the
+// destination already had it). onProgress, when non-nil, receives the
+// cumulative bytes read so far — the pull UI's per-blob progress line.
+func (o *Orchestrator) transferBlob(ctx context.Context, src *registry.Client, srcRepo, destRepo, digest string, onProgress func(done int64)) (written int64, skipped bool, err error) {
 	exists, err := o.Dest.BlobExists(ctx, destRepo, digest)
 	if err != nil && !errors.Is(err, storage.ErrInvalidDigest) {
-		return err
+		return 0, false, err
 	}
 	if exists {
-		return nil
+		return 0, true, nil
 	}
 
 	// srcRepo matters: a blob can live in several repos upstream, and registries
 	// (Docker Hub included) 404 the cross-repo GET.
 	body, _, err := src.GetBlob(ctx, srcRepo, digest)
 	if err != nil {
-		return err
+		return 0, false, err
 	}
 	defer body.Close()
 
+	var stream io.Reader = body
+	if onProgress != nil {
+		stream = &countingReader{r: body, onProgress: onProgress}
+	}
+
 	uuid, err := o.Dest.StartUpload(ctx, destRepo)
 	if err != nil {
-		return err
+		return 0, false, err
 	}
-	if _, err := o.Dest.PatchUpload(ctx, destRepo, uuid, -1, body); err != nil {
+	written, err = o.Dest.PatchUpload(ctx, destRepo, uuid, -1, stream)
+	if err != nil {
 		_ = o.Dest.CancelUpload(ctx, destRepo, uuid)
-		return err
+		return written, false, err
 	}
 	if err := o.Dest.PutUpload(ctx, destRepo, uuid, digest); err != nil {
 		_ = o.Dest.CancelUpload(ctx, destRepo, uuid)
-		return err
+		return written, false, err
 	}
-	_ = size
-	return nil
+	return written, false, nil
+}
+
+// countingReader reports cumulative bytes read. The pull executor wraps the
+// source blob body in one so the UI can show per-blob progress while the
+// stream is still moving.
+type countingReader struct {
+	r          io.Reader
+	n          int64
+	onProgress func(int64)
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	if n > 0 {
+		c.n += int64(n)
+		if c.onProgress != nil {
+			c.onProgress(c.n)
+		}
+	}
+	return n, err
 }
 
 // splitRef parses "repo:tag" into components.

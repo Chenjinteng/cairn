@@ -39,6 +39,30 @@ const (
 	StateCancelled JobState = "cancelled"
 )
 
+// Phase status values for Phase.Status. The UI (web/src/types.ts
+// PullPhaseStatus) renders each with its own color; 'skipped' is for blobs
+// the destination already had.
+const (
+	PhasePending = "pending"
+	PhaseRunning = "running"
+	PhaseSuccess = "success"
+	PhaseFailed  = "failed"
+	PhaseSkipped = "skipped"
+)
+
+// Phase is one visible step of a pull job, mirroring the UI's PullPhase
+// (web/src/types.ts): manifest / config / blob:<i> (rendered "blob #i") /
+// child-manifests. TotalBytes is nil when the source advertised no size —
+// the UI shows a bare byte count instead of a fake "x / 0".
+type Phase struct {
+	Name       string `json:"name"`
+	Digest     string `json:"digest"`
+	Status     string `json:"status"`
+	Bytes      int64  `json:"bytes"`
+	TotalBytes *int64 `json:"totalBytes"`
+	Message    string `json:"message"`
+}
+
 // JobView is the lock-free, copyable projection of a Job. Same JSON tags
 // as Job but without the mutex, so it can live in slices and API responses.
 //
@@ -68,6 +92,12 @@ type JobView struct {
 	SourcePass  string `json:"-"`
 	ProxyURL    string `json:"-"`
 	FinalDigest string `json:"finalDigest,omitempty"`
+
+	// Phases is the per-step detail the UI's expanded row renders
+	// (manifest → config → blob:N → child-manifests). Mutated only under
+	// the job mutex with copy-on-write (see setPhases), so snapshots
+	// returned by View() stay stable.
+	Phases []Phase `json:"phases,omitempty"`
 }
 
 // Job is one pull task. The mutex/cancelFn are private; handlers receive
@@ -102,6 +132,41 @@ func (j *Job) MutexHeld(fn func(v *JobView)) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	fn(&j.view)
+}
+
+// setPhases replaces v.Phases with a mutated copy (copy-on-write). Views
+// handed out earlier keep their old snapshot, so a polling UI never sees a
+// half-updated phase list. Call with the job mutex held.
+func setPhases(v *JobView, fn func(phases []Phase)) {
+	next := make([]Phase, len(v.Phases))
+	copy(next, v.Phases)
+	fn(next)
+	v.Phases = next
+}
+
+// appendPhase adds p to the job's phase list and returns its index (for
+// later updatePhase calls).
+func appendPhase(j *Job, p Phase) int {
+	idx := 0
+	j.MutexHeld(func(v *JobView) {
+		idx = len(v.Phases)
+		next := make([]Phase, idx+1)
+		copy(next, v.Phases)
+		next[idx] = p
+		v.Phases = next
+	})
+	return idx
+}
+
+// updatePhase mutates the phase at idx copy-on-write. An out-of-range idx
+// is a no-op: phase bookkeeping must never crash a pull.
+func updatePhase(j *Job, idx int, fn func(p *Phase)) {
+	j.MutexHeld(func(v *JobView) {
+		if idx < 0 || idx >= len(v.Phases) {
+			return
+		}
+		setPhases(v, func(phases []Phase) { fn(&phases[idx]) })
+	})
 }
 
 // Executor is the FIFO pull queue with a single concurrent worker.
@@ -163,6 +228,13 @@ func (e *Executor) Submit(nj NewJob) JobView {
 			ProxyURL:   nj.ProxyURL,
 			State:      StateQueued,
 			CreatedAt:  time.Now().UTC(),
+			// Seed the manifest phase so a queued job already has
+			// something to render in the expanded row.
+			Phases: []Phase{{
+				Name:    "manifest",
+				Status:  PhasePending,
+				Message: "Queued",
+			}},
 		},
 	}
 
@@ -326,6 +398,26 @@ func (e *Executor) executeOne(parent context.Context, j *Job) {
 		j.view.Error = err.Error()
 	} else {
 		j.view.State = StateSucceeded
+	}
+	// A terminal job must not keep spinning phases: mark every straggler
+	// failed so the expanded row explains where it stopped. (The UI has no
+	// 'cancelled' phase status; the job-level state already says cancelled.)
+	if j.view.State != StateSucceeded {
+		msg := "Execution failed"
+		if j.view.State == StateCancelled {
+			msg = "Task cancelled"
+		}
+		setPhases(&j.view, func(phases []Phase) {
+			for i := range phases {
+				if phases[i].Status == PhaseRunning || phases[i].Status == PhasePending {
+					phases[i].Status = PhaseFailed
+					// Overwrite in-flight wording ("Queued",
+					// "Fetching..."): it would read as a lie on a
+					// terminal job.
+					phases[i].Message = msg
+				}
+			}
+		})
 	}
 	j.cancelFn = nil
 	j.mu.Unlock()
