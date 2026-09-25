@@ -67,8 +67,8 @@ type ConfigExtras struct {
 // allowPull / allowDelete are the runtime-effective switches (v0.5.4).
 // Full is the live *config.Config; Effective* is nil-safe and fails closed,
 // so a missing Full means "disabled" rather than "wide open".
-func (e *ExtraHandlers) allowPull() bool   { return e.Full.EffectiveAllowPull() }
-func (e *ExtraHandlers) allowDelete() bool { return e.Full.EffectiveAllowDelete() }
+func (e *ExtraHandlers) allowPull() bool   { return e.Full.AllowPull() }
+func (e *ExtraHandlers) allowDelete() bool { return e.Full.AllowDelete() }
 
 // RegisterRoutes mounts the v0.2 + v0.3 + v0.4 endpoints on the chi router.
 //
@@ -260,7 +260,7 @@ func (e *ExtraHandlers) CreatePullJob(w http.ResponseWriter, r *http.Request) {
 		nj.ProxyURL = p
 	}
 	if nj.SourceURL == "" && e.Cfg != nil {
-		if v := e.Full.EffectiveRegistryURL(); v != "" {
+		if v := e.Full.RegistryURL(); v != "" {
 			nj.SourceURL = strings.TrimRight(v, "/")
 		}
 	}
@@ -352,7 +352,7 @@ func (e *ExtraHandlers) ProbePullSource(w http.ResponseWriter, r *http.Request) 
 	}
 	target := strings.TrimSpace(req.SourceURL)
 	if target == "" && e.Cfg != nil {
-		target = strings.TrimRight(e.Full.EffectiveRegistryURL(), "/")
+		target = strings.TrimRight(e.Full.RegistryURL(), "/")
 	}
 	if target == "" {
 		writeError(w, r, http.StatusBadRequest,
@@ -448,7 +448,7 @@ func (e *ExtraHandlers) defaultUpstream() string {
 	if e == nil || e.Cfg == nil {
 		return pull.DefaultUpstream
 	}
-	if v := strings.TrimRight(e.Full.EffectiveRegistryURL(), "/"); v != "" {
+	if v := strings.TrimRight(e.Full.RegistryURL(), "/"); v != "" {
 		return v
 	}
 	return pull.DefaultUpstream
@@ -926,7 +926,7 @@ func (e *ExtraHandlers) TestProxy(w http.ResponseWriter, r *http.Request) {
 	target := strings.TrimSpace(body.TargetURL)
 	if target == "" {
 		// Default: probe the local registry's own /v2/ through the proxy.
-		base := strings.TrimSuffix(e.Full.EffectiveRegistryURL(), "/")
+		base := strings.TrimSuffix(e.Full.RegistryURL(), "/")
 		if base == "" {
 			base = "http://" + r.Host
 		}

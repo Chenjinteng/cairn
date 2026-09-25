@@ -220,7 +220,7 @@ type Handler struct {
 
 	// enabled (v0.5.4) is an optional live predicate consulted on every
 	// request. nil means "always enabled". server.go installs
-	// cfg.EffectiveAllowRegistryEvents so flipping allow.registry_events on
+	// cfg.AllowRegistryEvents so flipping allow.registry_events on
 	// the settings page starts/stops ingestion without a restart.
 	enabled func() bool
 

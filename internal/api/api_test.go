@@ -48,14 +48,13 @@ func newFakeStore(t *testing.T) storage.Storage {
 
 func newTestRouter(t *testing.T) http.Handler {
 	t.Helper()
-	cfg := &config.Config{
-		RegistryURL:  "http://fake",
-		RegistryName: "Test",
-		AllowDelete:  true,
-		AllowPull:    true,
-		CacheTTL:     0,
-		Env:          "test",
-	}
+	cfg := &config.Config{Env: "test"}
+	cfg.Mutable = &config.Mutable{}
+	cfg.Mutable.Set("registry.url", "") // initialise the map
+	cfg.Mutable.Set("registry.url", "http://fake")
+	cfg.Mutable.Set("registry.name", "Test")
+	cfg.Mutable.Set("allow.delete", "true")
+	cfg.Mutable.Set("allow.pull", "true")
 	store := newFakeStore(t)
 	h := &api.Handlers{Cfg: cfg, Store: store}
 	mux := api.NewRouterWithExtras(h, nil, cfg).(chi.Router)
@@ -65,11 +64,11 @@ func newTestRouter(t *testing.T) http.Handler {
 
 func newTestRouterNoDelete(t *testing.T) http.Handler {
 	t.Helper()
-	cfg := &config.Config{
-		RegistryURL: "http://fake",
-		AllowDelete: false,
-		Env:         "test",
-	}
+	cfg := &config.Config{Env: "test"}
+	cfg.Mutable = &config.Mutable{}
+	cfg.Mutable.Set("registry.url", "") // initialise the map
+	cfg.Mutable.Set("registry.url", "http://fake")
+	cfg.Mutable.Set("allow.delete", "false")
 	store := newFakeStore(t)
 	h := &api.Handlers{Cfg: cfg, Store: store}
 	mux := api.NewRouterWithExtras(h, nil, cfg).(chi.Router)

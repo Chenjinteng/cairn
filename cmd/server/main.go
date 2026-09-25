@@ -57,12 +57,10 @@ func main() {
 	}
 	slog.Info("config loaded",
 		"version", version.Version,
-		"registry_url", cfg.RegistryURL,
-		"registry_name", cfg.RegistryName,
 		"port", cfg.Port,
 		"env", cfg.Env,
-		"allow_delete", cfg.AllowDelete,
-		"allow_pull", cfg.AllowPull,
+		"credentials_dir", cfg.CredentialsDir,
+		"storage_dir", cfg.StorageDir,
 	)
 
 	rt, err := server.Build(cfg)

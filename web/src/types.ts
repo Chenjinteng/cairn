@@ -40,7 +40,6 @@ export interface AppConfig {
   version: string;
   url: string;
   host: string;
-  usingProxy: boolean;
   /** 是否给本 registry 配了 basic auth（密码不会回传）。 */
   usingAuth: boolean;
   cacheTtlSeconds: number;
@@ -84,7 +83,7 @@ export interface AppConfig {
   /**
    * v0.5.1: runtime-editable settings shown + edited on the settings page.
    * `registryUrl` here is the *current effective* value (mutable override
-   * wins; otherwise env fallback). `registryUrlSource` tells the UI whether
+   * (single source of truth: SQLite settings, no env fallback).
    * the user is looking at a "db" override or the "env" bootstrap default.
    */
   mutable: MutableSettings;
@@ -99,25 +98,16 @@ export interface AppConfig {
  */
 export interface MutableSettings {
   registryUrl: string;
-  registryUrlSource: 'env' | 'db';
-  registryProxy: string;
-  registryProxySource: 'env' | 'db';
   registryName: string;
-  registryNameSource: 'env' | 'db';
   registryUsername: string;
-  registryUsernameSource: 'env' | 'db';
   /** true when username + password are both set (env or db). */
   usingAuth: boolean;
   // v0.5.2 toggles surfaced on the settings page (v0.5.4). cache.ttl.seconds
   // was removed from the editable set in v0.5.4 (no runtime consumer).
   allowDelete: boolean;
-  allowDeleteSource: 'env' | 'db';
   allowPull: boolean;
-  allowPullSource: 'env' | 'db';
   allowRegistryEvents: boolean;
-  allowRegistryEventsSource: 'env' | 'db';
   statsRetentionDays: number;
-  statsRetentionDaysSource: 'env' | 'db';
   /**
    * v0.6.0: platform allow-list applied to multi-arch image indexes on pull.
    * Empty string = "all platforms" (current behaviour). CSV of
@@ -125,7 +115,6 @@ export interface MutableSettings {
    * or "linux/amd64,linux/arm/v7"). Lowercased server-side.
    */
   pullPlatforms: string;
-  pullPlatformsSource: 'env' | 'db';
 }
 
 export interface ApiResult<T> {

@@ -1,12 +1,28 @@
-// Package config loads runtime configuration from environment variables.
+// Package config owns the cairn runtime configuration.
 //
-// Mirrors registry-manager's env conventions so .env files can be reused:
-//   - REGISTRY_URL         OPTIONAL, the default upstream registry pull jobs read from
-//   - PORT                 default 8787, HTTP listen port
-//   - REGISTRY_CREDENTIAL_KEY  AES-256-GCM key for the credential vault
-//   - REGISTRY_NOTIFY_TOKEN    shared secret for distribution webhook events
+// v0.5.9: business configuration is **single-sourced from the SQLite
+// `settings` table** (which the UI edits via PATCH /api/config). The only
+// env that remains are infrastructure / boot-only:
 //
-// See ../../.env.example for the full list (filled in once modules land).
+//   - PORT                        (HTTP listener port)
+//   - REGISTRY_CREDENTIALS_DIR    (DATA_DIR for SQLite + credentials.json)
+//   - REGISTRY_STORAGE_DIR        (blob / manifest / tag on-disk path)
+//   - REGISTRY_CREDENTIAL_KEY     (AES-256-GCM key for the vault)
+//   - GO_HUB_ENV                  (prod / dev log verbosity)
+//
+// Everything else (registry URL, proxy, auth, name, allow.delete,
+// allow.pull, pull.platforms, notify token, allow.registry_events,
+// stats.retention.days, stats.ignore_useragents, pull.history.retention.days)
+// has exactly one source: the panel. boot hydrates from SQLite into
+// cfg.Mutable, runtime read-paths go through the Config helper methods
+// (c.RegistryURL / c.AllowDelete / ...) which resolve Mutable first and
+// fall back to a hardcoded default. There is no env fallback for these.
+//
+// This file no longer reads the legacy REGISTRY_* business env. If a
+// container still has them set in .env, they are ignored — the panel is
+// authoritative. That makes deploys idempotent (changing .env doesn't
+// change behaviour unless infrastructure env change) and removes a class
+// of "which value wins?" confusion operators hit in v0.5.x.
 package config
 
 import (
@@ -16,7 +32,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 )
 
 // Mutable holds runtime-editable settings persisted to SQLite. v0.5.2
@@ -50,16 +65,18 @@ type Mutable struct {
 //  2. add a Config.Effective<Field>() that falls back to the env value
 //  3. surface it in handlers.UpdateConfig + types.ts MutableSettings
 var MutableKeys = []string{
-	"registry.url",          // Config.EffectiveRegistryURL
-	"registry.proxy",        // Config.EffectiveRegistryProxy
-	"registry.name",         // Config.EffectiveRegistryName
-	"registry.username",     // Config.EffectiveRegistryUsername
-	"registry.password",     // Config.EffectiveRegistryPassword (stored plaintext in SQLite; UI never echoes it back)
-	"allow.delete",          // Config.EffectiveAllowDelete
-	"allow.pull",            // Config.EffectiveAllowPull
-	"allow.registry_events", // Config.EffectiveAllowRegistryEvents
-	"stats.retention.days",  // Config.EffectiveStatsRetentionDays
-	"pull.platforms",        // Config.EffectivePullPlatforms (CSV of <os>/<arch>[/<variant>]; empty = all)
+	"registry.url",                // cairn's own exposed address; empty = pull tasks fall back to Docker Hub
+	"registry.name",               // display name in UI; default "镜像仓库"
+	"registry.username",           // Basic auth user for /v2/*; empty = anonymous
+	"registry.password",           // Basic auth pass; stored in SQLite settings, UI never echoes
+	"allow.delete",                // permit DELETE on /v2/* + GC; default true
+	"allow.pull",                  // permit /api/pull/* writes; default true
+	"allow.registry_events",       // heat ingestion on/off (kill switch); default true
+	"stats.retention.days",        // days of activity_daily to retain; default 365
+	"stats.ignore_useragents",     // CSV; events whose UA substring-matches are folded into ignored
+	"pull.platforms",              // CSV of <os>/<arch>[/<variant>]; empty = pull every platform
+	"pull.history.retention.days", // days of pull_jobs to retain; default 90
+	"notify.token",                // HMAC shared secret for /api/events external webhook; empty = 401 fail-closed
 }
 
 // MutableKeysSet is the O(1) lookup version used by UpdateConfig.
@@ -75,7 +92,6 @@ var MutableKeysSet = func() map[string]struct{} {
 // nice 400s when the UI sends "true"/"false" for a numeric field etc.
 var MutableFieldType = map[string]string{
 	"registry.url":          "url",
-	"registry.proxy":        "url",
 	"registry.name":         "string",
 	"registry.username":     "string",
 	"registry.password":     "string",
@@ -122,116 +138,81 @@ func (m *Mutable) Has(key string) bool {
 	return ok
 }
 
-// SetRegistryURL is preserved as a thin wrapper so server.go / handlers
-// still compile after v0.5.1; new code should use Set("registry.url", v).
-func (m *Mutable) SetRegistryURL(v string) { m.Set("registry.url", v) }
+// RegistryURL is accessor sugar for the most-read mutable: the pull
+// source chain reads it through here so an in-flight pull picks up a
+// panel change immediately. New code should call c.RegistryURL() (the
+// Config helper) when it has a Config in hand; this is only for callers
+// that already hold a *Mutable (orchestrator, executor).
+func (m *Mutable) RegistryURL() string { return m.Get("registry.url") }
 
-// RegistryURL / RegistryURLSource retained as accessor sugar.
-func (m *Mutable) RegistryURL() string       { return m.Get("registry.url") }
-func (m *Mutable) RegistryURLSource() string { return sourceLabel(m.Has("registry.url")) }
+// Read-paths below resolve Mutable override first, then a hardcoded
+// default. There is no env fallback — the panel is the single source of
+// truth. Each helper is the canonical read site: callers should never
+// reach for the legacy `Config.RegistryURL` / `Config.AllowDelete` fields
+// directly because those hold *defaults only* (no env, no Mutable).
+//
+// `Mutable` carries the persisted overrides (loaded from SQLite at boot
+// via server.go hydrate loop). When Mutable is nil — e.g. tests that build
+// a Config without Load() — helpers gracefully fall through to defaults.
 
-// sourceLabel returns "db" / "env" depending on whether key has an
-// override. Centralises the labelling so the UI always reads the same.
-func sourceLabel(overridden bool) string {
-	if overridden {
-		return "db"
-	}
-	return "env"
-}
-
-// Helpers below: each Effective*() resolves Mutable override > env value.
-// This is the canonical read path; never reach for Config.RegistryURL
-// directly elsewhere, otherwise the precedence chain breaks.
-
-func (c *Config) EffectiveRegistryURL() string {
-	if c == nil {
+func (c *Config) RegistryURL() string {
+	if c == nil || c.Mutable == nil {
 		return ""
 	}
-	if v := c.Mutable.Get("registry.url"); v != "" {
-		return strings.TrimRight(v, "/")
-	}
-	return c.RegistryURL
+	return strings.TrimRight(c.Mutable.Get("registry.url"), "/")
 }
 
-func (c *Config) EffectiveRegistryProxy() string {
-	if c == nil {
-		return ""
-	}
-	if v := c.Mutable.Get("registry.proxy"); v != "" {
-		return strings.TrimSpace(v)
-	}
-	return c.RegistryProxy
-}
-
-func (c *Config) EffectiveRegistryName() string {
-	if c == nil {
-		return ""
-	}
-	if v := c.Mutable.Get("registry.name"); v != "" {
-		return v
-	}
-	return c.RegistryName
-}
-
-func (c *Config) EffectiveAllowDelete() bool {
-	if c == nil {
-		return false
-	}
-	if v := c.Mutable.Get("allow.delete"); v != "" {
-		return v == "true" || v == "1"
-	}
-	return c.AllowDelete
-}
-
-func (c *Config) EffectiveAllowPull() bool {
-	if c == nil {
-		return false
-	}
-	if v := c.Mutable.Get("allow.pull"); v != "" {
-		return v == "true" || v == "1"
-	}
-	return c.AllowPull
-}
-
-func (c *Config) EffectiveAllowRegistryEvents() bool {
-	if c == nil {
-		return false
-	}
-	if v := c.Mutable.Get("allow.registry_events"); v != "" {
-		return v == "true" || v == "1"
-	}
-	return c.AllowRegistryEvents
-}
-
-func (c *Config) EffectiveStatsRetentionDays() int {
-	if c == nil {
-		return 365
-	}
-	if v := c.Mutable.Get("stats.retention.days"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			return n
+func (c *Config) RegistryName() string {
+	if c != nil && c.Mutable != nil {
+		if v := c.Mutable.Get("registry.name"); v != "" {
+			return v
 		}
 	}
-	return c.StatsRetentionDay
+	return "镜像仓库"
 }
 
-// EffectivePullPlatforms returns the allow-list of platforms the pull executor
-// uses to filter multi-arch image indexes. Empty list = "pull everything";
-// non-empty = "only fetch children whose OS/architecture[/variant] appears
-// in this list". Read precedence is Mutable override > env bootstrap.
-//
-// A platform token is "os/arch" or "os/arch/variant" (e.g. "linux/amd64",
-// "linux/arm/v7"). Validation is the caller's job — UpdateConfig already
-// rejects garbage tokens, and the env bootstrap is operator-controlled.
-// We trim and lowercase here so legacy env values written in a hurry don't
-// fail to match upstream platform strings.
-func (c *Config) EffectivePullPlatforms() []string {
-	raw := ""
+func (c *Config) AllowDelete() bool {
+	if c != nil && c.Mutable != nil {
+		if v := c.Mutable.Get("allow.delete"); v != "" {
+			return v == "true" || v == "1"
+		}
+	}
+	return true
+}
+
+func (c *Config) AllowPull() bool {
+	if c != nil && c.Mutable != nil {
+		if v := c.Mutable.Get("allow.pull"); v != "" {
+			return v == "true" || v == "1"
+		}
+	}
+	return true
+}
+
+func (c *Config) AllowRegistryEvents() bool {
+	if c != nil && c.Mutable != nil {
+		if v := c.Mutable.Get("allow.registry_events"); v != "" {
+			return v == "true" || v == "1"
+		}
+	}
+	return true
+}
+
+func (c *Config) StatsRetentionDays() int {
+	if c != nil && c.Mutable != nil {
+		if v := c.Mutable.Get("stats.retention.days"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				return n
+			}
+		}
+	}
+	return 365
+}
+
+func (c *Config) PullPlatforms() []string {
+	var raw string
 	if c != nil && c.Mutable != nil {
 		raw = c.Mutable.Get("pull.platforms")
-	}
-	if raw == "" && c != nil {
-		raw = c.PullPlatforms
 	}
 	if raw == "" {
 		return nil
@@ -246,31 +227,58 @@ func (c *Config) EffectivePullPlatforms() []string {
 	return out
 }
 
-func (c *Config) EffectiveRegistryUsername() string {
-	if c == nil {
+func (c *Config) RegistryUsername() string {
+	if c == nil || c.Mutable == nil {
 		return ""
 	}
-	if v := c.Mutable.Get("registry.username"); v != "" {
-		return v
-	}
-	return c.RegistryUsername
+	return c.Mutable.Get("registry.username")
 }
 
-func (c *Config) EffectiveRegistryPassword() string {
-	if c == nil {
+func (c *Config) RegistryPassword() string {
+	if c == nil || c.Mutable == nil {
 		return ""
 	}
-	if v := c.Mutable.Get("registry.password"); v != "" {
-		return v
-	}
-	return c.RegistryPassword
+	return c.Mutable.Get("registry.password")
 }
 
-// EffectiveUsingAuth is true iff both username and password are configured
-// (either via env or via Mutable override). registryd uses this to decide
-// whether to gate /v2/* behind Basic auth.
-func (c *Config) EffectiveUsingAuth() bool {
-	return c.EffectiveRegistryUsername() != "" && c.EffectiveRegistryPassword() != ""
+func (c *Config) NotifyToken() string {
+	if c == nil || c.Mutable == nil {
+		return ""
+	}
+	return c.Mutable.Get("notify.token")
+}
+
+func (c *Config) UsingAuth() bool {
+	return c.RegistryUsername() != "" && c.RegistryPassword() != ""
+}
+
+func (c *Config) PullHistoryRetentionDays() int {
+	if c != nil && c.Mutable != nil {
+		if v := c.Mutable.Get("pull.history.retention.days"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				return n
+			}
+		}
+	}
+	return 90
+}
+
+func (c *Config) StatsIgnoreUserAgents() []string {
+	if c == nil || c.Mutable == nil {
+		return nil
+	}
+	raw := c.Mutable.Get("stats.ignore_useragents")
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if t := strings.TrimSpace(p); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // Config is the resolved runtime configuration for cairn.
@@ -278,48 +286,19 @@ func (c *Config) EffectiveUsingAuth() bool {
 // Field semantics mirror registry-manager so we can swap .env.example wholesale.
 // Fields are populated in Load(); no defaults are applied at struct-literal time.
 type Config struct {
-	// HTTP
+	// HTTP listener. Env only — boot must restart to change.
 	Port int // PORT, default 8787
 
-	// Embedded registry + optional upstream source.
+	// Infrastructure-only env: storage location + vault key. None of
+	// these flow through the panel; boot fails fast if any required
+	// field is missing. Mutable is the only edit channel for everything
+	// else.
 	//
-	// cairn IS the registry now: it serves /v2 itself out of StorageDir, so
-	// REGISTRY_URL is OPTIONAL. When set it is only the DEFAULT upstream that a
-	// pull job falls back to when the job itself names no source (the page form
-	// and saved credentials still win). Leaving it empty is the normal
-	// deployment — cairn then manages nothing but its own storage.
-	RegistryURL      string        // REGISTRY_URL, optional default upstream
-	RegistryProxy    string        // REGISTRY_PROXY, optional
-	RegistryUsername string        // REGISTRY_USERNAME, optional
-	RegistryPassword string        // REGISTRY_PASSWORD, optional
-	RegistryName     string        // REGISTRY_NAME, default "镜像仓库"
-	CacheTTL         time.Duration // REGISTRY_CACHE_TTL_SECONDS, default 60s
-	// Mutable holds runtime-editable settings; populated in Load().
-	// At read time, callers should prefer EffectiveRegistryURL() over the
-	// bare env field so env vs db precedence is centralised.
-	Mutable *Mutable
-
-	// StorageDir is where the embedded /v2 endpoint keeps blobs, manifests and
-	// upload sessions. REGISTRY_STORAGE_DIR, default "<REGISTRY_CREDENTIALS_DIR>/registry".
-	// Mount a dedicated volume here in containers: every pulled and pushed image
-	// lives on this path, and recreating the container without it loses them.
-	StorageDir string
-
-	// Capability gates (mirrors registry-manager)
-	AllowDelete bool // REGISTRY_ALLOW_DELETE, default true
-	AllowPull   bool // REGISTRY_ALLOW_PULL, default true
-
-	// Pull queue
-	PullQueueSize           int    // REGISTRY_PULL_QUEUE_SIZE, default 50
-	PullHistoryRetentionDay int    // REGISTRY_PULL_HISTORY_RETENTION_DAYS, default 90
-	PullPlatforms           string // REGISTRY_PULL_PLATFORMS, optional CSV of <os>/<arch>[/<variant>]; empty = all platforms (current behaviour)
-
-	// Heat / events
-	NotifyToken              string        // REGISTRY_NOTIFY_TOKEN, optional but required for heat
-	AllowRegistryEvents      bool          // REGISTRY_ALLOW_REGISTRY_EVENTS, default true
-	StatsRetentionDay        int           // REGISTRY_STATS_RETENTION_DAYS, default 365
-	StatsIgnoreUserAgents    []string      // REGISTRY_STATS_IGNORE_USERAGENTS, comma-separated, case-insensitive substring match
-	StatsAggregationInterval time.Duration // derived from retention window; not env-driven
+	// StorageDir is where the embedded /v2 endpoint keeps blobs,
+	// manifests and upload sessions. Mount a dedicated volume here in
+	// containers: every pulled and pushed image lives on this path,
+	// and recreating the container without it loses them.
+	StorageDir string // REGISTRY_STORAGE_DIR, default "<REGISTRY_CREDENTIALS_DIR>/registry"
 
 	// Credential vault
 	CredentialKey  string // REGISTRY_CREDENTIAL_KEY, strongly recommended; absence disables vault (pulls still work anonymously)
@@ -327,45 +306,35 @@ type Config struct {
 
 	// Dev convenience
 	Env string // "dev" / "prod", default "prod"
+
+	// Mutable is the live override registry the UI writes to via PATCH
+	// /api/config. server.go hydrates from SQLite at boot; read-paths
+	// use the typed helpers above (c.RegistryURL / c.AllowDelete / ...)
+	// which all resolve Mutable first and fall back to a hardcoded
+	// default.
+	Mutable *Mutable
 }
 
-// Load reads configuration from process env. Required fields fail fast —
-// we refuse to start half-configured, same as registry-manager's compose (${VAR:?}).
+// Load reads configuration from process env. Only infrastructure env
+// (PORT, REGISTRY_CREDENTIALS_DIR, REGISTRY_STORAGE_DIR, REGISTRY_CREDENTIAL_KEY,
+// GO_HUB_ENV) are honoured here; business fields come from Mutable, hydrated
+// later by server.go from SQLite. There is no env fallback for business
+// fields.
 func Load() (*Config, error) {
 	c := &Config{
-		Port:                    intEnv("PORT", 8787),
-		RegistryURL:             strings.TrimRight(os.Getenv("REGISTRY_URL"), "/"),
-		RegistryProxy:           os.Getenv("REGISTRY_PROXY"),
-		RegistryUsername:        os.Getenv("REGISTRY_USERNAME"),
-		RegistryPassword:        os.Getenv("REGISTRY_PASSWORD"),
-		RegistryName:            strEnv("REGISTRY_NAME", "镜像仓库"),
-		CacheTTL:                time.Duration(intEnv("REGISTRY_CACHE_TTL_SECONDS", 60)) * time.Second,
-		AllowDelete:             boolEnv("REGISTRY_ALLOW_DELETE", true),
-		AllowPull:               boolEnv("REGISTRY_ALLOW_PULL", true),
-		PullQueueSize:           intEnv("REGISTRY_PULL_QUEUE_SIZE", 50),
-		PullHistoryRetentionDay: intEnv("REGISTRY_PULL_HISTORY_RETENTION_DAYS", 90),
-		PullPlatforms:           strings.TrimSpace(os.Getenv("REGISTRY_PULL_PLATFORMS")),
-		NotifyToken:             os.Getenv("REGISTRY_NOTIFY_TOKEN"),
-		AllowRegistryEvents:     boolEnv("REGISTRY_ALLOW_REGISTRY_EVENTS", true),
-		StatsRetentionDay:       intEnv("REGISTRY_STATS_RETENTION_DAYS", 365),
-		CredentialKey:           os.Getenv("REGISTRY_CREDENTIAL_KEY"),
-		CredentialsDir:          strEnv("REGISTRY_CREDENTIALS_DIR", "/app/data"),
-		Env:                     strEnv("GO_HUB_ENV", "prod"),
+		Port:           intEnv("PORT", 8787),
+		CredentialKey:  os.Getenv("REGISTRY_CREDENTIAL_KEY"),
+		CredentialsDir: strEnv("REGISTRY_CREDENTIALS_DIR", "/app/data"),
+		Env:            strEnv("GO_HUB_ENV", "prod"),
 	}
-	if g := os.Getenv("REGISTRY_STATS_IGNORE_USERAGENTS"); g != "" {
-		for _, part := range strings.Split(g, ",") {
-			if t := strings.TrimSpace(part); t != "" {
-				c.StatsIgnoreUserAgents = append(c.StatsIgnoreUserAgents, t)
-			}
-		}
-	}
-	// Keep the registry data next to the credential vault by default (one volume
-	// covers both), while still allowing an explicit path / its own volume.
+	// Keep the registry data next to the credential vault by default
+	// (one volume covers both), while still allowing an explicit path /
+	// its own volume.
 	c.StorageDir = strEnv("REGISTRY_STORAGE_DIR", filepath.Join(c.CredentialsDir, "registry"))
 
 	// v0.5.2: always seed Mutable so handlers can call Set/Get on it
-	// without a nil-pointer guard. The server later hydrates from SQLite at
-	// startup when settings rows exist.
+	// without a nil-pointer guard. The server later hydrates from SQLite
+	// at startup when settings rows exist.
 	c.Mutable = &Mutable{values: map[string]string{}}
 
 	if err := c.validate(); err != nil {
@@ -375,19 +344,11 @@ func Load() (*Config, error) {
 }
 
 func (c *Config) validate() error {
-	// REGISTRY_URL is optional: cairn manages its own embedded registry. When
-	// set it must still be a usable upstream base URL.
-	if c.RegistryURL != "" && !strings.HasPrefix(c.RegistryURL, "http://") && !strings.HasPrefix(c.RegistryURL, "https://") {
-		return fmt.Errorf("REGISTRY_URL must start with http:// or https://, got %q (leave it empty to manage the embedded registry only)", c.RegistryURL)
-	}
 	if c.Port <= 0 || c.Port > 65535 {
 		return fmt.Errorf("PORT out of range: %d", c.Port)
 	}
 	if c.StorageDir == "" {
 		return fmt.Errorf("REGISTRY_STORAGE_DIR resolved to an empty path")
-	}
-	if c.AllowDelete == false && c.AllowPull == false {
-		// not an error, just intentional read-only + no-pull mode
 	}
 	if c.CredentialKey != "" && len(c.CredentialKey) < 32 {
 		return fmt.Errorf("REGISTRY_CREDENTIAL_KEY should be at least 32 chars when set (got %d); use `openssl rand -hex 32`", len(c.CredentialKey))

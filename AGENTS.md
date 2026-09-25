@@ -108,3 +108,14 @@ cairn 刻意**不做**：
 - ❌ Helm chart / OCI artifact 浏览（只管 Docker 镜像）
 
 要加先问。
+
+
+## v0.5.9 起:env 只剩 5 个基础设施
+
+业务配置(PORT / DATA_DIR / STORAGE_DIR / LOG_LEVEL / CREDENTIAL_KEY 之外的)全部走 UI → SQLite settings 表。`.env` 里的 `REGISTRY_URL` / `REGISTRY_PROXY` / `REGISTRY_USERNAME` / `REGISTRY_PASSWORD` / `REGISTRY_NAME` / `REGISTRY_NOTIFY_TOKEN` / `REGISTRY_ALLOW_*` / `REGISTRY_PULL_PLATFORMS` / `REGISTRY_PULL_HISTORY_RETENTION_DAYS` / `REGISTRY_STATS_RETENTION_DAYS` / `REGISTRY_STATS_IGNORE_USERAGENTS` 等设置后**不会再被读**(代码里 `os.Getenv("REGISTRY_*")` 全部删除)。设了等于没设,除非改的是基础设施那 5 个。
+
+**新增 env 的门槛**:以后任何 PR 想新加业务 env,需要在 PR description 里说明:
+1. 为什么不能走 UI?(例如 boot 期读取、容器编排约束等)
+2. 如果是 boot 期读取,为什么改 UI 不够?(必须重启才生效的 vs. 不重启可以热生效的)
+
+走不通这两个问题的不接受。

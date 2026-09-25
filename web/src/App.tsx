@@ -75,7 +75,7 @@ export default function App({
             ) : null}
           </div>
           <div className="app-header-meta">
-            {config?.usingProxy ? <Tag color="gold">经代理</Tag> : null}
+            {/* v0.5.9: 经代理 Tag removed — per-credential proxy in proxy library */}
             {config && !config.allowDelete ? <Tag color="green">只读模式</Tag> : null}
             {config && !config.allowPull ? <Tag color="default">禁止拉取</Tag> : null}
             <span className="ellipsis mono" title={config?.url}>

@@ -6,6 +6,52 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.9] - 2026-09-26
+
+本轮主题:**配置单源化 — UI 唯一入口,env 只剩基础设施**。v0.5.8 之前,设置页上每个字段都带一个紫色「环境变量」标签,说明当前值是 `.env` 来的还是 UI 改的;Mutable > env 的双重优先级让运维首部署时被「我改了 UI 但 .env 里还有同一个值,到底用哪个?」反复困扰。本轮把业务配置全部砍成 UI 唯一来源,env 只剩 5 个基础设施变量(PORT / DATA_DIR / STORAGE_DIR / CREDENTIAL_KEY / GO_HUB_ENV)。
+
+本轮同步文案重命名:「默认上游地址」→「仓库地址(/前缀)」。「上游」一词让运维以为配的是上游镜像源,实际这个字段配的就是 cairn 自己对外暴露的地址(docker login / docker push 连的就是它)。
+
+### 新增
+
+- **`internal/config.Config.RegistryURL()` 等 13 个无 env fallback 的 read helper**:之前 11 个 `EffectiveXxx()` 函数每个都做「Mutable override > env value > hardcoded default」三段判断,现在 env 那段整个砍掉,逻辑简化为「Mutable override 或 hardcoded default」。读路径只剩两段,再也没有「我改了 UI 但 .env 里也有同一个值」这种问题。
+- **`.env.example` 大瘦身**:从 27 个 env 砍到 5 个基础设施 + 4 个构建期镜像相关。剩下的 env 都是改了就必须重启的(端口/数据目录/加密密钥/log 模式),改 UI 都做不到。
+
+### 变更
+
+- **`internal/config.Load()`**:不再读取 `REGISTRY_URL` / `REGISTRY_PROXY` / `REGISTRY_USERNAME` / `REGISTRY_PASSWORD` / `REGISTRY_NAME` / `REGISTRY_NOTIFY_TOKEN` / `REGISTRY_ALLOW_*` / `REGISTRY_PULL_PLATFORMS` / `REGISTRY_PULL_HISTORY_RETENTION_DAYS` / `REGISTRY_STATS_RETENTION_DAYS` / `REGISTRY_STATS_IGNORE_USERAGENTS` 等所有业务 env。设了也不再读,会被 panel 值覆盖。
+- **`internal/config.Config` struct 砍 9 个字段**:`RegistryURL` / `RegistryProxy` / `RegistryUsername` / `RegistryPassword` / `RegistryName` / `AllowDelete` / `AllowPull` / `NotifyToken` / `AllowRegistryEvents` / `StatsRetentionDay` / `StatsIgnoreUserAgents` / `PullPlatforms` / `PullHistoryRetentionDay` / `PullQueueSize` / `CacheTTL`(死的)/ `StatsAggregationInterval`(死的)全部移除。结构体只剩 4 个基础设施 env + `Mutable`。
+- **`cmd/server/main.go` slog.Info**:启动日志只打 `port` / `env` / `credentials_dir` / `storage_dir`,不再打印业务字段(那些要么来自 Mutable 要么没意义)。
+- **`internal/api/handlers.go` MutableSettings 砍 11 个 `*Source` 字段**:UI 不再需要区分「env vs db」来源,所有字段只有一种来源——面板。
+- **`web/src/pages/settings-page.tsx`**:删 `SourceTag` 组件 + `SourceTagStyles` 组件 + 7 处 inline `<SourceTag source=.../>` 标签。「环境变量」徽章从此不再出现在 UI 上。
+- **`web/src/types.ts` MutableSettings**:同步删 11 个 `*Source: 'env' | 'db'` 字段。前后端 schema 一致。
+- **`web/src/pages/settings-page.tsx` 「默认上游地址」→「仓库地址(/前缀)」**:语义重整。Label + extra 都改了(上一轮 stage A 已提交)。
+- **`internal/api/handlers_extra.go`**:`ignoreRules.env` 渲染分支移除——后端再也不会从 env 读 UA 忽略规则,只剩 panel 一源。
+
+### 修复
+
+- **`internal/pull/executor.go`**:通过 `Cfg.PullHistoryRetentionDays()` 而非字段直接读,跟随 Stage C 的 helper 收敛。
+- **`internal/events/events.go` 注释**:更新 `cfg.AllowRegistryEvents()` 调用说明。
+- **`internal/server/server.go`**:`pull.NewExecutor` 第一参直接传 `50` 常量(不再从 cfg 读),因为 `PullQueueSize` 既不是 env 也不是 panel-tunable 的(改错会 OOM,本来就只该改代码)。
+
+### 测试
+
+- `internal/api/api_test.go`:两个 `newTestRouter*` helper 改用 `Mutable.Set("registry.url", ...)` 注入测试值,不再依赖 struct 字段(已删)。
+- `go test ./...` 全绿;`gofmt -l .` 干净。
+
+### 影响 / 升级
+
+- **数据无破坏**:SQLite settings 表所有键名 / 字段类型 / 默认值都没动,UI 改过的值照旧生效。
+- **升级后立刻生效**:UI 上之前的所有 `Mutable` override 一行一行都还在工作,只是现在没有 env 在「背后捣鬼」。
+- **`.env` 里残留的旧业务 env**(如果有的话)会被忽略,容器 restart 后行为不变。
+- **运维口径**:**所有业务配置改 UI**;`.env` 只剩 PORT/DATA_DIR/STORAGE_DIR/CREDENTIAL_KEY/GO_HUB_ENV 这 5 个,且都跟「容器能不能跑起来」强相关,改完必须重启。
+
+### 留到 v0.5.10
+
+- TLS 全套:DB `tls_certificates` 表 + 同端口根据 mode 切换 + 上传证书 + 生成自签名 + 热加载。本次没做,留给下次 session(工作量单独评估)。
+
+---
+
 ## [0.5.8] - 2026-09-26
 
 本轮主题：**热度开箱即用**。v0.5.7 之前，热度统计依赖「事件共享密钥 + 外部 registry 的 notifications webhook」——自带 registry 的一次 push/pull 不会进入热度表，运维要么搭一套 Distribution 自己接 webhook，要么看不到数据。本轮把热度链路从「可选外部 webhook」改成「自带 registry 就地喂事件 + 外部 registry webhook 仍可选」两轨并行：默认就有数据，外接依然能接。

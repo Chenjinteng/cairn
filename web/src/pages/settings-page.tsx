@@ -37,15 +37,41 @@ interface Props {
   onInventoryChange: (inventory: Inventory) => void;
 }
 
-/** v0.5.2: small "env / db" tag reused on every editable row. */
-function SourceTag({ source }: { source?: 'env' | 'db' }) {
-  if (source === 'db') return <Tag color="purple">界面设置（已覆盖）</Tag>;
-  return <Tag>环境变量</Tag>;
-}
-
-/** v0.5.2: inline style so the Form labels can render the SourceTag inline. */
-function SourceTagStyles() {
-  return <style>{`.ant-form-item-label label { display: inline-flex; align-items: center; gap: 6px; }`}</style>;
+/**
+ * v0.5.9 amend B: 灰显值组件 — 显示当前值 + ✏️ 编辑图标按钮。
+ * 不带校验、不带保存逻辑（由父级 useState + handlers 驱动）。
+ */
+function ReadonlyValue({
+  value,
+  mono,
+  onEdit,
+}: {
+  value: string;
+  mono?: boolean;
+  onEdit?: () => void;
+}) {
+  return (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+      <span
+        className={mono ? 'mono' : undefined}
+        style={{
+          color: 'var(--color-text-2, #666)',
+          padding: '4px 11px',
+          background: 'var(--color-fill-2, #f5f5f5)',
+          border: '1px solid var(--color-border, #d9d9d9)',
+          borderRadius: 6,
+          fontSize: 14,
+        }}
+      >
+        {value}
+      </span>
+      {onEdit ? (
+        <Button size="small" type="link" onClick={onEdit}>
+          ✏️ 编辑
+        </Button>
+      ) : null}
+    </div>
+  );
 }
 
 export default function SettingsPage({ config, onConfigChange, inventory, onInventoryChange }: Props) {
@@ -65,7 +91,6 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
 
   // v0.5.2: drafts for every other editable field. Server-side keys mirror
   // config.MutableKeys so the PATCH payload is just {mutable: {key: val}}.
-  const [registryProxyDraft, setRegistryProxyDraft] = useState<string>('');
   const [registryNameDraft, setRegistryNameDraft] = useState<string>('');
   const [allowDeleteDraft, setAllowDeleteDraft] = useState<boolean>(true);
   const [allowPullDraft, setAllowPullDraft] = useState<boolean>(true);
@@ -82,6 +107,33 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
   const [registryUsernameDraft, setRegistryUsernameDraft] = useState<string>('');
   const [registryPasswordDraft, setRegistryPasswordDraft] = useState<string>('');
   const [savingBulk, setSavingBulk] = useState(false);
+  // v0.5.9: 灰显+编辑模式 — 同一时刻只编辑一个字段；点 ✏️ 进入编辑态，
+  // 点 ✓ 发 PATCH，点 ✕ 还原草稿并退出编辑态。editingKey 是 settings
+  // 表里的字段 key（"registry.url" 等）。
+  const [editingKey, setEditingKey] = useState<string | null>(null);
+
+  /** 进入编辑模式：把当前 Mutable 值拷贝到 draft（已通过 load effect 同步）。
+   *  离开编辑模式：恢复 draft = 当前 Mutable（丢弃未保存的输入）。 */
+  const beginEdit = (key: string) => {
+    setEditingKey(key);
+  };
+  const cancelEdit = () => {
+    setEditingKey(null);
+    // 重置所有 draft 到当前 Mutable（useEffect 不会再跑，强制 reload）。
+    if (!config) return;
+    const m = config.mutable;
+    setRegistryUrlDraft(m.registryUrl ?? '');
+    setRegistryNameDraft(m.registryName ?? '');
+    setAllowDeleteDraft(m.allowDelete ?? false);
+    setAllowPullDraft(m.allowPull ?? false);
+    setStatsRetentionDraft(m.statsRetentionDays ?? 365);
+    setPullPlatformsDraft(
+      (m.pullPlatforms ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+    );
+    setRegistryUsernameDraft('');
+    setRegistryPasswordDraft('');
+  };
+
 
   const handleProbe = async () => {
     setProbing(true);
@@ -120,7 +172,6 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
     if (!config) return;
     const m = config.mutable;
     setRegistryUrlDraft(m.registryUrl);
-    setRegistryProxyDraft(m.registryProxy ?? '');
     setRegistryNameDraft(m.registryName ?? '');
     setAllowDeleteDraft(m.allowDelete ?? false);
     setAllowPullDraft(m.allowPull ?? false);
@@ -137,101 +188,66 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
     // Password: intentionally blank (server doesn't echo stored value).
   }, [config]);
 
-  const handleSaveRegistryUrl = async () => {
-    if (!config) return;
+  // v0.5.9 amend B: 每个字段独立保存 — 不再有"保存全部"。PATCH 只发一个 key。
+  const patchKey = async (key: string, value: string) => {
+    setSavingBulk(true);
+    try {
+      const r = await updateConfig({ mutable: { [key]: value } });
+      if (r.success && r.data) {
+        onConfigChange(r.data);
+        message.success(`已保存`);
+        setEditingKey(null);
+      } else {
+        message.error(r.message ?? '保存失败');
+      }
+    } catch (e) {
+      message.error(`保存失败:${(e as Error).message ?? e}`);
+    } finally {
+      setSavingBulk(false);
+    }
+  };
+
+  const handleSaveUrl = async () => {
     const v = registryUrlDraft.trim();
     if (v !== '' && !/^https?:\/\//.test(v)) {
       message.error('地址必须以 http:// 或 https:// 开头（清空则回退到 Docker Hub）');
       return;
     }
-    setSavingRegistryUrl(true);
-    try {
-      const r = await updateConfig({ mutable: { 'registry.url': v } });
-      if (r.success && r.data) {
-        onConfigChange(r.data);
-        message.success(v === '' ? '已清除覆盖，恢复使用环境变量默认' : '已保存；新值对后续 pull 任务立即生效');
-      } else {
-        message.error(r.message ?? '保存失败');
-      }
-    } catch (e) {
-      message.error(`保存失败：${(e as Error).message ?? e}`);
-    } finally {
-      setSavingRegistryUrl(false);
-    }
+    await patchKey('registry.url', v);
   };
-
-  // v0.5.2: save all non-URL settings in one PATCH. Only sends keys whose
-  // draft differs from the current effective value, so re-clicking save
-  // without changes is a no-op (saves a round-trip + db write).
-  const handleSaveBulk = async () => {
-    if (!config) return;
-    const m = config.mutable;
-    const patch: Record<string, string> = {};
-    const trimmedProxy = registryProxyDraft.trim();
-    if (trimmedProxy !== (m.registryProxy ?? '')) {
-      if (trimmedProxy !== '' && !/^https?:\/\//.test(trimmedProxy)) {
-        message.error('HTTP 代理地址必须以 http:// 或 https:// 开头');
-        return;
-      }
-      patch['registry.proxy'] = trimmedProxy;
-    }
-    if (registryNameDraft.trim() !== (m.registryName ?? '')) {
-      patch['registry.name'] = registryNameDraft.trim();
-    }
-    if (allowDeleteDraft !== (m.allowDelete ?? false)) {
-      patch['allow.delete'] = allowDeleteDraft ? 'true' : 'false';
-    }
-    if (allowPullDraft !== (m.allowPull ?? false)) {
-      patch['allow.pull'] = allowPullDraft ? 'true' : 'false';
-    }
-    // v0.5.8: registry events switch removed. The built-in registry
-    // auto-feeds the heat aggregator; allow.registry_events survives
-    // as a hidden env-only kill switch (MutableKeys unchanged).
-    if (statsRetentionDraft !== (m.statsRetentionDays ?? 365)) {
-      patch['stats.retention.days'] = String(statsRetentionDraft);
-    }
-    // v0.6.0: server stores CSV. Normalise via Set so a re-arranged chip
-    // order doesn't count as a change (saves a db write).
-    const currentChips = (m.pullPlatforms ?? '')
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean)
-      .sort();
-    const draftChips = [...pullPlatformsDraft].sort();
-    if (
-      currentChips.length !== draftChips.length ||
-      currentChips.some((c, i) => c !== draftChips[i])
-    ) {
-      patch['pull.platforms'] = pullPlatformsDraft.join(',');
-    }
-    if (registryUsernameDraft.trim() !== (m.registryUsername ?? '')) {
-      patch['registry.username'] = registryUsernameDraft.trim();
-    }
-    if (registryPasswordDraft !== '') {
-      patch['registry.password'] = registryPasswordDraft;
-    } else if (m.usingAuth) {
-      // User cleared the password field while auth is on: explicit clear.
-      patch['registry.password'] = '';
-    }
-    if (Object.keys(patch).length === 0) {
-      message.info('没有变更');
+  const handleSaveName = async () => {
+    await patchKey('registry.name', registryNameDraft.trim());
+  };
+  const handleSaveAllowDelete = async () => {
+    await patchKey('allow.delete', allowDeleteDraft ? 'true' : 'false');
+  };
+  const handleSaveAllowPull = async () => {
+    await patchKey('allow.pull', allowPullDraft ? 'true' : 'false');
+  };
+  const handleSaveStatsRetention = async () => {
+    if (!Number.isFinite(statsRetentionDraft) || statsRetentionDraft < 1) {
+      message.error('热度保留天数必须 >= 1');
       return;
     }
-    setSavingBulk(true);
-    try {
-      const r = await updateConfig({ mutable: patch });
-      if (r.success && r.data) {
-        onConfigChange(r.data);
-        message.success(`已保存 ${Object.keys(patch).length} 项设置`);
-      } else {
-        message.error(r.message ?? '保存失败');
-      }
-    } catch (e) {
-      message.error(`保存失败：${(e as Error).message ?? e}`);
-    } finally {
-      setSavingBulk(false);
-    }
+    await patchKey('stats.retention.days', String(statsRetentionDraft));
   };
+  const handleSavePullPlatforms = async () => {
+    await patchKey('pull.platforms', pullPlatformsDraft.join(','));
+  };
+  const handleSaveUsername = async () => {
+    await patchKey('registry.username', registryUsernameDraft.trim());
+  };
+  const handleSavePassword = async () => {
+    if (!config) return;
+    const m = config.mutable;
+    // 用户在编辑密码时输入空=显式清除；未输入(空)则视为不修改。
+    // 用本地 sentinel: 我们把 useState 初值固定为 '',所以清空输入框表示
+    // "我要把密码改成空"——这点跟旧 UX 一致。
+    const v = registryPasswordDraft;
+    await patchKey('registry.password', v);
+    setRegistryPasswordDraft('');
+  };
+
 
   useEffect(() => {
     if (!statsEnabled) {
@@ -294,16 +310,7 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
       dataIndex: 'source',
       key: 'source',
       width: 150,
-      render: (source: 'env' | 'panel') =>
-        source === 'env' ? (
-          <Tooltip title="来自环境变量 REGISTRY_STATS_IGNORE_USERAGENTS，要改得改部署配置并重启">
-            <Tag color="gold" style={{ marginInlineEnd: 0 }}>
-              环境变量
-            </Tag>
-          </Tooltip>
-        ) : (
-          <Tag style={{ marginInlineEnd: 0 }}>界面</Tag>
-        ),
+      render: () => <Tag style={{ marginInlineEnd: 0 }}>界面</Tag>,
     },
     {
       title: '操作',
@@ -375,195 +382,265 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
 
       <div className="panel" style={{ padding: 16 }}>
         <Form layout="vertical" size="middle" colon={false}>
+          {/* 仓库地址 */}
           <Form.Item
-            label={
-              <span>
-                仓库地址（/前缀）
-                {/* v0.5.9: SourceTag dropped in Stage C — every
-                    field is single-sourced from the panel now. */}
-              </span>
-            }
+            label={<span>仓库地址（/前缀）</span>}
             extra="配置本仓库对外暴露的地址（docker login / docker push 用）。示例：http://registry.example.com:8787 或 https://devhub..io；写哪个客户端就连哪个，无需重启。"
           >
-            <Space.Compact style={{ width: '100%', maxWidth: 560 }}>
-              <Input
-                className="mono"
-                placeholder="http://my-mirror.example.com:5000"
-                value={registryUrlDraft}
-                onChange={(e) => setRegistryUrlDraft(e.target.value)}
-                disabled={savingRegistryUrl}
-                allowClear
+            {editingKey === 'registry.url' ? (
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <Input
+                  className="mono"
+                  value={registryUrlDraft}
+                  onChange={(e) => setRegistryUrlDraft(e.target.value)}
+                  disabled={savingBulk}
+                  allowClear
+                  style={{ maxWidth: 560 }}
+                />
+                <Button type="primary" loading={savingBulk} onClick={() => void handleSaveUrl()}>
+                  保存
+                </Button>
+                <Button onClick={cancelEdit} disabled={savingBulk}>
+                  取消
+                </Button>
+              </div>
+            ) : (
+              <ReadonlyValue
+                value={config?.mutable.registryUrl || '(空 — pull 任务回退到 Docker Hub)'}
+                mono
+                onEdit={() => beginEdit('registry.url')}
               />
-              <Button
-                type="primary"
-                loading={savingRegistryUrl}
-                onClick={() => void handleSaveRegistryUrl()}
-                disabled={!config || registryUrlDraft.trim() === (config.mutable.registryUrl ?? '')}
-              >
-                保存
-              </Button>
-            </Space.Compact>
+            )}
           </Form.Item>
 
+          {/* Registry 认证 */}
           <Form.Item
-            label={<span>HTTP 代理 <SourceTag source={config?.mutable.registryProxySource} /></span>}
-            extra="访问外部 registry 时走的上游 HTTP 代理。留空 = 直连。"
-          >
-            <Input
-              className="mono"
-              placeholder="http://proxy.example.com:8080"
-              value={registryProxyDraft}
-              onChange={(e) => setRegistryProxyDraft(e.target.value)}
-              allowClear
-            />
-          </Form.Item>
-
-          <Form.Item
-            label={<span>Registry 认证 <SourceTag source={config?.mutable.usingAuth ? 'db' : 'env'} /></span>}
+            label={<span>Registry 认证</span>}
             extra={
-              config?.mutable.usingAuth
-                ? '当前已开启 Basic 认证；客户端需要先 docker login 才能 push/pull。修改后立即生效，不需要重启。'
-                : '留空 = 关闭认证（任何人可访问）。配了之后客户端需要 docker login。密码不回显，提交时输入即覆盖。'
+              editingKey === 'registry.username' || editingKey === 'registry.password'
+                ? '输入新用户名 / 密码覆盖；密码不回显；保存后立即生效，无需重启。'
+                : config?.mutable.usingAuth
+                  ? '当前已开启 Basic 认证；客户端需要先 docker login 才能 push/pull。'
+                  : '留空 = 关闭认证（任何人可访问）。配了之后客户端需要 docker login。'
             }
           >
-            <Space.Compact style={{ width: '100%', maxWidth: 560 }}>
-              <Input
-                placeholder="username"
-                value={registryUsernameDraft}
-                onChange={(e) => setRegistryUsernameDraft(e.target.value)}
-                allowClear
-                style={{ width: '40%' }}
-              />
-              <Input.Password
-                placeholder="password（输入即覆盖；留空保留原值；当前已开启认证时清空输入框 = 关闭）"
-                value={registryPasswordDraft}
-                onChange={(e) => setRegistryPasswordDraft(e.target.value)}
-              />
-            </Space.Compact>
+            {editingKey === 'registry.username' ? (
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <Input
+                  placeholder="username"
+                  value={registryUsernameDraft}
+                  onChange={(e) => setRegistryUsernameDraft(e.target.value)}
+                  style={{ maxWidth: 220 }}
+                />
+                <Button type="primary" loading={savingBulk} onClick={() => void handleSaveUsername()}>
+                  保存
+                </Button>
+                <Button onClick={cancelEdit}>取消</Button>
+              </div>
+            ) : editingKey === 'registry.password' ? (
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <Input.Password
+                  placeholder="新密码（输入即覆盖；清空 = 关闭认证）"
+                  value={registryPasswordDraft}
+                  onChange={(e) => setRegistryPasswordDraft(e.target.value)}
+                  style={{ maxWidth: 420 }}
+                />
+                <Button type="primary" loading={savingBulk} onClick={() => void handleSavePassword()}>
+                  保存
+                </Button>
+                <Button onClick={cancelEdit}>取消</Button>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <ReadonlyValue
+                  value={
+                    config?.mutable.usingAuth
+                      ? '已开启（用户名 ' + (config.mutable.registryUsername || '?') + '）'
+                      : '关闭（任何人都可访问）'
+                  }
+                />
+                <Button size="small" type="link" onClick={() => beginEdit('registry.username')}>
+                  ✏️ 改用户名
+                </Button>
+                <Button size="small" type="link" onClick={() => beginEdit('registry.password')}>
+                  ✏️ 改密码
+                </Button>
+              </div>
+            )}
           </Form.Item>
 
+          {/* 展示名称 */}
           <Form.Item
-            label={<span>展示名称 <SourceTag source={config?.mutable.registryNameSource} /></span>}
+            label={<span>展示名称</span>}
             extra="顶部 / 设置页显示名"
           >
-            <Input
-              value={registryNameDraft}
-              onChange={(e) => setRegistryNameDraft(e.target.value)}
-              placeholder="内网离线镜像源"
-            />
+            {editingKey === 'registry.name' ? (
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <Input
+                  value={registryNameDraft}
+                  onChange={(e) => setRegistryNameDraft(e.target.value)}
+                  placeholder="内网离线镜像源"
+                  style={{ maxWidth: 420 }}
+                />
+                <Button type="primary" loading={savingBulk} onClick={() => void handleSaveName()}>
+                  保存
+                </Button>
+                <Button onClick={cancelEdit}>取消</Button>
+              </div>
+            ) : (
+              <ReadonlyValue
+                value={config?.mutable.registryName || '镜像仓库'}
+                onEdit={() => beginEdit('registry.name')}
+              />
+            )}
           </Form.Item>
 
+          {/* 允许删除 */}
           <Form.Item
-            label={<span>允许删除 <SourceTag source={config?.mutable.allowDeleteSource} /></span>}
+            label={<span>允许删除</span>}
             extra="关闭后所有删除端点（仓库 / manifest-by-digest / GC）返回 403"
           >
-            <Switch
-              checked={allowDeleteDraft}
-              onChange={setAllowDeleteDraft}
-              checkedChildren="启用"
-              unCheckedChildren="只读"
-            />
+            {editingKey === 'allow.delete' ? (
+              <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                <Switch
+                  checked={allowDeleteDraft}
+                  onChange={setAllowDeleteDraft}
+                  checkedChildren="启用"
+                  unCheckedChildren="只读"
+                />
+                <Button type="primary" loading={savingBulk} onClick={() => void handleSaveAllowDelete()}>
+                  保存
+                </Button>
+                <Button onClick={cancelEdit}>取消</Button>
+              </div>
+            ) : (
+              <ReadonlyValue
+                value={config?.mutable.allowDelete ? '启用' : '只读（关闭）'}
+                onEdit={() => beginEdit('allow.delete')}
+              />
+            )}
           </Form.Item>
 
+          {/* 允许拉取 */}
           <Form.Item
-            label={<span>允许拉取 <SourceTag source={config?.mutable.allowPullSource} /></span>}
+            label={<span>允许拉取</span>}
             extra="关闭后 /api/pull/* 写入端点拒绝"
           >
-            <Switch
-              checked={allowPullDraft}
-              onChange={setAllowPullDraft}
-              checkedChildren="启用"
-              unCheckedChildren="禁用"
-            />
+            {editingKey === 'allow.pull' ? (
+              <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                <Switch
+                  checked={allowPullDraft}
+                  onChange={setAllowPullDraft}
+                  checkedChildren="启用"
+                  unCheckedChildren="禁用"
+                />
+                <Button type="primary" loading={savingBulk} onClick={() => void handleSaveAllowPull()}>
+                  保存
+                </Button>
+                <Button onClick={cancelEdit}>取消</Button>
+              </div>
+            ) : (
+              <ReadonlyValue
+                value={config?.mutable.allowPull ? '启用' : '禁用'}
+                onEdit={() => beginEdit('allow.pull')}
+              />
+            )}
           </Form.Item>
 
+          {/* 热度保留天数 */}
           <Form.Item
-            label={<span>热度保留天数 <SourceTag source={config?.mutable.statsRetentionDaysSource} /></span>}
+            label={<span>热度保留天数</span>}
             extra="超过的天数会被 /api/stats/heat 自动清掉"
           >
-            <InputNumber
-              min={1}
-              max={3650}
-              value={statsRetentionDraft}
-              onChange={(v) => setStatsRetentionDraft(v ?? 365)}
-              style={{ width: 180 }}
-            />
+            {editingKey === 'stats.retention.days' ? (
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <InputNumber
+                  min={1}
+                  max={3650}
+                  value={statsRetentionDraft}
+                  onChange={(v) => setStatsRetentionDraft(v ?? 365)}
+                  style={{ width: 180 }}
+                />
+                <Button type="primary" loading={savingBulk} onClick={() => void handleSaveStatsRetention()}>
+                  保存
+                </Button>
+                <Button onClick={cancelEdit}>取消</Button>
+              </div>
+            ) : (
+              <ReadonlyValue
+                value={`${config?.mutable.statsRetentionDays ?? 365} 天`}
+                onEdit={() => beginEdit('stats.retention.days')}
+              />
+            )}
           </Form.Item>
 
-          {/*
-            v0.6.0: platform allow-list for multi-arch pulls. Empty =
-            "pull every platform" (current behaviour); chips toggle which
-            platforms make it through the filter. Server stores this as
-            the CSV mutable.pullPlatforms; we send it via the bulk save
-            below. Single-arch deployments stay small by enabling just
-            "linux/amd64" or "linux/amd64, linux/arm64".
-          */}
+          {/* 拉取平台白名单 */}
           <Form.Item
-            label={<span>拉取平台白名单 <SourceTag source={config?.mutable.pullPlatformsSource} /></span>}
+            label={<span>拉取平台白名单</span>}
             extra={
-              pullPlatformsDraft.length === 0
-                ? '当前未启用过滤：多架构镜像会按上游索引全部拉取（与 v0.6.0 之前的行为一致）。'
-                : `已选 ${pullPlatformsDraft.length} 个：${pullPlatformsDraft.join(', ')}。其余架构（包括未列出的 linux/*）将跳过。`
+              editingKey === 'pull.platforms'
+                ? '勾选目标平台；取消勾选 = 排除；保存后对下一个 pull 任务立即生效。'
+                : pullPlatformsDraft.length === 0
+                  ? '当前未启用过滤：多架构镜像会按上游索引全部拉取（与 v0.6.0 之前的行为一致）。'
+                  : `已选 ${pullPlatformsDraft.length} 个：${pullPlatformsDraft.join(', ')}。`
             }
           >
-            <Space wrap>
-              {[
-                { id: 'linux/amd64', label: 'linux/amd64 (x86_64)' },
-                { id: 'linux/arm64', label: 'linux/arm64 (aarch64)' },
-                { id: 'linux/arm/v7', label: 'linux/arm/v7 (32-bit ARMv7)' },
-                { id: 'linux/386', label: 'linux/386' },
-                { id: 'linux/ppc64le', label: 'linux/ppc64le' },
-                { id: 'linux/s390x', label: 'linux/s390x' },
-                { id: 'linux/riscv64', label: 'linux/riscv64' },
-                { id: 'windows/amd64', label: 'windows/amd64' },
-              ].map((opt) => {
-                const on = pullPlatformsDraft.includes(opt.id);
-                return (
-                  <Tag.CheckableTag
-                    key={opt.id}
-                    checked={on}
-                    onChange={(checked) => {
-                      setPullPlatformsDraft((prev) => {
-                        const set = new Set(prev);
-                        if (checked) set.add(opt.id);
-                        else set.delete(opt.id);
-                        return Array.from(set);
-                      });
-                    }}
-                  >
-                    {opt.label}
-                  </Tag.CheckableTag>
-                );
-              })}
-              {pullPlatformsDraft.length > 0 ? (
-                <Button
-                  size="small"
-                  type="link"
-                  onClick={() => setPullPlatformsDraft([])}
-                  style={{ paddingInline: 8 }}
-                >
-                  清空（恢复全部）
-                </Button>
-              ) : null}
-            </Space>
-          </Form.Item>
-
-          <Form.Item>
-            <Button
-              htmlType="button"
-              type="primary"
-              loading={savingBulk}
-              onClick={() => void handleSaveBulk()}
-              disabled={!config}
-            >
-              保存全部设置
-            </Button>
-            <span style={{ marginInlineStart: 12, color: 'var(--color-text-3)', fontSize: 12 }}>
-              只提交实际发生变更的字段
-            </span>
+            {editingKey === 'pull.platforms' ? (
+              <div>
+                <Space wrap>
+                  {[
+                    { id: 'linux/amd64', label: 'linux/amd64 (x86_64)' },
+                    { id: 'linux/arm64', label: 'linux/arm64 (aarch64)' },
+                    { id: 'linux/arm/v7', label: 'linux/arm/v7 (32-bit ARMv7)' },
+                    { id: 'linux/386', label: 'linux/386' },
+                    { id: 'linux/ppc64le', label: 'linux/ppc64le' },
+                    { id: 'linux/s390x', label: 'linux/s390x' },
+                    { id: 'linux/riscv64', label: 'linux/riscv64' },
+                    { id: 'windows/amd64', label: 'windows/amd64' },
+                  ].map((opt) => {
+                    const on = pullPlatformsDraft.includes(opt.id);
+                    return (
+                      <Tag.CheckableTag
+                        key={opt.id}
+                        checked={on}
+                        onChange={(checked) => {
+                          setPullPlatformsDraft((prev) => {
+                            const set = new Set(prev);
+                            if (checked) set.add(opt.id);
+                            else set.delete(opt.id);
+                            return Array.from(set);
+                          });
+                        }}
+                      >
+                        {opt.label}
+                      </Tag.CheckableTag>
+                    );
+                  })}
+                </Space>
+                <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
+                  <Button type="primary" loading={savingBulk} onClick={() => void handleSavePullPlatforms()}>
+                    保存
+                  </Button>
+                  <Button onClick={cancelEdit}>取消</Button>
+                  {pullPlatformsDraft.length > 0 ? (
+                    <Button type="link" onClick={() => setPullPlatformsDraft([])}>
+                      清空（恢复全部）
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            ) : (
+              <ReadonlyValue
+                value={
+                  pullPlatformsDraft.length === 0
+                    ? '未启用（拉取所有平台）'
+                    : pullPlatformsDraft.join(', ')
+                }
+                onEdit={() => beginEdit('pull.platforms')}
+              />
+            )}
           </Form.Item>
         </Form>
-        <SourceTagStyles />
       </div>
 
       <Alert

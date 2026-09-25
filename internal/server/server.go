@@ -140,9 +140,9 @@ func Build(cfg *config.Config) (*Runtime, error) {
 		// v0.5.4: live cfg pointer so resolveSource can read the global
 		// HTTP proxy (registry.proxy setting). nil-safe.
 		Cfg:                  cfg,
-		PullHistoryRetention: cfg.PullHistoryRetentionDay,
+		PullHistoryRetention: cfg.PullHistoryRetentionDays(),
 	}
-	executor := pull.NewExecutor(cfg.PullQueueSize, orchestrator.RunOne)
+	executor := pull.NewExecutor(50, orchestrator.RunOne)
 
 	// 7. Events handler (webhook receiver for registry notifications + the
 	// sink for built-in registry self-reports).
@@ -164,12 +164,12 @@ func Build(cfg *config.Config) (*Runtime, error) {
 	if store_db != nil {
 		// effective ignore = env ∪ panel (panel rules persist in SQLite and
 		// are merged in at startup so they survive restarts).
-		ignore := cfg.StatsIgnoreUserAgents
+		ignore := cfg.StatsIgnoreUserAgents()
 		if panel, err := store_db.ListIgnore(context.Background()); err == nil {
 			ignore = events.MergeIgnore(ignore, panel)
 		}
-		eventsHandler = events.NewHandler(store_db, cfg.NotifyToken, ignore, 200)
-		eventsHandler.SetEnabled(cfg.EffectiveAllowRegistryEvents)
+		eventsHandler = events.NewHandler(store_db, cfg.NotifyToken(), ignore, 200)
+		eventsHandler.SetEnabled(cfg.AllowRegistryEvents)
 	}
 
 	// 8. Admin handlers (browse/delete talk to local storage; pull uses external client).
@@ -189,7 +189,7 @@ func Build(cfg *config.Config) (*Runtime, error) {
 		// v0.5.4: only the genuinely env-only field is snapshotted here.
 		// The gates themselves read cfg.Effective*() per request via Full.
 		Cfg: &api.ConfigExtras{
-			IgnoreUserAgents: cfg.StatsIgnoreUserAgents,
+			IgnoreUserAgents: cfg.StatsIgnoreUserAgents(),
 		},
 		Executor:   executor,
 		Vault:      vault,
@@ -207,7 +207,7 @@ func Build(cfg *config.Config) (*Runtime, error) {
 	// apiMux is a *chi.Mux (http.Handler that satisfies chi.Router); mount
 	// the registryd sub-router under /v2/*.
 	chiRouter := apiMux.(chi.Router)
-	chiRouter.Mount("/v2", registryd.New(store, func() (string, string) { return cfg.EffectiveRegistryUsername(), cfg.EffectiveRegistryPassword() }, eventsHandler))
+	chiRouter.Mount("/v2", registryd.New(store, func() (string, string) { return cfg.RegistryUsername(), cfg.RegistryPassword() }, eventsHandler))
 	mux := apiMux.(http.Handler)
 
 	srv := &http.Server{
@@ -228,11 +228,11 @@ func Build(cfg *config.Config) (*Runtime, error) {
 		"port", cfg.Port,
 		"data_dir", dataDir,
 		"db", store_db != nil,
-		"allow_delete", cfg.EffectiveAllowDelete(),
-		"allow_pull", cfg.EffectiveAllowPull(),
-		"registry_events", cfg.EffectiveAllowRegistryEvents(),
-		"stats_retention_days", cfg.EffectiveStatsRetentionDays(),
-		"default_upstream", strings.TrimRight(cfg.EffectiveRegistryURL(), "/"),
+		"allow_delete", cfg.AllowDelete(),
+		"allow_pull", cfg.AllowPull(),
+		"registry_events", cfg.AllowRegistryEvents(),
+		"stats_retention_days", cfg.StatsRetentionDays(),
+		"default_upstream", strings.TrimRight(cfg.RegistryURL(), "/"),
 	)
 
 	pullCtx, pullCancel := context.WithCancel(context.Background())
@@ -304,7 +304,7 @@ func (r *Runtime) retentionLoop(ctx context.Context) {
 			return
 		}
 
-		days := r.Cfg.EffectiveStatsRetentionDays()
+		days := r.Cfg.StatsRetentionDays()
 		if days <= 0 {
 			days = 365
 		}

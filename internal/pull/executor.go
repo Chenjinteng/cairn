@@ -90,7 +90,7 @@ type Orchestrator struct {
 	// restart. nil is OK -- resolveSource treats it as "env default only".
 	Mutable *config.Mutable
 	// Cfg (v0.5.4) is the live Config pointer; resolveSource reads the
-	// global HTTP proxy from it via EffectiveRegistryProxy(). nil is OK
+	// global HTTP proxy from it via RegistryProxy(). nil is OK
 	// -- proxy then falls back to per-job overrides only.
 	Cfg *config.Config
 	// DefaultSourceURL is the env bootstrap upstream (deprecated v0.5.1:
@@ -375,13 +375,11 @@ func (o *Orchestrator) resolveSource(v JobView) (srcURL, user, pass, proxyURL st
 			proxyURL = p.URL
 		}
 	}
-	// v0.5.4: fall back to the global registry-proxy setting (mutable
-	// > env). Without this, jobs with no per-job proxy inherit nothing
-	// even when the operator set one on the settings page, so pulls to
-	// an upstream that requires a proxy silently time out.
-	if proxyURL == "" && o.Cfg != nil {
-		proxyURL = strings.TrimSpace(o.Cfg.EffectiveRegistryProxy())
-	}
+	// v0.5.9: the global registry.proxy setting was removed. Per-job
+	// proxy (cfg.Proxy on the credential) still works; the panel no
+	// longer exposes a single global proxy because cairn itself doesn't
+	// need one — outbound goes direct, and operators reach external
+	// registries through their own VPN/SSH/SOCKS tunnel.
 	return srcURL, user, pass, proxyURL, nil
 }
 
@@ -469,7 +467,7 @@ type sourcePlatformRef struct {
 
 // platformKey returns "os/arch" or "os/arch/variant" — the canonical token
 // shape MutableKeys "pull.platforms" accepts. Lowercased to match the
-// allow-list parsing in config.EffectivePullPlatforms.
+// allow-list parsing in config.PullPlatforms.
 func (p *sourcePlatformRef) key() string {
 	if p == nil {
 		return ""

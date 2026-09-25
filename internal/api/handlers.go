@@ -61,7 +61,6 @@ type AppConfig struct {
 	Version               string   `json:"version"`
 	URL                   string   `json:"url"`
 	Host                  string   `json:"host"`
-	UsingProxy            bool     `json:"usingProxy"`
 	UsingAuth             bool     `json:"usingAuth"`
 	CacheTTLSeconds       int      `json:"cacheTtlSeconds"`
 	AllowDelete           bool     `json:"allowDelete"`
@@ -86,56 +85,32 @@ type AppConfig struct {
 	MutableSettings MutableSettings `json:"mutable"`
 }
 
-// src returns "db" if Mutable has a saved override for key, "env"
-// otherwise. The settings page renders this as a tag next to each
-// editable row so operators can tell at a glance whether the value
-// they're looking at is a runtime override or the bootstrap default.
-func src(m *config.Mutable, key string) string {
-	if m == nil {
-		return "env"
-	}
-	if m.Has(key) {
-		return "db"
-	}
-	return "env"
-}
-
 // MutableSettings is the v0.5.2 editable subset of AppConfig. Anything
 // here can be changed from the settings page without restarting the
 // service; env remains the bootstrap default on first boot. Each field
 // is paired with a "source" label ("env"/"db") so the UI can show
 // whether the displayed value is a live override or the bootstrap.
 type MutableSettings struct {
-	RegistryURL         string `json:"registryUrl"`
-	RegistryURLSource   string `json:"registryUrlSource"`
-	RegistryProxy       string `json:"registryProxy,omitempty"`
-	RegistryProxySource string `json:"registryProxySource"`
-	RegistryName        string `json:"registryName"`
-	RegistryNameSource  string `json:"registryNameSource"`
+	RegistryURL  string `json:"registryUrl"`
+	RegistryName string `json:"registryName"`
 	// RegistryUsername mirrors the Basic-auth user; the UI uses it to
 	// show whether auth is configured. The password itself is never
 	// echoed back to the client -- the UI only sends it on save.
-	RegistryUsername    string `json:"registryUsername"`
-	RegistryUsernameSrc string `json:"registryUsernameSource"`
+	RegistryUsername string `json:"registryUsername"`
 	// UsingAuth is true when both username + password are set (env or
 	// Mutable). Drives the basic-auth toggle indicator on the UI.
-	UsingAuth            bool   `json:"usingAuth"`
-	AllowDelete          bool   `json:"allowDelete"`
-	AllowDeleteSource    string `json:"allowDeleteSource"`
-	AllowPull            bool   `json:"allowPull"`
-	AllowPullSource      string `json:"allowPullSource"`
-	AllowRegistryEvents  bool   `json:"allowRegistryEvents"`
-	AllowRegistryEvtsSrc string `json:"allowRegistryEventsSource"`
-	StatsRetentionDays   int    `json:"statsRetentionDays"`
-	StatsRetentionSrc    string `json:"statsRetentionDaysSource"`
+	UsingAuth           bool `json:"usingAuth"`
+	AllowDelete         bool `json:"allowDelete"`
+	AllowPull           bool `json:"allowPull"`
+	AllowRegistryEvents bool `json:"allowRegistryEvents"`
+	StatsRetentionDays  int  `json:"statsRetentionDays"`
 	// PullPlatforms (v0.6.0) is the platform allow-list applied to
 	// multi-arch image indexes on pull. Empty string = "pull every
 	// platform" (current behaviour); CSV of "<os>/<arch>[/<variant>]"
 	// tokens otherwise (e.g. "linux/amd64,linux/arm64"). UI renders
 	// this as a chip multi-select so operators can flip their deployment
 	// from "all architectures" to "just x86+arm64" without restarting.
-	PullPlatforms    string `json:"pullPlatforms"`
-	PullPlatformsSrc string `json:"pullPlatformsSource"`
+	PullPlatforms string `json:"pullPlatforms"`
 }
 
 // GetConfig returns the safe-to-expose runtime configuration.
@@ -165,7 +140,7 @@ func (h *Handlers) GetConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Effective ignore list = env rules ∪ panel rules (panel lives in SQLite).
-	ignore := events.SetBaseIgnoreUAs(h.Cfg.StatsIgnoreUserAgents)
+	ignore := events.SetBaseIgnoreUAs(h.Cfg.StatsIgnoreUserAgents())
 	if h.DB != nil {
 		if panel, err := h.DB.ListIgnore(r.Context()); err == nil {
 			ignore = events.MergeIgnore(ignore, panel)
@@ -175,7 +150,7 @@ func (h *Handlers) GetConfig(w http.ResponseWriter, r *http.Request) {
 	// v0.5.2: URL/Host reflect whichever source wins right now (Mutable
 	// override > env). displayURL is the v0.5 "manage itself" fallback
 	// when no upstream is configured anywhere.
-	displayURL := h.Cfg.EffectiveRegistryURL()
+	displayURL := h.Cfg.RegistryURL()
 	if displayURL == "" {
 		displayURL = "http://" + r.Host // cairn now manages itself; no upstream set
 	}
@@ -184,49 +159,34 @@ func (h *Handlers) GetConfig(w http.ResponseWriter, r *http.Request) {
 		// Effective*() here, so the top-level view and the `mutable` block
 		// can no longer disagree and the UI reflects a saved override
 		// immediately instead of the env bootstrap value.
-		Name:       h.Cfg.EffectiveRegistryName(),
-		Version:    version.Version,
-		URL:        displayURL,
-		Host:       hostOf(displayURL),
-		UsingProxy: h.Cfg.EffectiveRegistryProxy() != "",
-		UsingAuth:  h.Cfg.EffectiveUsingAuth(),
-		// CacheTTLSeconds is env-only and display-only: nothing consumes it
-		// since v0.5.0 reads the inventory straight from local storage.
-		CacheTTLSeconds:       int(h.Cfg.CacheTTL.Seconds()),
-		AllowDelete:           h.Cfg.EffectiveAllowDelete(),
-		AllowPull:             h.Cfg.EffectiveAllowPull(),
-		PullQueueSize:         h.Cfg.PullQueueSize,
+		Name:                  h.Cfg.RegistryName(),
+		Version:               version.Version,
+		URL:                   displayURL,
+		Host:                  hostOf(displayURL),
+		UsingAuth:             h.Cfg.UsingAuth(),
+		AllowDelete:           h.Cfg.AllowDelete(),
+		AllowPull:             h.Cfg.AllowPull(),
 		AllowCredentials:      h.Vault != nil,
 		AllowProxies:          h.Proxies != nil,
 		CredentialsDir:        h.Cfg.CredentialsDir,
 		CredentialError:       credErr,
-		StatsEnabled:          h.Cfg.EffectiveAllowRegistryEvents() && h.DB != nil,
-		AllowRegistryEvents:   h.Cfg.EffectiveAllowRegistryEvents(),
+		StatsEnabled:          h.Cfg.AllowRegistryEvents() && h.DB != nil,
+		AllowRegistryEvents:   h.Cfg.AllowRegistryEvents(),
 		StatsError:            statsErr,
-		NotifyTokenConfigured: h.Cfg.NotifyToken != "",
+		NotifyTokenConfigured: h.Cfg.NotifyToken() != "",
 		StatsSince:            statsSince,
-		StatsRetentionDays:    h.Cfg.EffectiveStatsRetentionDays(),
+		StatsRetentionDays:    h.Cfg.StatsRetentionDays(),
 		StatsIgnoreUseragents: ignore,
 		MutableSettings: MutableSettings{
-			RegistryURL:          h.Cfg.EffectiveRegistryURL(),
-			RegistryURLSource:    src(h.Cfg.Mutable, "registry.url"),
-			RegistryProxy:        h.Cfg.EffectiveRegistryProxy(),
-			RegistryProxySource:  src(h.Cfg.Mutable, "registry.proxy"),
-			RegistryName:         h.Cfg.EffectiveRegistryName(),
-			RegistryNameSource:   src(h.Cfg.Mutable, "registry.name"),
-			RegistryUsername:     h.Cfg.EffectiveRegistryUsername(),
-			RegistryUsernameSrc:  src(h.Cfg.Mutable, "registry.username"),
-			UsingAuth:            h.Cfg.EffectiveUsingAuth(),
-			AllowDelete:          h.Cfg.EffectiveAllowDelete(),
-			AllowDeleteSource:    src(h.Cfg.Mutable, "allow.delete"),
-			AllowPull:            h.Cfg.EffectiveAllowPull(),
-			AllowPullSource:      src(h.Cfg.Mutable, "allow.pull"),
-			AllowRegistryEvents:  h.Cfg.EffectiveAllowRegistryEvents(),
-			AllowRegistryEvtsSrc: src(h.Cfg.Mutable, "allow.registry_events"),
-			StatsRetentionDays:   h.Cfg.EffectiveStatsRetentionDays(),
-			StatsRetentionSrc:    src(h.Cfg.Mutable, "stats.retention.days"),
-			PullPlatforms:        strings.Join(h.Cfg.EffectivePullPlatforms(), ","),
-			PullPlatformsSrc:     src(h.Cfg.Mutable, "pull.platforms"),
+			RegistryURL:         h.Cfg.RegistryURL(),
+			RegistryName:        h.Cfg.RegistryName(),
+			RegistryUsername:    h.Cfg.RegistryUsername(),
+			UsingAuth:           h.Cfg.UsingAuth(),
+			AllowDelete:         h.Cfg.AllowDelete(),
+			AllowPull:           h.Cfg.AllowPull(),
+			AllowRegistryEvents: h.Cfg.AllowRegistryEvents(),
+			StatsRetentionDays:  h.Cfg.StatsRetentionDays(),
+			PullPlatforms:       strings.Join(h.Cfg.PullPlatforms(), ","),
 		},
 	})
 }
@@ -366,7 +326,7 @@ func (h *Handlers) registryURL(r *http.Request) string {
 		}
 		return scheme + "://" + host
 	}
-	return strings.TrimSuffix(h.Cfg.RegistryURL, "/")
+	return strings.TrimSuffix(h.Cfg.RegistryURL(), "/")
 }
 
 // forwardedProto returns "http" / "https" when a reverse proxy supplied
@@ -700,7 +660,7 @@ func sumIndexMembers(ctx context.Context, store storage.Storage, repo string, do
 // Note: deleting a manifest only removes references — registryd's storage
 // keeps the blobs until a GC pass runs (out of scope for v0.4.0).
 func (h *Handlers) DeleteTag(w http.ResponseWriter, r *http.Request) {
-	if !h.Cfg.EffectiveAllowDelete() {
+	if !h.Cfg.AllowDelete() {
 		writeError(w, r, http.StatusForbidden, errDeleteDisabled)
 		return
 	}
