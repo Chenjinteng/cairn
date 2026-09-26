@@ -138,9 +138,10 @@ func TestPlatformMatchAny(t *testing.T) {
 
 // --- planTransfer end-to-end --------------------------------------------------
 
-// TestPlanTransferIndexFiltering is the v0.6.0 regression: a multi-arch
-// index with [linux/amd64, linux/arm64, linux/arm/v7] and an allow-list of
-// ["linux/amd64"] must fetch only the amd64 child manifest and aggregate
+// TestPlanTransferIndexFiltering is the platform allow-list regression: a
+// multi-arch index with [linux/amd64, linux/arm64, linux/arm/v7] and an
+// allow-list of ["linux/amd64"] must fetch only the amd64 child manifest
+// and aggregate
 // its blobs (one config + one layer).
 func TestPlanTransferIndexFiltering(t *testing.T) {
 	idx, children := buildIndexManifest(t, []platformSpec{

@@ -262,7 +262,7 @@ func (r *Runtime) Start(ctx context.Context) error {
 	if r.DB != nil && r.Cfg != nil {
 		go r.retentionLoop(r.PullCtx)
 	}
-	// v0.5.10: background proxy reachability loop. Probes each registered
+	// v0.5.9: background proxy reachability loop. Probes each registered
 	// proxy every 60s so the management page can show live status without
 	// forcing operators to wait for a failed pull to find out the entry
 	// is dead. Boot kicks one probe so the UI never lingers on "unknown".

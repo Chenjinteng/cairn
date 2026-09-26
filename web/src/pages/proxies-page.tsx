@@ -50,7 +50,7 @@ export default function ProxiesPage({ config: initialConfig }: Props) {
   const { message, modal } = AntdApp.useApp();
   const [config, setConfig] = useState<AppConfig | null>(initialConfig);
   const [proxies, setProxies] = useState<ProxyEntry[]>([]);
-  // v0.5.10: per-row spinner for the '立即探测' button.
+  // v0.5.9: per-row spinner for the '立即探测' button.
   const [probingIds, setProbingIds] = useState<Record<string, boolean>>({});
   const [editing, setEditing] = useState<ProxyEntry | null>(null);
   const [form] = Form.useForm<FormValues>();

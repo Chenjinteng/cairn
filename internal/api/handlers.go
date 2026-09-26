@@ -104,7 +104,7 @@ type MutableSettings struct {
 	AllowPull           bool `json:"allowPull"`
 	AllowRegistryEvents bool `json:"allowRegistryEvents"`
 	StatsRetentionDays  int  `json:"statsRetentionDays"`
-	// PullPlatforms (v0.6.0) is the platform allow-list applied to
+	// PullPlatforms is the platform allow-list applied to
 	// multi-arch image indexes on pull. Empty string = "pull every
 	// platform" (current behaviour); CSV of "<os>/<arch>[/<variant>]"
 	// tokens otherwise (e.g. "linux/amd64,linux/arm64"). UI renders
@@ -246,7 +246,7 @@ func (h *Handlers) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case "stringcsv":
-			// v0.6.0: each token is <os>/<arch>[/<variant>] with empty
+			// Each token is <os>/<arch>[/<variant>] with empty
 			// meaning "all platforms". Reject garbage here so a typo
 			// ("amd64" with no "linux/" prefix) doesn't silently turn
 			// into a pull-no-op at runtime.

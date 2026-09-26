@@ -28,7 +28,7 @@ import (
 // URL is the proxy endpoint (http://... or socks5://...). If Username /
 // Password are set, the proxy is used with basic auth.
 //
-// v0.5.10: the last three fields are populated by Store.Probe and surfaced
+// v0.5.9: the last three fields are populated by Store.Probe and surfaced
 // in the proxy-management page so operators can spot dead entries without
 // waiting for a pull to fail. LastProbeStatus is one of:
 //

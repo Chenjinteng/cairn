@@ -109,7 +109,7 @@ export interface MutableSettings {
   allowRegistryEvents: boolean;
   statsRetentionDays: number;
   /**
-   * v0.6.0: platform allow-list applied to multi-arch image indexes on pull.
+   * Platform allow-list applied to multi-arch image indexes on pull.
    * Empty string = "all platforms" (current behaviour). CSV of
    * "<os>/<arch>[/<variant>]" tokens (e.g. "linux/amd64,linux/arm64"
    * or "linux/amd64,linux/arm/v7"). Lowercased server-side.
@@ -281,7 +281,7 @@ export interface ProxyEntry {
   note?: string;
   createdAt: string;
   updatedAt: string;
-  /** v0.5.10: reachability — 'ok' / 'failed' / 'unknown' (never probed) */
+  /** v0.5.9: reachability — 'ok' / 'failed' / 'unknown' (never probed) */
   lastProbeStatus?: 'ok' | 'failed' | 'unknown' | '';
   lastProbeAt?: string;
   lastProbeError?: string;

@@ -95,11 +95,12 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
   const [allowDeleteDraft, setAllowDeleteDraft] = useState<boolean>(true);
   const [allowPullDraft, setAllowPullDraft] = useState<boolean>(true);
   const [statsRetentionDraft, setStatsRetentionDraft] = useState<number>(365);
-  // v0.6.0: platform allow-list applied to multi-arch image indexes on
-  // pull. Empty array = "pull every platform" (preserves pre-v0.6.0
-  // behaviour); non-empty = only fetch children whose OS/architecture
-  // matches. The server stores this as a CSV string under
-  // config.MutableKey "pull.platforms"; the UI speaks a string array.
+  // Platform allow-list applied to multi-arch image indexes on pull.
+  // Empty array = "pull every platform" (the behaviour before the
+  // allow-list existed); non-empty = only fetch children whose
+  // OS/architecture matches. The server stores this as a CSV string
+  // under config.MutableKey "pull.platforms"; the UI speaks a string
+  // array.
   const [pullPlatformsDraft, setPullPlatformsDraft] = useState<string[]>([]);
   // v0.5.3: registry self-auth (Basic). Password is NEVER seeded from
   // config -- server deliberately doesn't echo it back, so we always
@@ -241,8 +242,9 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
     setAllowDeleteDraft(m.allowDelete ?? false);
     setAllowPullDraft(m.allowPull ?? false);
     setStatsRetentionDraft(m.statsRetentionDays ?? 365);
-    // v0.6.0: server stores CSV under mutable.pullPlatforms; split it back
-    // into the UI's array form. Empty CSV → empty array ("all platforms").
+    // Server stores the allow-list as CSV under mutable.pullPlatforms;
+    // split it back into the UI's array form. Empty CSV → empty array
+    // ("all platforms").
     setPullPlatformsDraft(
       (m.pullPlatforms ?? '')
         .split(',')
@@ -569,7 +571,7 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
               editing
                 ? '勾选目标平台；取消勾选 = 排除；保存后对下一个 pull 任务立即生效。'
                 : pullPlatformsDraft.length === 0
-                  ? '当前未启用过滤：多架构镜像会按上游索引全部拉取（与 v0.6.0 之前的行为一致）。'
+                  ? '当前未启用过滤：多架构镜像会按上游索引全部拉取（等同历史默认行为）。'
                   : `已选 ${pullPlatformsDraft.length} 个：${pullPlatformsDraft.join(', ')}。`
             }
           >

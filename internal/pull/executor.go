@@ -98,10 +98,11 @@ type Orchestrator struct {
 	// when Mutable is nil OR was never written to).
 	DefaultSourceURL string
 
-	// pullPlatforms (v0.6.0) returns the platform allow-list the executor
-	// applies to multi-arch image indexes. Empty = "pull every platform"
-	// (preserves pre-v0.6.0 behaviour). Read through Config so a runtime
-	// change via PATCH /api/config takes effect on the next queued job.
+	// pullPlatforms returns the platform allow-list the executor applies
+	// to multi-arch image indexes. Empty = "pull every platform" (the
+	// behaviour before the allow-list existed). Read through Config so a
+	// runtime change via PATCH /api/config takes effect on the next queued
+	// job.
 	pullPlatforms func() []string
 
 	PullHistoryRetention int

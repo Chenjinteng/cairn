@@ -102,7 +102,7 @@ func (e *ExtraHandlers) RegisterRoutes(r chi.Router) {
 		r.Patch("/{id}", e.UpdateProxy)
 		r.Delete("/{id}", e.DeleteProxy)
 		r.Post("/{id}/test", e.TestProxy)
-		// v0.5.10: single-entry on-demand probe (the per-period background
+		// v0.5.9: single-entry on-demand probe (the per-period background
 		// probe already updates LastProbeStatus on every tick; this is the
 		// manual button in the management page).
 		r.Post("/{id}/probe", e.ProbeProxy)
@@ -787,7 +787,7 @@ type proxyView struct {
 	Note      string `json:"note,omitempty"`
 	CreatedAt string `json:"createdAt"`
 	UpdatedAt string `json:"updatedAt"`
-	// v0.5.10: reachability status from the background probe loop.
+	// v0.5.9: reachability status from the background probe loop.
 	LastProbeStatus string `json:"lastProbeStatus,omitempty"`
 	LastProbeAt     string `json:"lastProbeAt,omitempty"`
 	LastProbeError  string `json:"lastProbeError,omitempty"`
@@ -1005,7 +1005,7 @@ func (e *ExtraHandlers) TestProxy(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// v0.5.10: ProbeProxy triggers an immediate reachability check for one
+// v0.5.9: ProbeProxy triggers an immediate reachability check for one
 // proxy entry. Unlike TestProxy (which fetches a target *through* the
 // proxy), this only confirms the proxy endpoint itself is reachable +
 // speaks HTTP/SOCKS, so a dead entry is flagged before any pull wastes
