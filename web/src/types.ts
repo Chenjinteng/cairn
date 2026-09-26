@@ -285,6 +285,11 @@ export interface ProxyEntry {
   lastProbeStatus?: 'ok' | 'failed' | 'unknown' | '';
   lastProbeAt?: string;
   lastProbeError?: string;
+  /**
+   * v0.5.15: 探测的 TCP 建连往返耗时（毫秒）。
+   * 探测失败时为 0；旧版本探测过的条目也没有它——两者一律不显示延迟。
+   */
+  lastProbeLatencyMs?: number;
 }
 
 export interface ProxyInput {
@@ -307,10 +312,16 @@ export interface ProxyPatch {
 /**
  * v0.5.13: 保存前「测试连接」的入参。
  *
- * 没有 id：这是一次**不落库**的试连，测的就是表单里此刻的值，
- * 既不写 proxies.json，也不改任何条目的探测状态。
+ * 这是一次**不落库**的试连，测的就是表单里此刻的值，既不写 proxies.json，
+ * 也不改任何条目的探测状态。
+ *
+ * v0.5.15: 编辑弹窗复用同一端点。带上 id 表示「这是一条已存的代理」：
+ * 表单不回显密码，所以密码留空且用户名未改动时，服务端会回退到已存密码，
+ * 让试连结论跟用户在列表里看到的那条保持一致。新增（未保存）时省略 id。
  */
 export interface ProxyTestInput {
+  /** 已存条目的 id；新增（还没保存）时省略。 */
+  id?: string;
   url: string;
   username?: string;
   password?: string;
@@ -341,6 +352,8 @@ export interface ProxyProbeSummary {
   status?: string;
   probedAt?: string;
   error?: string;
+  /** v0.5.15: TCP 建连往返耗时（毫秒）；失败时省略。 */
+  latencyMs?: number;
 }
 
 /**

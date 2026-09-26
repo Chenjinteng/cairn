@@ -2,6 +2,8 @@ package proxies
 
 import (
 	"context"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -73,7 +75,7 @@ func TestRecordProbeReleasesLock(t *testing.T) {
 	if err := s.Put(Proxy{ID: "a", Name: "alpha", URL: "http://127.0.0.1:1"}); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	s.recordProbe("a", time.Now().UTC(), "failed", "synthetic")
+	s.recordProbe("a", time.Now().UTC(), "failed", 0, "synthetic")
 
 	done := make(chan struct{})
 	go func() {
@@ -139,7 +141,7 @@ func TestConcurrentStress(t *testing.T) {
 						_ = s.Delete(id)
 					case 4:
 						id := string(rune('a' + (i % 5)))
-						s.recordProbe(id, time.Now().UTC(), "ok", "")
+						s.recordProbe(id, time.Now().UTC(), "ok", 0.42, "")
 					}
 				}
 			}()
@@ -166,5 +168,124 @@ func TestPersistToDiskCreatesFile(t *testing.T) {
 	}
 	if st.Size() == 0 {
 		t.Fatalf("file empty")
+	}
+}
+
+// TestProbeSucceedsForPlainTCPListener is the regression test for the
+// <proxy> report ("passes the test on create, shows as unavailable on
+// probe"): a bare listener that accepts the socket and then waits for a
+// CONNECT line — exactly how 3proxy behaves — must be reported as
+// reachable. The old probe followed the dial with a HEAD request and
+// hung until its deadline, so a healthy proxy was marked "failed".
+func TestProbeSucceedsForPlainTCPListener(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	// Accept, then hold the connection open without ever writing a byte.
+	go func() {
+		for {
+			c, aerr := ln.Accept()
+			if aerr != nil {
+				return
+			}
+			go func(c net.Conn) {
+				time.Sleep(2 * time.Second)
+				_ = c.Close()
+			}(c)
+		}
+	}()
+
+	s := newTestStore(t)
+	id := "plain-tcp"
+	if err := s.Put(Proxy{ID: id, Name: id, URL: "http://" + ln.Addr().String()}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if err := s.Probe(id); err != nil {
+		t.Fatalf("Probe against a live TCP listener must succeed, got: %v", err)
+	}
+	got, err := s.Get(id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.LastProbeStatus != "ok" {
+		t.Fatalf("LastProbeStatus = %q, want ok", got.LastProbeStatus)
+	}
+	if got.LastProbeAt.IsZero() {
+		t.Fatalf("LastProbeAt was not recorded")
+	}
+	if got.LastProbeLatencyMs <= 0 {
+		t.Fatalf("LastProbeLatencyMs = %v, want > 0", got.LastProbeLatencyMs)
+	}
+	if got.LastProbeError != "" {
+		t.Fatalf("LastProbeError = %q, want empty", got.LastProbeError)
+	}
+}
+
+// TestProbeReportsDialFailure pins the other half of the contract:
+// nothing listening on the port means status "failed", a non-empty
+// error message, and no latency.
+func TestProbeReportsDialFailure(t *testing.T) {
+	// Bind a port, learn its address, then release it so the dial is
+	// refused instead of hitting whatever happens to be running locally.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	if err := ln.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	s := newTestStore(t)
+	id := "dead"
+	if err := s.Put(Proxy{ID: id, Name: id, URL: "http://" + addr}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if err := s.Probe(id); err == nil {
+		t.Fatalf("Probe against a closed port must fail")
+	}
+	got, err := s.Get(id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.LastProbeStatus != "failed" {
+		t.Fatalf("LastProbeStatus = %q, want failed", got.LastProbeStatus)
+	}
+	if got.LastProbeError == "" {
+		t.Fatalf("LastProbeError is empty, want a dial error")
+	}
+	if got.LastProbeLatencyMs != 0 {
+		t.Fatalf("LastProbeLatencyMs = %v, want 0 on failure", got.LastProbeLatencyMs)
+	}
+}
+
+// TestDialAddrDefaultsPort covers the host:port we hand to the dialer,
+// including the scheme default ports and the no-host edge case.
+func TestDialAddrDefaultsPort(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want string
+	}{
+		{"http://10.1.2.3:7890", "10.1.2.3:7890"},
+		{"http://10.1.2.3", "10.1.2.3:80"},
+		{"https://proxy.example.com", "proxy.example.com:443"},
+		{"socks5://10.1.2.3", "10.1.2.3:1080"},
+		{"socks5://10.1.2.3:1080", "10.1.2.3:1080"},
+	}
+	for _, c := range cases {
+		u, err := url.Parse(c.raw)
+		if err != nil {
+			t.Fatalf("url.Parse(%q): %v", c.raw, err)
+		}
+		if got := dialAddr(u); got != c.want {
+			t.Errorf("dialAddr(%q) = %q, want %q", c.raw, got, c.want)
+		}
+	}
+	// No host at all must yield "" so Probe reports "missing host"
+	// instead of dialling something unexpected.
+	if got := dialAddr(&url.URL{Scheme: "http"}); got != "" {
+		t.Errorf("dialAddr(no host) = %q, want empty", got)
 	}
 }
