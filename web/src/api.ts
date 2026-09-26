@@ -12,6 +12,7 @@ import type {
   ProxyEntry,
   ProxyInput,
   ProxyPatch,
+  ProxyProbeAllResult,
   ProxyTestResult,
   PullJob,
   PullJobInput,
@@ -183,6 +184,15 @@ export const probeProxy = (id: string) =>
     `/api/proxies/${encodeURIComponent(id)}/probe`,
     { method: 'POST' }
   );
+
+/**
+ * v0.5.12: 一次探测全部代理的 URL 可达性。
+ *
+ * 放服务端做而不是前端循环：服务端 ProbeAll 是并行的，整批最坏约 5 秒；
+ * 前端逐条调用在全部不可达时最坏 N×5 秒。
+ */
+export const probeAllProxies = () =>
+  request<ProxyProbeAllResult>('/api/proxies/probe', { method: 'POST' });
 
 /** 测试代理连通性；targetUrl 留空则服务端用本 registry 的 /v2/。 */
 export const testProxy = (id: string, targetUrl?: string) =>

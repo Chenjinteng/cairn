@@ -315,6 +315,34 @@ export interface ProxyTestResult {
   error?: string;
 }
 
+/**
+ * v0.5.12: 「探测全部」里单个代理的结果。
+ * 字段与逐行探测的返回刻意保持一致，前端可以统一渲染。
+ */
+export interface ProxyProbeSummary {
+  id: string;
+  name: string;
+  ok: boolean;
+  /** 落库后的状态：'ok' / 'failed' / ''（从未探测）。 */
+  status?: string;
+  probedAt?: string;
+  error?: string;
+}
+
+/**
+ * v0.5.12: `POST /api/proxies/probe` 的汇总返回。
+ *
+ * `unknown` 覆盖"探测期间该条目被删掉"这类边角：不能把没出结果的说成不可用。
+ * `ok + failed + unknown === total`。
+ */
+export interface ProxyProbeAllResult {
+  total: number;
+  ok: number;
+  failed: number;
+  unknown: number;
+  results: ProxyProbeSummary[];
+}
+
 /** 热度统计窗口。页面只提供这三档，服务端本身接受任意天数。 */
 export type StatsWindow = 7 | 30 | 90;
 

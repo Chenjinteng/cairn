@@ -7,7 +7,6 @@ import {
   Form,
   Input,
   Modal,
-  Popconfirm,
   Space,
   Table,
   Tag,
@@ -19,7 +18,9 @@ import {
   CloseCircleOutlined,
   DeleteOutlined,
   EditOutlined,
+  LoadingOutlined,
   PlusOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 
@@ -28,10 +29,20 @@ import {
   deleteProxy,
   fetchConfig,
   listProxies,
+  probeAllProxies,
+  probeProxy,
   testProxy,
   updateProxy,
 } from '../api';
-import type { ApiResult, AppConfig, ProxyEntry, ProxyInput, ProxyPatch, ProxyTestResult } from '../types';
+import type {
+  ApiResult,
+  AppConfig,
+  ProxyEntry,
+  ProxyInput,
+  ProxyPatch,
+  ProxyProbeAllResult,
+  ProxyTestResult,
+} from '../types';
 import { formatDateTime } from '../utils';
 
 interface Props {
@@ -52,6 +63,9 @@ export default function ProxiesPage({ config: initialConfig }: Props) {
   const [proxies, setProxies] = useState<ProxyEntry[]>([]);
   // v0.5.9: per-row spinner for the '立即探测' button.
   const [probingIds, setProbingIds] = useState<Record<string, boolean>>({});
+  // v0.5.12: 「探测全部」的页头按钮 loading。批量时每一行也会被点亮成"探测中"，
+  // 但那个共用 probingIds —— 这个 state 只表达"整批还在飞"。
+  const [probingAll, setProbingAll] = useState(false);
   const [editing, setEditing] = useState<ProxyEntry | null>(null);
   const [form] = Form.useForm<FormValues>();
   const [modalOpen, setModalOpen] = useState(false);
@@ -90,6 +104,37 @@ export default function ProxiesPage({ config: initialConfig }: Props) {
     void refresh();
   }, [refresh]);
 
+  /**
+   * v0.5.12: 单条探测的**唯一**实现，逐行按钮与"新增后即测"共用。
+   *
+   * 之所以抽成一个函数：v0.5.9 引入的 handleProbe 里调用了 `probeProxy`
+   * 却从未 import 它，点击后整段逻辑在运行期抛 ReferenceError，
+   * 表现就是"点了没反应"。构建脚本只跑 vite build（不含 tsc），所以没拦住。
+   * 顺带补上 catch：api 层若改回抛异常，也会变成可见提示而不是静默失败。
+   */
+  const probeOne = async (id: string, name: string) => {
+    setProbingIds((prev) => ({ ...prev, [id]: true }));
+    try {
+      const r = await probeProxy(id);
+      if (r.success && r.data) {
+        const out = r.data;
+        if (out.ok) {
+          message.success(`${name} 可用`);
+        } else {
+          message.warning(`${name} 不可用: ${out.error || '未知错误'}`);
+        }
+      } else {
+        message.error(r.message ?? '探测失败');
+      }
+    } catch (err) {
+      message.error(`探测 ${name} 出错: ${String((err as Error)?.message ?? err)}`);
+    } finally {
+      // 先清"探测中"再刷新：反过来的话刷完列表状态又盖回旧值。
+      setProbingIds((prev) => ({ ...prev, [id]: false }));
+      await refresh();
+    }
+  };
+
   const handleOpenCreate = () => {
     setEditing(null);
     form.resetFields();
@@ -117,6 +162,9 @@ export default function ProxiesPage({ config: initialConfig }: Props) {
     } catch {
       return;
     }
+    // v0.5.12: 新建成功后要立刻探一次连通性。代理此时已经落库，所以这里只是
+    // 记住它，等 modal 关掉、列表刷出来之后再单独探 —— 不让探测拖慢"保存"。
+    let created: ProxyEntry | null = null;
     try {
       if (editing) {
         const patch: ProxyPatch = {
@@ -148,37 +196,28 @@ export default function ProxiesPage({ config: initialConfig }: Props) {
           message.error(result.message || '创建失败');
           return;
         }
-        message.success('已创建代理');
+        created = result.data ?? null;
+        // 真实连通性由随后的探测给出，这里只说"建好了、正在测"。
+        message.success('已创建代理，正在探测连通性…');
       }
       setModalOpen(false);
       await refresh();
+      if (created) {
+        // 探测最坏 5 秒（internal/proxies.Probe 的总预算）。此刻 modal 已关、
+        // 列表已刷新，用户在行上能看到"探测中"再变成最终状态，不会以为卡住了。
+        await probeOne(created.id, created.name);
+      }
     } catch (err) {
       message.error(String((err as Error)?.message ?? err));
     }
   };
 
-  const handleProbe = async (p: ProxyEntry) => {
-  setProbingIds((prev) => ({ ...prev, [p.id]: true }));
-  try {
-    const r = await probeProxy(p.id);
-    if (r.success && r.data) {
-      const out = r.data;
-      if (out.ok) {
-        message.success(`${p.name} 可用`);
-      } else {
-        message.warning(`${p.name} 不可用: ${out.error || '未知错误'}`);
-      }
-      // Refresh from server so the row reflects persisted LastProbe* fields.
-      await refresh();
-    } else {
-      message.error(r.message ?? '探测失败');
-    }
-  } finally {
-    setProbingIds((prev) => ({ ...prev, [p.id]: false }));
-  }
-};
+  /** v0.5.12: 逐行"探测"按钮的入口，逻辑全在 probeOne。 */
+  const handleProbe = (p: ProxyEntry) => {
+    void probeOne(p.id, p.name);
+  };
 
-const handleOpenTest = (p: ProxyEntry) => {
+  const handleOpenTest = (p: ProxyEntry) => {
     setTesting(p);
     setTestTarget('');
     setTestResult(null);
@@ -207,6 +246,11 @@ const handleOpenTest = (p: ProxyEntry) => {
     }
   };
 
+  /**
+   * v0.5.12: 删除只保留这一层确认。
+   * 之前是 Popconfirm 再套 modal.confirm，而"影响面"说明只在第二层，
+   * 等于必须连点两次才删得掉。现在留信息量更大的这一层。
+   */
   const handleDelete = (p: ProxyEntry) => {
     modal.confirm({
       title: `删除代理「${p.name}」？`,
@@ -224,6 +268,46 @@ const handleOpenTest = (p: ProxyEntry) => {
         await refresh();
       },
     });
+  };
+
+  /**
+   * v0.5.12: 「探测全部」走服务端的批量端点，而不是前端 for 循环调 N 次。
+   * 服务端 ProbeAll 并行探测，整批耗时约等于单条（最坏 5 秒）；
+   * 前端循环则是 N×5 秒，而且中途每行的状态会来回闪。
+   */
+  const handleProbeAll = async () => {
+    if (proxies.length === 0) {
+      message.info('还没有代理可探测');
+      return;
+    }
+    setProbingAll(true);
+    // 整表点亮"探测中"：批量结果等最后一个回来才一起出，逐行 spinner 表达不了。
+    const allProbing: Record<string, boolean> = {};
+    for (const p of proxies) {
+      allProbing[p.id] = true;
+    }
+    setProbingIds(allProbing);
+    try {
+      const r = await probeAllProxies();
+      if (!r.success || !r.data) {
+        message.error(r.message ?? '批量探测失败');
+        return;
+      }
+      const out: ProxyProbeAllResult = r.data;
+      const suffix = out.unknown > 0 ? `，${out.unknown} 未出结果` : '';
+      const text = `已探测 ${out.total} 个代理：${out.ok} 可用 / ${out.failed} 不可用${suffix}`;
+      if (out.failed === 0 && out.unknown === 0) {
+        message.success(text);
+      } else {
+        message.warning(text);
+      }
+    } catch (err) {
+      message.error(`批量探测出错: ${String((err as Error)?.message ?? err)}`);
+    } finally {
+      setProbingAll(false);
+      setProbingIds({});
+      await refresh();
+    }
   };
 
   const columns: ColumnsType<ProxyEntry> = [
@@ -269,6 +353,15 @@ const handleOpenTest = (p: ProxyEntry) => {
       key: 'lastProbeStatus',
       width: 110,
       render: (_, p) => {
+        // v0.5.12: 探测进行中优先于落库状态 —— 否则刚点完按钮行上还是旧结果，
+        // 看不出"已经在测了"。
+        if (probingIds[p.id]) {
+          return (
+            <Tag color="processing" icon={<LoadingOutlined />}>
+              探测中
+            </Tag>
+          );
+        }
         const s = p.lastProbeStatus || '';
         if (s === 'ok') return <Tag color="success" icon={<CheckCircleOutlined />}>可用</Tag>;
         if (s === 'failed')
@@ -296,7 +389,8 @@ const handleOpenTest = (p: ProxyEntry) => {
     {
       title: '操作',
       key: 'actions',
-      width: 230,
+      // v0.5.12: 230 → 250，容纳"探测中…"（比"探测"宽）。
+      width: 250,
       fixed: 'right',
       render: (_, p) => (
         <Space size={4}>
@@ -307,7 +401,7 @@ const handleOpenTest = (p: ProxyEntry) => {
             loading={probingIds[p.id]}
             onClick={() => void handleProbe(p)}
           >
-            探测
+            {probingIds[p.id] ? '探测中…' : '探测'}
           </Button>
           <Button type="link" size="small" onClick={() => handleOpenTest(p)}>
             测试
@@ -315,17 +409,11 @@ const handleOpenTest = (p: ProxyEntry) => {
           <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleOpenEdit(p)}>
             编辑
           </Button>
-          <Popconfirm
-            title="确定删除？"
-            okText="删除"
-            cancelText="取消"
-            okButtonProps={{ danger: true }}
-            onConfirm={() => handleDelete(p)}
-          >
-            <Button type="link" size="small" danger icon={<DeleteOutlined />}>
-              删除
-            </Button>
-          </Popconfirm>
+          {/* v0.5.12: 这里不再套 Popconfirm —— 删除确认由 handleDelete 的
+              modal.confirm 单独负责，那一层才写了"影响面"。 */}
+          <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => handleDelete(p)}>
+            删除
+          </Button>
         </Space>
       ),
     },
@@ -375,6 +463,16 @@ const handleOpenTest = (p: ProxyEntry) => {
           <p className="page-subtitle">管理访问外部源时使用的 HTTP 代理。</p>
         </div>
         <div className="page-actions">
+          <Tooltip title="逐个探测所有代理地址本身是否可达（不穿过代理访问目标），结果直接更新状态列">
+            <Button
+              icon={<ThunderboltOutlined />}
+              loading={probingAll}
+              disabled={proxies.length === 0}
+              onClick={() => void handleProbeAll()}
+            >
+              探测全部
+            </Button>
+          </Tooltip>
           <Button type="primary" icon={<PlusOutlined />} onClick={handleOpenCreate}>
             新增代理
           </Button>

@@ -106,6 +106,11 @@ func (e *ExtraHandlers) RegisterRoutes(r chi.Router) {
 		// probe already updates LastProbeStatus on every tick; this is the
 		// manual button in the management page).
 		r.Post("/{id}/probe", e.ProbeProxy)
+		// v0.5.12: batch probe behind the "探测全部" button. A static
+		// segment, so it differs from "/{id}/probe" in segment count and
+		// chi has no ambiguity; real ids are "YYYYMMDD-HHMMSS-mmm-<hex>"
+		// and can never collide with the literal "probe" either.
+		r.Post("/probe", e.ProbeAllProxies)
 	})
 
 	if e.Events != nil {
@@ -1034,6 +1039,66 @@ func (e *ExtraHandlers) ProbeProxy(w http.ResponseWriter, r *http.Request) {
 		"ok":       true,
 		"status":   p.LastProbeStatus,
 		"probedAt": p.LastProbeAt,
+	})
+}
+
+// proxyProbeView is one row of the batch-probe summary. Deliberately leaner
+// than proxyView: the page only needs to know which entry ended up unusable.
+type proxyProbeView struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	OK       bool   `json:"ok"`
+	Status   string `json:"status,omitempty"`
+	ProbedAt string `json:"probedAt,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
+// v0.5.12: ProbeAllProxies probes every proxy entry at once — the "探测全部"
+// button on the management page.
+//
+// Always answers 200 with a summary: "some proxies are unreachable" is the
+// very thing this endpoint exists to report, not a server error. ProbeAll
+// only surfaces the *first* failure it saw, which carries no more information
+// than the per-entry statuses re-read below, so its return value is ignored.
+func (e *ExtraHandlers) ProbeAllProxies(w http.ResponseWriter, r *http.Request) {
+	if e.proxiesUnavailable(w, r) {
+		return
+	}
+	// ProbeAll probes in parallel and waits for all of them, so the batch
+	// costs about as much as a single entry (5s worst case) rather than N×5s.
+	_ = e.Proxies.ProbeAll(r.Context())
+
+	items := e.Proxies.List()
+	results := make([]proxyProbeView, 0, len(items))
+	okN, failedN, unknownN := 0, 0, 0
+	for _, p := range items {
+		switch p.LastProbeStatus {
+		case "ok":
+			okN++
+		case "failed":
+			failedN++
+		default:
+			// Never probed, or the entry disappeared while its probe was in
+			// flight. Reporting that as "failed" would be a lie, so it gets
+			// its own bucket instead.
+			unknownN++
+		}
+		results = append(results, proxyProbeView{
+			ID:       p.ID,
+			Name:     p.Name,
+			OK:       p.LastProbeStatus == "ok",
+			Status:   p.LastProbeStatus,
+			ProbedAt: lastProbeAtString(p.LastProbeAt),
+			Error:    p.LastProbeError,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"total":   len(items),
+		"ok":      okN,
+		"failed":  failedN,
+		"unknown": unknownN,
+		"results": results,
 	})
 }
 

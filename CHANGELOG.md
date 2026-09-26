@@ -6,6 +6,39 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.12] - 2026-09-26
+
+本轮主题:**代理交互——把「探测」从看不见的后台动作变成看得见的前台操作**。起因是 158 上点「探测」按钮没有任何反应:根因是 `web/src/pages/proxies-page.tsx` 调用了 `probeProxy()` 却**从未 import**(由 `f62a3e1` 引入),而 `"build": "vite build"` 不含 `tsc`,所以前端构建一直"成功"。顺带把同时提出的三条交互诉求一起做掉:删除只留一层确认、探测有进行中反馈、新增代理后立即探测,以及一个「一键探测全部」的入口。
+
+### 修复
+
+- **探测按钮点了没反应(本轮的真 bug)**:`web/src/pages/proxies-page.tsx` 补上 `probeProxy` 的 import。该符号被调用却从未导入,点击时抛 `ReferenceError`,被 React 事件处理吞掉,表现为"按钮能点、什么都不发生"。同一处还修掉了 `handleProbe` 的缩进错位。
+- **删除代理的确认从两层降为一层**:去掉按钮外层的 `Popconfirm`(标题只有"确定删除?"),保留 `modal.confirm`——后者承载真正需要用户判断的信息("不会影响已完成的拉取,但引用它的任务会立即失败")。确认次数 2 → 1,影响面说明不变。
+
+### 新增
+
+- **探测进行中反馈**:逐行抽成共享的 `probeOne(id, name)`,带 `catch`(任何抛出转成可见的 `message.error`)和 `finally`(先清行内标志再 `refresh()`),不留陈旧状态。`probingIds[p.id]` 为真时状态列渲染 `<Tag color="processing">探测中</Tag>`,行内按钮文案变"探测中…"(操作列宽 230 → 250);批量探测期间头部按钮显示 `loading`,整个表格可见地处于"探测中"。
+- **新增代理后立即探测连通性**:`handleSubmit` 保存成功后拿到新建条目,提示语改为"已创建代理,正在探测连通性…",随后复用同一个 `probeOne`。**刻意不做在 `CreateProxy` 里同步探测**——`Probe` 最坏情况要 5 秒(SOCKS5 拨号预算),会让"保存"按钮卡住;前端探测让弹窗立刻关闭而反馈照旧。
+- **一键探测全部**:代理页头部新增「探测全部」按钮(`ThunderboltOutlined`,`proxies.length === 0` 时禁用),对应新端点 **`POST /api/proxies/probe`**。**放服务端而不是前端 for 循环**的原因:前端串行最坏 N×5 秒,服务端 `ProbeAll` 并行,最坏约 5 秒。响应恒为 200 + 摘要 `{total, ok, failed, unknown, results:[{id, name, ok, status, probedAt, error}]}`;`unknown` 用于"探测途中条目被删除",而不是把未报告谎报成失败。`ok === total` 走 `message.success`,否则 `message.warning` 并列出可用/不可用计数。
+
+### 验证
+
+- `gofmt -l internal cmd` 无输出;`go vet ./internal/...` 退出码 0;`go build ./...` 退出码 0;`go test -count=1 ./internal/...` 全部 `ok`。
+- `cd web && ./node_modules/.bin/tsc --noEmit`:**`proxies-page.tsx` 的 TS2304(`probeProxy`)归零**,`api.ts` / `types.ts` 无新增错误。全量错误数 **17 → 16**:基线(HEAD)的 `proxies-page.tsx` 本来就带这条 TS2304(已实测:把 HEAD 版文件放回 `web/src` 跑一次 `tsc`,该文件 1 条错误),修完后全量 16 条,均为既有错误,不在本轮范围。
+- 路由无歧义:`POST /api/proxies/probe`(2 段)与 `POST /api/proxies/{id}/probe`(3 段)段数不同;id 形如 `YYYYMMDD-HHMMSS-mmm-<8hex>`,不会与字面量 `probe` 冲突。
+
+### 兼容性
+
+- **磁盘格式未变**:凭据库 / 代理库 / 热度库结构均未改动,升级不需迁移。
+- 新增的是**端点**,不是数据结构:`POST /api/proxies/probe` 为新增,既有 `POST /api/proxies/{id}/probe` 语义与响应不变。
+- 每分钟后台探测**自 v0.5.9 起已存在**(`internal/server/server.go` 里 `StartProbeLoop(r.PullCtx, 60*time.Second)`),不是本轮新增——用户问的"增加后后续每分钟都定时探测"早已生效。
+
+### 轮次与号位
+
+- 本轮占 **0.5.12**:「一键探测全部」是用户可感知的新能力(新按钮 + 新端点),按 `AGENTS.md` 取中版本档。
+- 原 0.5.12「韧性轮」顺延为 **0.5.13**,原 0.5.13「工程化」顺延为 **0.5.14**;`0.6.0` TLS 由人指定,不随顺延改号。**因此 0.5.11 小节末尾"留给 0.5.12 韧性轮"的两条(B6 `events.go` 的 `UnixNano`、B4 `proxies` 缺 `writeMu`)现在指的是 0.5.13。**
+- 这是连续第三轮顺延,号位表见 [`docs/ROADMAP.md`](./docs/ROADMAP.md)。
+
 ## [0.5.11] - 2026-09-26
 
 本轮主题:**hotfix — 收口 0.5.10 没修完的 ID 唯一性**。0.5.10 把 `randHex()` 的熵源从 `time.Now().UnixNano()` 换成了 `crypto/rand`，但随机后缀仍只有 **4 个 hex 字符(16 bit)**。400 个并发调用落在同一毫秒时，16 bit 的期望撞车数约 **1.2 次**——测试连跑 20 次有 **13 次 FAIL**。`newID()` 产出的是凭据库 / 代理库的**存储主键**，撞车等于静默覆盖(丢数据)，所以本轮把后缀加宽到 **8 个 hex 字符(32 bit)**，同场景期望撞车降到 **≈2e-5**。除此之外均为收尾。
