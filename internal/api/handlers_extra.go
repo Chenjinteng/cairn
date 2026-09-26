@@ -111,6 +111,10 @@ func (e *ExtraHandlers) RegisterRoutes(r chi.Router) {
 		// chi has no ambiguity; real ids are "YYYYMMDD-HHMMSS-mmm-<hex>"
 		// and can never collide with the literal "probe" either.
 		r.Post("/probe", e.ProbeAllProxies)
+		// v0.5.13: "test before save" — dials through a proxy config that is
+		// not in the store yet (the 新增代理 dialog). Static segment again,
+		// distinct from "/{id}/test" by segment count.
+		r.Post("/test", e.TestProxyDraft)
 	})
 
 	if e.Events != nil {
@@ -950,27 +954,110 @@ func (e *ExtraHandlers) TestProxy(w http.ResponseWriter, r *http.Request) {
 		TargetURL string `json:"targetUrl"`
 	}
 	_ = decodeJSON(r, &body)
-	target := strings.TrimSpace(body.TargetURL)
-	if target == "" {
-		// Default: probe the local registry's own /v2/ through the proxy.
-		base := strings.TrimSuffix(e.Full.RegistryURL(), "/")
-		if base == "" {
-			base = "http://" + r.Host
-		}
-		target = base + "/v2/"
-	}
+	target := e.proxyTestTarget(r, body.TargetURL)
 
-	proxyURL, err := url.Parse(p.URL)
+	proxyURL, err := proxyURLFrom(p.URL, p.Username, p.Password)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"ok": false, "error": "invalid proxy url: " + err.Error(), "targetUrl": target,
+			"ok": false, "error": err.Error(), "targetUrl": target,
 		})
 		return
 	}
-	if p.Username != "" {
-		proxyURL.User = url.UserPassword(p.Username, p.Password)
-	}
+	e.proxyTestThrough(w, r, proxyURL, target)
+}
 
+// v0.5.13: TestProxyDraft is "test before save" — it dials targetUrl through a
+// proxy config taken straight from the request body, so the create form can
+// find out whether what the user just typed actually works *before* it is
+// committed to proxies.json.
+//
+// Why this needs its own endpoint: both TestProxy and ProbeProxy require the
+// entry to exist in the store, which is exactly what the 新增代理 dialog is
+// trying to establish. Nothing here is persisted and no probe status is
+// recorded, so a draft that fails to dial never shows up in the list and can
+// never overwrite the status of a saved entry.
+func (e *ExtraHandlers) TestProxyDraft(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		URL       string `json:"url"`
+		Username  string `json:"username"`
+		Password  string `json:"password"`
+		TargetURL string `json:"targetUrl"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeError(w, r, http.StatusBadRequest, err)
+		return
+	}
+	raw := strings.TrimSpace(body.URL)
+	if raw == "" {
+		writeError(w, r, http.StatusBadRequest, errors.New("url is required"))
+		return
+	}
+	target := e.proxyTestTarget(r, body.TargetURL)
+	proxyURL, err := proxyURLFrom(raw, strings.TrimSpace(body.Username), body.Password)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok": false, "error": err.Error(), "targetUrl": target,
+		})
+		return
+	}
+	e.proxyTestThrough(w, r, proxyURL, target)
+}
+
+// proxyURLFrom parses a proxy address (typed in the form, or read back from the
+// store) and attaches credentials when a username is set.
+//
+// The scheme check is deliberate: the most common typo in the create form is a
+// bare "proxy.corp:8080", which url.Parse happily reads as scheme "proxy" and
+// which would otherwise only surface later as an opaque transport error.
+func proxyURLFrom(raw, username, password string) (*url.URL, error) {
+	// Look for a scheme *before* url.Parse: a bare "proxy.corp:8080" is
+	// rejected by url.Parse itself ("first path segment in URL cannot contain
+	// colon"), and surfacing that raw Go error to the form helps nobody. The
+	// message below is the same one the form's own validator shows for this
+	// exact typo.
+	if !strings.Contains(raw, "://") {
+		return nil, errors.New("代理地址无效：需要以 http:// 或 https:// 开头，例如 http://proxy.example.com:8080")
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, errors.New("代理地址无效：" + err.Error())
+	}
+	switch u.Scheme {
+	case "http", "https", "socks5":
+	default:
+		return nil, errors.New("代理地址无效：需要以 http:// 或 https:// 开头，例如 http://proxy.example.com:8080")
+	}
+	if u.Host == "" {
+		return nil, errors.New("代理地址无效：缺少主机名或端口")
+	}
+	if username != "" {
+		u.User = url.UserPassword(username, password)
+	}
+	return u, nil
+}
+
+// proxyTestTarget resolves which URL a connectivity test fetches: the caller's
+// explicit target, else this registry's own /v2/ (which proves both "the proxy
+// is reachable" and "it can reach this registry").
+func (e *ExtraHandlers) proxyTestTarget(r *http.Request, want string) string {
+	if t := strings.TrimSpace(want); t != "" {
+		return t
+	}
+	base := strings.TrimSuffix(e.Full.RegistryURL(), "/")
+	if base == "" {
+		base = "http://" + r.Host
+	}
+	return base + "/v2/"
+}
+
+// proxyTestThrough performs the actual dial-through-proxy and writes the
+// result.
+//
+// Always answers 200: "the proxy refused / could not be reached" is precisely
+// the answer this endpoint exists to produce, not a server error. Shared by
+// TestProxy (saved entry) and TestProxyDraft (unsaved form values) so both
+// report the identical shape.
+func (e *ExtraHandlers) proxyTestThrough(w http.ResponseWriter, r *http.Request, proxyURL *url.URL, target string) {
 	transport := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
 	client := &http.Client{Transport: transport, Timeout: 10 * time.Second}
 

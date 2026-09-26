@@ -13,6 +13,7 @@ import type {
   ProxyInput,
   ProxyPatch,
   ProxyProbeAllResult,
+  ProxyTestInput,
   ProxyTestResult,
   PullJob,
   PullJobInput,
@@ -199,6 +200,16 @@ export const testProxy = (id: string, targetUrl?: string) =>
   request<ProxyTestResult>(`/api/proxies/${encodeURIComponent(id)}/test`, {
     method: 'POST',
     body: JSON.stringify({ targetUrl: targetUrl || '' }),
+  });
+
+/**
+ * v0.5.13: 用**尚未保存**的代理配置做一次连通性测试（保存前试连）。
+ * 服务端不落库、不改探测状态，所以结果不代表任何已存条目。
+ */
+export const testProxyDraft = (input: ProxyTestInput) =>
+  request<ProxyTestResult>('/api/proxies/test', {
+    method: 'POST',
+    body: JSON.stringify(input),
   });
 
 // ── 镜像热度 ──

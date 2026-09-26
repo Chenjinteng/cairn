@@ -32,6 +32,7 @@ import {
   probeAllProxies,
   probeProxy,
   testProxy,
+  testProxyDraft,
   updateProxy,
 } from '../api';
 import type {
@@ -57,6 +58,39 @@ interface FormValues {
   note?: string;
 }
 
+/**
+ * v0.5.13: 测连结果提示。新增弹窗的「测试连接」与行内测试弹窗共用一份渲染，
+ * 免得两处文案/颜色各改各的漂移。
+ */
+function ProxyTestAlert({ result }: { result: ProxyTestResult }) {
+  return (
+    <Alert
+      type={result.ok ? 'success' : 'error'}
+      showIcon
+      message={
+        result.ok
+          ? `连通正常 · HTTP ${result.status} · ${result.elapsedMs} ms`
+          : '连通失败'
+      }
+      description={
+        <div>
+          <div style={{ whiteSpace: 'pre-wrap' }}>
+            {result.ok ? result.targetUrl : result.error}
+          </div>
+          {result.ok ? (
+            <div style={{ marginTop: 4, color: 'var(--color-text-3)' }}>
+              目标：<span className="mono">{result.targetUrl}</span>
+              {result.registryApiVersion
+                ? ` · registry API ${result.registryApiVersion}`
+                : ''}
+            </div>
+          ) : null}
+        </div>
+      }
+    />
+  );
+}
+
 export default function ProxiesPage({ config: initialConfig }: Props) {
   const { message, modal } = AntdApp.useApp();
   const [config, setConfig] = useState<AppConfig | null>(initialConfig);
@@ -76,6 +110,16 @@ export default function ProxiesPage({ config: initialConfig }: Props) {
   const [testTarget, setTestTarget] = useState('');
   const [testRunning, setTestRunning] = useState(false);
   const [testResult, setTestResult] = useState<ProxyTestResult | null>(null);
+
+  /** v0.5.13: 新增弹窗内的「测试连接」（保存前试连，不落库）。 */
+  const [draftTarget, setDraftTarget] = useState('');
+  const [draftTesting, setDraftTesting] = useState(false);
+  const [draftTestResult, setDraftTestResult] = useState<ProxyTestResult | null>(null);
+  /**
+   * v0.5.13: footer 改成自定义按钮之后，antd 不再代管提交按钮的加载态。这里自己
+   * 兜两件事 —— 保存期间有忙碌反馈；连点两次不会建出两条。
+   */
+  const [saving, setSaving] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!config?.allowProxies) {
@@ -138,6 +182,9 @@ export default function ProxiesPage({ config: initialConfig }: Props) {
   const handleOpenCreate = () => {
     setEditing(null);
     form.resetFields();
+    setDraftTarget('');
+    setDraftTestResult(null);
+    setSaving(false);
     setModalOpen(true);
   };
 
@@ -152,16 +199,24 @@ export default function ProxiesPage({ config: initialConfig }: Props) {
       password: '',
       note: p.note,
     });
+    setDraftTarget('');
+    setDraftTestResult(null);
+    setSaving(false);
     setModalOpen(true);
   };
 
   const handleSubmit = async () => {
+    if (saving) {
+      return;
+    }
     let values: FormValues;
     try {
       values = await form.validateFields();
     } catch {
       return;
     }
+    // v0.5.13: 表单校验通过后才上锁；校验失败直接返回，不闪加载态。
+    setSaving(true);
     // v0.5.12: 新建成功后要立刻探一次连通性。代理此时已经落库，所以这里只是
     // 记住它，等 modal 关掉、列表刷出来之后再单独探 —— 不让探测拖慢"保存"。
     let created: ProxyEntry | null = null;
@@ -209,6 +264,9 @@ export default function ProxiesPage({ config: initialConfig }: Props) {
       }
     } catch (err) {
       message.error(String((err as Error)?.message ?? err));
+    } finally {
+      // 成功、失败、提前 return 都要落回可点状态，否则弹窗按钮永久转圈。
+      setSaving(false);
     }
   };
 
@@ -243,6 +301,59 @@ export default function ProxiesPage({ config: initialConfig }: Props) {
       }
     } finally {
       setTestRunning(false);
+    }
+  };
+
+  /**
+   * v0.5.13: 保存前试连。只做「地址非空 + http(s)://」这一层校验 ——
+   * 名称等字段不拦测试，因为试连的意义就是在填完一堆校验之前先知道通不通。
+   * 服务端不落库，所以这里的结果不代表任何已存条目。
+   */
+  const handleTestDraft = async () => {
+    const values = form.getFieldsValue() as Partial<FormValues>;
+    const url = (values.url ?? '').trim();
+    const target = draftTarget.trim();
+    setDraftTestResult(null);
+    if (!url) {
+      setDraftTestResult({
+        ok: false,
+        elapsedMs: 0,
+        targetUrl: target || '(默认：本仓库 /v2/)',
+        error: '请先填写代理地址',
+      });
+      return;
+    }
+    if (!/^https?:\/\//i.test(url)) {
+      setDraftTestResult({
+        ok: false,
+        elapsedMs: 0,
+        targetUrl: target || '(默认：本仓库 /v2/)',
+        error: '代理地址需要以 http:// 或 https:// 开头，例如 http://proxy.example.com:8080',
+      });
+      return;
+    }
+    setDraftTesting(true);
+    try {
+      const result = await testProxyDraft({
+        url,
+        username: values.username ?? '',
+        password: values.password ?? '',
+        targetUrl: target,
+      });
+      if (!result.success) {
+        setDraftTestResult({
+          ok: false,
+          elapsedMs: 0,
+          targetUrl: target || '(默认：本仓库 /v2/)',
+          error: result.message,
+        });
+        return;
+      }
+      if (result.data) {
+        setDraftTestResult(result.data);
+      }
+    } finally {
+      setDraftTesting(false);
     }
   };
 
@@ -521,13 +632,31 @@ export default function ProxiesPage({ config: initialConfig }: Props) {
       <Modal
         open={modalOpen}
         title={editing ? `编辑代理：${editing.name}` : '新增代理'}
-        okText={editing ? '保存' : '创建'}
-        cancelText="取消"
         onCancel={() => setModalOpen(false)}
-        onOk={handleSubmit}
         destroyOnClose
+        footer={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {editing ? null : (
+              <Button
+                icon={<ApiOutlined />}
+                loading={draftTesting}
+                disabled={saving}
+                onClick={() => void handleTestDraft()}
+              >
+                测试连接
+              </Button>
+            )}
+            <span style={{ flex: 1 }} />
+            <Button disabled={saving} onClick={() => setModalOpen(false)}>
+              取消
+            </Button>
+            <Button type="primary" loading={saving} onClick={() => void handleSubmit()}>
+              {editing ? '保存' : '创建'}
+            </Button>
+          </div>
+        }
       >
-        <Form<FormValues> form={form} layout="vertical" preserve={false}>
+        <Form<FormValues> form={form} layout="vertical" preserve={false} onValuesChange={() => setDraftTestResult(null)}>
           <Form.Item
             label="名称"
             name="name"
@@ -569,6 +698,30 @@ export default function ProxiesPage({ config: initialConfig }: Props) {
           <Form.Item label="备注（可选）" name="note">
             <Input placeholder="例如：只有它能出外网" />
           </Form.Item>
+          {editing ? null : (
+            <>
+              <Form.Item
+                label="测试目标（可选，不保存）"
+                extra={
+                  <>
+                    留空 = 本仓库的 <span className="mono">/v2/</span>；想验证「能不能出外网」就填{' '}
+                    <span className="mono">https://registry-1.docker.io/v2/</span>。
+                  </>
+                }
+              >
+                <Input
+                  placeholder="留空 = 本仓库 /v2/"
+                  value={draftTarget}
+                  onChange={(e) => {
+                    setDraftTarget(e.target.value);
+                    setDraftTestResult(null);
+                  }}
+                  allowClear
+                />
+              </Form.Item>
+              {draftTestResult ? <ProxyTestAlert result={draftTestResult} /> : null}
+            </>
+          )}
         </Form>
       </Modal>
 
@@ -602,32 +755,7 @@ export default function ProxiesPage({ config: initialConfig }: Props) {
               开始测试
             </Button>
 
-            {testResult ? (
-              <Alert
-                type={testResult.ok ? 'success' : 'error'}
-                showIcon
-                message={
-                  testResult.ok
-                    ? `连通正常 · HTTP ${testResult.status} · ${testResult.elapsedMs} ms`
-                    : '连通失败'
-                }
-                description={
-                  <div>
-                    <div style={{ whiteSpace: 'pre-wrap' }}>
-                      {testResult.ok ? testResult.targetUrl : testResult.error}
-                    </div>
-                    {testResult.ok ? (
-                      <div style={{ marginTop: 4, color: 'var(--color-text-3)' }}>
-                        目标：<span className="mono">{testResult.targetUrl}</span>
-                        {testResult.registryApiVersion
-                          ? ` · registry API ${testResult.registryApiVersion}`
-                          : ''}
-                      </div>
-                    ) : null}
-                  </div>
-                }
-              />
-            ) : null}
+            {testResult ? <ProxyTestAlert result={testResult} /> : null}
           </Space>
         ) : null}
       </Modal>

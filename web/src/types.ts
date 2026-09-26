@@ -304,6 +304,20 @@ export interface ProxyPatch {
   note?: string;
 }
 
+/**
+ * v0.5.13: 保存前「测试连接」的入参。
+ *
+ * 没有 id：这是一次**不落库**的试连，测的就是表单里此刻的值，
+ * 既不写 proxies.json，也不改任何条目的探测状态。
+ */
+export interface ProxyTestInput {
+  url: string;
+  username?: string;
+  password?: string;
+  /** 留空 = 服务端用本 registry 的 /v2/。 */
+  targetUrl?: string;
+}
+
 /** 代理连通性测试结果。 */
 export interface ProxyTestResult {
   ok: boolean;
