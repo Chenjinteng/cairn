@@ -118,12 +118,20 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 本轮主题：**热度开箱即用**。v0.5.7 之前，热度统计依赖「事件共享密钥 + 外部 registry 的 notifications webhook」——自带 registry 的一次 push/pull 不会进入热度表，运维要么搭一套 Distribution 自己接 webhook，要么看不到数据。本轮把热度链路从「可选外部 webhook」改成「自带 registry 就地喂事件 + 外部 registry webhook 仍可选」两轨并行：默认就有数据，外接依然能接。
 
+> **本节同时收录「拉取平台白名单」条目**（原独立成 `[0.6.0]` 章节）。该功能在提交 `8836c92`（2026-09-26 00:48）里被标为 `v0.6.0`，但紧接着的下一笔提交 `6aba42b` 就把热度功能标成了 `v0.5.8` —— 版本号自此**下调**回 0.5.x 线，**`v0.6.0` 从未作为发布版本存在，仓库里也没有对应 tag**（`git tag -l` 为空）。为避免 CHANGELOG 出现「0.6.0 排在 0.5.8 之前」的乱序，原 `[0.6.0]` 章节已并入本节；其中随 0.5.9「配置单源化」被移除或更名的细节，已在条目内就地标注。
+>
+> 动机：v0.5.x 之前，拉一个多架构 index（比如 `nginx:alpine`、`clickhouse/server`、`alpine`）会把上游全部 ~10 个平台的子 manifest 都拉下来——单架构 / 双架构部署因此吃下大量用不到的层。
+
 ### 新增
 
 - **`internal/events.Handler.IngestLocal(ev)`**：内置 registry 在 `/v2/<repo>/manifests/<ref>` HEAD/PUT 成功后构造一个 `Event`，通过这个方法把热度直接喂进与 webhook 完全相同的 `processOne` 管线。复用 `ShouldCount` 过滤（白名单 manifest 媒体类型、HEAD/PUT 才计数、UA 忽略规则、self-fold 语义）—— 一处过滤规则，两个入口。返回 `bool`：true = 已计入（accepted+1 + SQLite + 最近事件环），false = 被过滤或 kill switch 关闭。
 - **服务端：`eventsHandler` 现在只看 SQLite 是否就绪就构造**，不再要求 `REGISTRY_NOTIFY_TOKEN` 非空。`/api/events` 在 token 空时仍然挂载（fail-closed 401），行为与 v0.5.4 一致；自带的 `/v2/*` 不再走 webhook 绕一圈。
 - **`internal/events/internal/events/local_test.go`（新文件，7 个测试）**：`CountsPull` / `RespectsKillSwitch` / `NilHandler`（nil `*Handler` 不 panic）/ `IgnoreRuleFolds` / `SelfPushCounted`（自写 PUT 仍计）/ `WrongMethodRejected`（GET 不计）/ `NewHandler_EmptyIgnore` 构造健壮性。
 - **`internal/registryd.Handler.Events *events.Handler`** 字段 + `New(store, getCreds, eventsH)` 第三参数；`localEvent(repo, tag, mediaType, action, method, r)` helper 把 `r.UserAgent()`、`r.Host`、`r.RemoteAddr`、`X-Auth-User` 头映射到 `Event` 的对应字段。
+- **拉取平台白名单 `pull.platforms`**（设置页 → "拉取平台白名单"）。可选值是 `<os>/<arch>[/<variant>]` 的 CSV（例：`linux/amd64,linux/arm64` 或 `linux/amd64,linux/arm/v7`）；空 = 不过滤（保留 v0.5.x 的"全部平台"行为）。支持 `linux/amd64` / `linux/arm64` / `linux/arm/v7` / `linux/386` / `linux/ppc64le` / `linux/s390x` / `linux/riscv64` / `windows/amd64` 等常见架构的 chip 多选；自定义 token 也能从原始 CSV 输入。配置后只拉这些平台的子 manifest 与它们独有的 blob——alpine 这种"所有平台共享同一层"的镜像虽然表面 size 没变化，但拉取耗时显著下降（少 16 次子 manifest + blob-existence HEAD 请求）。
+- **环境变量 bootstrap `REGISTRY_PULL_PLATFORMS`**：首次部署时不用先打开 UI 改设置，直接在 `.env` 里写一行 `REGISTRY_PULL_PLATFORMS=linux/amd64,linux/arm64` 重启即生效；之后改设置页会覆盖 env（与 `REGISTRY_URL` / `REGISTRY_PROXY` 同样的 Mutable > env 优先级）。（⚠️ 0.5.9 起该 env 已随「配置单源化」移除，设了也不再被读——见 `[0.5.9]` 的 `Load()` 条目。）
+- **空匹配保护**：白名单过滤后如果一个子 manifest 都没命中（例如镜像只有 `linux/arm64` 你却写了 `linux/amd64`），`planTransfer` 立刻报错 `platform filter [...] matched no child manifests in the source index`，不会静默产出空 index 把后续 `docker pull` 全打挂。
+- **未知 platform 不被悄悄丢**：上游写 `architecture: "unknown"` 或缺字段的子 manifest 会原样保留——宁可多拉一个也优于静默丢失上游给的唯一 manifest。
 
 ### 变更
 
@@ -136,10 +144,19 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
   - 「registry 侧需要这样配」面板标题改为「外部 registry 需要这样配（可选）」；Collapse 标签同步收紧。
   - `NOTIFY_CONFIG_YAML` 上方加一行注释：this snippet is for EXTERNAL registries。
 - `internal/api/api_test.go` 两处 `registryd.New(store, nil)` → `registryd.New(store, nil, nil)`（新签名第三个参数是 events handler，测试不关心传 nil）。
+- `MutableKeys` 新增 `pull.platforms`，类型 `stringcsv`（新增的第三种类型：字符串 + 内置 CSV 校验；每个 token 必须严格 `<word>/<word>[/<word>]`，空段、含空格、非 ASCII 都被 400 拒绝）。
+- `MutableSettings` 新增 `pullPlatforms` 字段，UI 顶部 / 设置页立即可读（当时另有 `pullPlatformsSource` 字段标记取值来源；该字段已在 0.5.9 随「`MutableSettings` 砍 11 个 `*Source` 字段」一并删除）。
+- `config.EffectivePullPlatforms()` 新增 helper：读 Mutable > env，空值返回 `nil`（= 不过滤），CSV 自动 trim + lowercase。（0.5.9 起 env 分支整个砍掉，等价能力改由 `config.Config.PullPlatforms()` 提供，语义不变。）
+- `pull.planTransfer()` 签名增加 `platformAllow []string` 参数；过滤逻辑使用新加的 `sourcePlatformRef.key()` / `matchAny()`。
+- `pull.executor` 引入 `manifestFetcher` interface（仅含 `GetManifest`），让 planTransfer 单元测试可以注入 fake，无需 HTTP mock。
 
 ### 修复
 
 - 没有功能修复；本轮纯补全既有热度功能。
+
+### 测试
+
+- `internal/pull/executor_test.go`（新文件，**6 个**测试）：`TestPlatformKey`（`key()` 处理 nil / 缺字段 / 大写归一化）、`TestPlatformMatchAny`（严格匹配：`linux/arm` ≠ `linux/arm/v7`）、`TestPlanTransferIndexFiltering`（白名单命中 1 个子 manifest）、`TestPlanTransferEmptyAllowListMatchesAll`（allow-list 为空时命中全部）、`TestPlanTransferNoMatchErrors`（白名单 0 匹配时报错）、`TestPlanTransferSingleArchManifestUnaffected`（单架构 manifest 走原路径、不受 filter 影响）。
 
 ### 文档
 
@@ -153,31 +170,6 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 - 升级后**立即生效**：第一次有人对自带 registry 做一次 `HEAD /v2/<repo>/manifests/<tag>` 或 push 一层，Top 榜单就会出数据，不需要重启、刷新、或重新配 webhook。
 - 如果你之前配置了 `REGISTRY_NOTIFY_TOKEN` + 外部 Distribution 的 notifications：仍然有效，新版本是两轨并行而非替换，外部 webhook 进 `/api/events`，自带 registry 走 `IngestLocal`，最终都会进同一个 SQLite 表。
 - 如果你想接的「外部 registry」其实是另一个 cairn 实例：那条 `notifications.url` 仍然走 `POST /api/events`，共享密钥照旧；自带这一侧的 `/v2/*` 流量还会通过本实例的 `IngestLocal` 自己计一次（这是对的：另一台实例通过 `/v2/*` 拉取镜像时，事件应当算到"镜像存放方"，不是"镜像来源方"，如果想反着算就在那个实例上关 `allow.registry_events`）。
-
----
-
-## [0.6.0] - 2026-09-26
-
-本轮主题：**多架构镜像拉取按平台白名单过滤**。v0.5.x 之前，拉一个多架构 index（比如 `nginx:alpine`、`clickhouse/server`、`alpine`）会把上游全部 ~10 个平台的子 manifest 都拉下来——单架构/双架构部署因此吃下大量用不到的层。本轮新增一个全局开关，配置后只下载目标平台的子 manifest 与它们独有的 blob。
-
-### 新增
-
-- **拉取平台白名单 `pull.platforms`**（设置页 → "拉取平台白名单"）。可选值是 `<os>/<arch>[/<variant>]` 的 CSV（例：`linux/amd64,linux/arm64` 或 `linux/amd64,linux/arm/v7`）；空 = 不过滤（保留 v0.5.x 的"全部平台"行为）。支持 `linux/amd64` / `linux/arm64` / `linux/arm/v7` / `linux/386` / `linux/ppc64le` / `linux/s390x` / `linux/riscv64` / `windows/amd64` 等常见架构的 chip 多选；自定义 token 也能从原始 CSV 输入。配置后只拉这些平台的子 manifest 与它们独有的 blob——alpine 这种"所有平台共享同一层"的镜像虽然表面 size 没变化，但拉取耗时显著下降（少 16 次子 manifest + blob-existence HEAD 请求）。
-- **环境变量 bootstrap `REGISTRY_PULL_PLATFORMS`**：首次部署时不用先打开 UI 改设置，直接在 `.env` 里写一行 `REGISTRY_PULL_PLATFORMS=linux/amd64,linux/arm64` 重启即生效；之后改设置页会覆盖 env（与 `REGISTRY_URL` / `REGISTRY_PROXY` 同样的 Mutable > env 优先级）。
-- **空匹配保护**：白名单过滤后如果一个子 manifest 都没命中（例如镜像只有 `linux/arm64` 你却写了 `linux/amd64`），`planTransfer` 立刻报错 `platform filter [...] matched no child manifests in the source index`，不会静默产出空 index 把后续 `docker pull` 全打挂。
-- **未知 platform 不被悄悄丢**：上游写 `architecture: "unknown"` 或缺字段的子 manifest 会原样保留——宁可多拉一个也优于静默丢失上游给的唯一 manifest。
-
-### 变更
-
-- `MutableKeys` 新增 `pull.platforms`，类型 `stringcsv`（新增的第三种类型：字符串 + 内置 CSV 校验；每个 token 必须严格 `<word>/<word>[/<word>]`，空段、含空格、非 ASCII 都被 400 拒绝）。
-- `MutableSettings` 新增 `pullPlatforms` + `pullPlatformsSource` 字段，UI 顶部 / 设置页立即可读。
-- `config.EffectivePullPlatforms()` 新增 helper：读 Mutable > env，空值返回 `nil`（= 不过滤），CSV 自动 trim + lowercase。
-- `pull.planTransfer()` 签名增加 `platformAllow []string` 参数；过滤逻辑使用新加的 `sourcePlatformRef.key()` / `matchAny()`。
-- `pull.executor` 引入 `manifestFetcher` interface（仅含 `GetManifest`），让 planTransfer 单元测试可以注入 fake，无需 HTTP mock。
-
-### 测试
-
-- `internal/pull/executor_test.go`（新文件）：5 个测试——`key()` 处理 nil / 缺字段 / 大写归一化、`matchAny()` 严格匹配（`linux/arm` ≠ `linux/arm/v7`）、`planTransfer` 三档 case（白名单命中 1 个、allow-list 为空命中全部、白名单 0 匹配时报错）、单架构 manifest 走原路径不受 filter 影响。
 
 ---
 
