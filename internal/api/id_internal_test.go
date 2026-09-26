@@ -9,7 +9,7 @@ import (
 // hexChars is the alphabet randHex is required to emit.
 const hexChars = "0123456789abcdef"
 
-// TestNewIDUniqueUnderConcurrency pins the v0.5.10 fix.
+// TestNewIDUniqueUnderConcurrency pins the v0.5.10 fix and its v0.5.11 widening.
 //
 // The previous implementation built the random suffix from
 // time.Now().UnixNano()%16 plus a time.Sleep(time.Microsecond) per character.
@@ -21,6 +21,10 @@ const hexChars = "0123456789abcdef"
 //
 // A collision here is silent data loss, so the guard is deliberately wide: 400
 // ids created as simultaneously as the runtime allows must all be distinct.
+//
+// v0.5.11: at a 16-bit suffix this guard failed 13 runs out of 20 — the birthday
+// collision rate for 400 ids sharing one millisecond is ~1.2. At 32 bits it is
+// ~2e-5, so a failure now signals a real regression instead of a coin flip.
 func TestNewIDUniqueUnderConcurrency(t *testing.T) {
 	const n = 400
 
@@ -93,16 +97,16 @@ func TestRandHexDistinctSamples(t *testing.T) {
 func TestNewIDShape(t *testing.T) {
 	id := newID()
 	// 20060102-150405.000 -> "20060102-150405-000" (dots become dashes)
-	if len(id) != len("20060102-150405-000")+1+4 {
+	if len(id) != len("20060102-150405-000")+1+8 {
 		t.Fatalf("newID() = %q: length %d, want %d", id, len(id),
-			len("20060102-150405-000")+1+4)
+			len("20060102-150405-000")+1+8)
 	}
 	parts := strings.Split(id, "-")
 	if len(parts) != 4 {
 		t.Fatalf("newID() = %q: want 4 dash-separated parts, got %d", id, len(parts))
 	}
-	if len(parts[3]) != 4 {
-		t.Fatalf("newID() = %q: random suffix %q should be 4 chars", id, parts[3])
+	if len(parts[3]) != 8 {
+		t.Fatalf("newID() = %q: random suffix %q should be 8 chars", id, parts[3])
 	}
 	for _, c := range parts[3] {
 		if !strings.ContainsRune(hexChars, c) {

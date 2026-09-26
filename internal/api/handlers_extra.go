@@ -1302,7 +1302,7 @@ func parseLimit(r *http.Request, def int) int {
 	return def
 }
 
-// newID returns a short, time-ordered id of the form 20060102-150405.000-xxxx.
+// newID returns a short, time-ordered id of the form 20060102-150405.000-xxxxxxxx.
 // It is the primary key of both the credential and the proxy library.
 //
 // v0.5.10: the random suffix used to be derived from time.Now().UnixNano()%16
@@ -1311,8 +1311,14 @@ func parseLimit(r *http.Request, def int) int {
 // because Put overwrites by id the second one silently replaced the first
 // (measured: 20 concurrent creates lost 3 entries). The suffix is now drawn
 // from crypto/rand.
+//
+// v0.5.11: that suffix was only 16 bits, so the millisecond timestamp was still
+// the real discriminator — 400 ids minted in one millisecond collide ~1.2 times
+// by birthday, and the v0.5.10 regression test failed 13 runs out of 20.
+// Widened to 32 bits, which drops the expected collisions for the same 400 ids
+// to ~2e-5.
 func newID() string {
-	return strings.ReplaceAll(time.Now().UTC().Format("20060102-150405.000"), ".", "-") + "-" + randHex(4)
+	return strings.ReplaceAll(time.Now().UTC().Format("20060102-150405.000"), ".", "-") + "-" + randHex(8)
 }
 
 // randHex returns n lowercase hex characters from crypto/rand, so concurrent
