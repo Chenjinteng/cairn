@@ -91,7 +91,8 @@ func (s *Store) Get(id string) (Proxy, error) {
 	return p, nil
 }
 
-// Put inserts or replaces a proxy by ID. Updates UpdatedAt.
+// Put inserts or replaces a proxy by ID. Updates UpdatedAt. Sets
+// CreatedAt on first insert; preserves it on update.
 func (s *Store) Put(p Proxy) error {
 	if p.ID == "" {
 		return errors.New("proxies: ID required")
@@ -103,8 +104,8 @@ func (s *Store) Put(p Proxy) error {
 		return errors.New("proxies: URL required")
 	}
 
-	s.mu.Lock()
 	now := time.Now().UTC()
+	s.mu.Lock()
 	existing, hadExisting := s.items[p.ID]
 	if hadExisting {
 		p.CreatedAt = existing.CreatedAt
@@ -113,46 +114,58 @@ func (s *Store) Put(p Proxy) error {
 	}
 	p.UpdatedAt = now
 	s.items[p.ID] = p
-	return s.persistLocked()
+	// Snapshot under lock, then release before disk I/O. See persistLocked
+	// for the rationale (the previous "caller MUST hold s.mu" contract was
+	// what caused the v0.5.9 production deadlock — Put leaked the WLock
+	// because it never called Unlock; the leaked state lived on the mutex
+	// and wedged every subsequent reader/writer until process restart).
+	snap := make([]Proxy, 0, len(s.items))
+	for _, x := range s.items {
+		snap = append(snap, x)
+	}
+	s.mu.Unlock()
+
+	return persistToDisk(s.path, snap)
 }
 
-// Delete removes a proxy by id.
+// Delete removes a proxy by id. Returns ErrNotFound if the id
+// isn't present.
 func (s *Store) Delete(id string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if _, ok := s.items[id]; !ok {
+		s.mu.Unlock()
 		return ErrNotFound
 	}
 	delete(s.items, id)
-	return s.persistLocked()
+	snap := make([]Proxy, 0, len(s.items))
+	for _, x := range s.items {
+		snap = append(snap, x)
+	}
+	s.mu.Unlock()
+
+	return persistToDisk(s.path, snap)
 }
 
 // ErrNotFound is returned when an ID doesn't exist.
 var ErrNotFound = errors.New("proxy not found")
 
-// persistLocked writes proxies.json to disk. Caller MUST hold s.mu (a
-// write lock). Disk I/O is intentionally inside the lock — keeping the
-// invariant simple at the cost of brief reader stalls. The previous
-// attempt to release the lock around disk I/O created a deadlock with
-// Go's defer-LIFO semantics (the caller’s defer Unlock fired before our
-// deferred re-Lock, leaving the mutex permanently locked).
-func (s *Store) persistLocked() error {
-	out := make([]Proxy, 0, len(s.items))
-	for _, p := range s.items {
-		out = append(out, p)
-	}
-	body, err := json.MarshalIndent(out, "", "  ")
+// persistToDisk writes the given proxies snapshot to path atomically
+// (write-temp + rename). No lock required; callers snapshot under s.mu
+// themselves, release the lock, then call this. Keeping disk I/O outside
+// any lock means a slow filesystem can't wedge concurrent readers.
+func persistToDisk(path string, items []Proxy) error {
+	body, err := json.MarshalIndent(items, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
+	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, body, 0o600); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, s.path); err != nil {
+	if err := os.Rename(tmp, path); err != nil {
 		os.Remove(tmp)
 		return err
 	}
@@ -281,22 +294,8 @@ func (s *Store) recordProbe(id string, at time.Time, status, errMsg string) {
 		out = append(out, x)
 	}
 	s.mu.Unlock()
-	// Disk I/O without the lock. Errors are logged only via the caller;
-	// the in-memory state has already been updated regardless.
-	body, err := json.MarshalIndent(out, "", "  ")
-	if err != nil {
-		return
-	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
-		return
-	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, body, 0o600); err != nil {
-		return
-	}
-	if err := os.Rename(tmp, s.path); err != nil {
-		os.Remove(tmp)
-	}
+	// Disk I/O outside the lock (same pattern as Put / Delete above).
+	_ = persistToDisk(s.path, out)
 }
 
 // ProbeAll probes every entry in parallel and waits for all to finish.
