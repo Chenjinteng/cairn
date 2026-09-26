@@ -130,14 +130,17 @@ func (s *Store) Delete(id string) error {
 // ErrNotFound is returned when an ID doesn't exist.
 var ErrNotFound = errors.New("proxy not found")
 
+// persistLocked writes proxies.json to disk. Caller MUST hold s.mu (a
+// write lock). Disk I/O is intentionally inside the lock — keeping the
+// invariant simple at the cost of brief reader stalls. The previous
+// attempt to release the lock around disk I/O created a deadlock with
+// Go's defer-LIFO semantics (the caller’s defer Unlock fired before our
+// deferred re-Lock, leaving the mutex permanently locked).
 func (s *Store) persistLocked() error {
-	// Snapshot under lock (caller holds it).
 	out := make([]Proxy, 0, len(s.items))
 	for _, p := range s.items {
 		out = append(out, p)
 	}
-	s.mu.Unlock()
-	defer s.mu.Lock()  // restore caller’s lock state so subsequent returns re-acquire cleanly
 	body, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {
 		return err
@@ -257,20 +260,43 @@ func (s *Store) Probe(id string) error {
 	return nil
 }
 
-// recordProbe writes the probe outcome into the entry under lock + persists.
-// Public so tests can synthesise results without making real network calls.
+// recordProbe writes the probe outcome into the entry and persists
+// proxies.json. It owns its own locking window (does NOT require the
+// caller to hold a lock). Disk I/O runs while no lock is held, so a slow
+// filesystem can't wedge concurrent readers.
 func (s *Store) recordProbe(id string, at time.Time, status, errMsg string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	p, ok := s.items[id]
 	if !ok {
+		s.mu.Unlock()
 		return
 	}
 	p.LastProbeAt = at
 	p.LastProbeStatus = status
 	p.LastProbeError = errMsg
 	s.items[id] = p
-	_ = s.persistLocked()
+	// Copy out the snapshot while still holding the lock.
+	out := make([]Proxy, 0, len(s.items))
+	for _, x := range s.items {
+		out = append(out, x)
+	}
+	s.mu.Unlock()
+	// Disk I/O without the lock. Errors are logged only via the caller;
+	// the in-memory state has already been updated regardless.
+	body, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
+		return
+	}
+	tmp := s.path + ".tmp"
+	if err := os.WriteFile(tmp, body, 0o600); err != nil {
+		return
+	}
+	if err := os.Rename(tmp, s.path); err != nil {
+		os.Remove(tmp)
+	}
 }
 
 // ProbeAll probes every entry in parallel and waits for all to finish.
