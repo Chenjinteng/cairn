@@ -131,10 +131,13 @@ func (s *Store) Delete(id string) error {
 var ErrNotFound = errors.New("proxy not found")
 
 func (s *Store) persistLocked() error {
+	// Snapshot under lock (caller holds it).
 	out := make([]Proxy, 0, len(s.items))
 	for _, p := range s.items {
 		out = append(out, p)
 	}
+	s.mu.Unlock()
+	defer s.mu.Lock()  // restore caller’s lock state so subsequent returns re-acquire cleanly
 	body, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {
 		return err
