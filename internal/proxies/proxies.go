@@ -10,9 +10,13 @@
 package proxies
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -23,15 +27,26 @@ import (
 //
 // URL is the proxy endpoint (http://... or socks5://...). If Username /
 // Password are set, the proxy is used with basic auth.
+//
+// v0.5.10: the last three fields are populated by Store.Probe and surfaced
+// in the proxy-management page so operators can spot dead entries without
+// waiting for a pull to fail. LastProbeStatus is one of:
+//
+//	"ok"      last probe succeeded (proxy reachable)
+//	"failed"  last probe failed (timeout / connection refused / TCP error)
+//	"unknown" never probed yet (process just started, or entry was just added)
 type Proxy struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	URL       string    `json:"url"`
-	Username  string    `json:"username,omitempty"`
-	Password  string    `json:"password,omitempty"`
-	Note      string    `json:"note,omitempty"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	ID              string    `json:"id"`
+	Name            string    `json:"name"`
+	URL             string    `json:"url"`
+	Username        string    `json:"username,omitempty"`
+	Password        string    `json:"password,omitempty"`
+	Note            string    `json:"note,omitempty"`
+	CreatedAt       time.Time `json:"createdAt"`
+	UpdatedAt       time.Time `json:"updatedAt"`
+	LastProbeAt     time.Time `json:"lastProbeAt,omitempty"`
+	LastProbeStatus string    `json:"lastProbeStatus,omitempty"`
+	LastProbeError  string    `json:"lastProbeError,omitempty"`
 }
 
 // Store is the on-disk proxy list.
@@ -158,4 +173,153 @@ func (s *Store) load() error {
 	s.items = m
 	s.mu.Unlock()
 	return nil
+}
+
+// Probe runs a quick TCP+HTTP probe against the proxy endpoint itself
+// (NOT through the proxy to a target). It tries a HEAD on the proxy URL
+// and treats any 2xx/3xx/4xx as "reachable" — only connection refused,
+// timeout, or 5xx-with-no-response count as "failed". Records the
+// outcome (LastProbeAt / LastProbeStatus / LastProbeError) back into the
+// entry in memory and on disk.
+//
+// 5-second total budget per probe. Returns the error if the probe
+// failed; nil if it succeeded (even when the proxy returned a non-2xx —
+// a misconfigured proxy that accepts the TCP connection is still better
+// than one that's not listening).
+func (s *Store) Probe(id string) error {
+	p, err := s.Get(id)
+	if err != nil {
+		return err
+	}
+	pu, perr := url.Parse(p.URL)
+	if perr != nil {
+		s.recordProbe(id, time.Now().UTC(), "failed", "parse url: "+perr.Error())
+		return perr
+	}
+	// http:// or https:// → dial + small request; socks5:// → TCP dial only.
+	scheme := pu.Scheme
+	if scheme != "http" && scheme != "https" && scheme != "socks5" {
+		s.recordProbe(id, time.Now().UTC(), "failed", "unsupported scheme: "+scheme)
+		return fmt.Errorf("proxies: unsupported scheme %q", scheme)
+	}
+	addr := pu.Host
+	if addr == "" {
+		s.recordProbe(id, time.Now().UTC(), "failed", "missing host")
+		return errors.New("proxies: missing host")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	// Step 1: TCP reachability. If the proxy endpoint isn't listening /
+	// firewalled / DNS-broken, fail fast.
+	var d net.Dialer
+	conn, derr := d.DialContext(ctx, "tcp", addr)
+	if derr != nil {
+		s.recordProbe(id, time.Now().UTC(), "failed", "dial "+addr+": "+derr.Error())
+		return derr
+	}
+	conn.Close()
+	if scheme == "socks5" {
+		// TCP reachability is the meaningful signal for SOCKS — the actual
+		// handshake happens per-request in the client, so we don't try it
+		// here (would require writing the SOCKS5 greeting bytes).
+		s.recordProbe(id, time.Now().UTC(), "ok", "")
+		return nil
+	}
+	// Step 2: HTTP-level sanity. Try a short HEAD with ResponseHeaderTimeout
+	// so a stuck / half-open TCP accept doesn't hang us forever. We treat
+	// any non-5xx as "proxy is alive enough" — 4xx means the proxy rejected
+	// our no-target request, but the wire is up.
+	transport := &http.Transport{
+		Proxy:                 http.ProxyURL(pu),
+		ResponseHeaderTimeout: 5 * time.Second,
+		IdleConnTimeout:       3 * time.Second,
+		DisableKeepAlives:     true,
+	}
+	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodHead, p.URL, nil)
+	resp, herr := client.Do(req)
+	if herr != nil {
+		// Couldn't complete the HTTP exchange (CONNECT failed, TLS broken,
+		// header timeout). Dial was OK but the proxy isn't usable end-to-end.
+		s.recordProbe(id, time.Now().UTC(), "failed", "http: "+herr.Error())
+		return herr
+	}
+	resp.Body.Close()
+	if resp.StatusCode >= 500 {
+		err := fmt.Errorf("proxy returned %d", resp.StatusCode)
+		s.recordProbe(id, time.Now().UTC(), "failed", err.Error())
+		return err
+	}
+	s.recordProbe(id, time.Now().UTC(), "ok", "")
+	return nil
+}
+
+// recordProbe writes the probe outcome into the entry under lock + persists.
+// Public so tests can synthesise results without making real network calls.
+func (s *Store) recordProbe(id string, at time.Time, status, errMsg string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.items[id]
+	if !ok {
+		return
+	}
+	p.LastProbeAt = at
+	p.LastProbeStatus = status
+	p.LastProbeError = errMsg
+	s.items[id] = p
+	_ = s.persistLocked()
+}
+
+// ProbeAll probes every entry in parallel and waits for all to finish.
+// Errors are logged on each entry; the overall call returns the first
+// non-nil error from any single probe (operators typically only care
+// about "did at least one fail", which is also visible in the persisted
+// status field).
+func (s *Store) ProbeAll(ctx context.Context) error {
+	proxies := s.List()
+	if len(proxies) == 0 {
+		return nil
+	}
+	var wg sync.WaitGroup
+	errCh := make(chan error, len(proxies))
+	for _, p := range proxies {
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			if err := s.Probe(id); err != nil {
+				errCh <- fmt.Errorf("probe %s: %w", id, err)
+			}
+		}(p.ID)
+	}
+	wg.Wait()
+	close(errCh)
+	// Return the first error (if any). The rest are persisted in entries.
+	select {
+	case e := <-errCh:
+		return e
+	default:
+		return nil
+	}
+}
+
+// StartProbeLoop launches a background goroutine that re-probes every
+// `interval`. Returns immediately; the goroutine exits when ctx is
+// cancelled. interval <= 0 disables the loop (single probe at boot
+// still runs from Boot if ProbeBoot is true).
+func (s *Store) StartProbeLoop(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		return
+	}
+	go func() {
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				_ = s.ProbeAll(ctx)
+			}
+		}
+	}()
 }

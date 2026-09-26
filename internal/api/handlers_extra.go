@@ -101,6 +101,10 @@ func (e *ExtraHandlers) RegisterRoutes(r chi.Router) {
 		r.Patch("/{id}", e.UpdateProxy)
 		r.Delete("/{id}", e.DeleteProxy)
 		r.Post("/{id}/test", e.TestProxy)
+		// v0.5.10: single-entry on-demand probe (the per-period background
+		// probe already updates LastProbeStatus on every tick; this is the
+		// manual button in the management page).
+		r.Post("/{id}/probe", e.ProbeProxy)
 	})
 
 	if e.Events != nil {
@@ -782,19 +786,36 @@ type proxyView struct {
 	Note      string `json:"note,omitempty"`
 	CreatedAt string `json:"createdAt"`
 	UpdatedAt string `json:"updatedAt"`
+	// v0.5.10: reachability status from the background probe loop.
+	LastProbeStatus string `json:"lastProbeStatus,omitempty"`
+	LastProbeAt     string `json:"lastProbeAt,omitempty"`
+	LastProbeError  string `json:"lastProbeError,omitempty"`
 }
 
 func toProxyView(p proxies.Proxy) proxyView {
 	return proxyView{
-		ID:        p.ID,
-		Name:      p.Name,
-		URL:       p.URL,
-		Username:  p.Username,
-		HasAuth:   p.Password != "",
-		Note:      p.Note,
-		CreatedAt: p.CreatedAt.Format(time.RFC3339),
-		UpdatedAt: p.UpdatedAt.Format(time.RFC3339),
+		ID:              p.ID,
+		Name:            p.Name,
+		URL:             p.URL,
+		Username:        p.Username,
+		HasAuth:         p.Password != "",
+		Note:            p.Note,
+		CreatedAt:       p.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:       p.UpdatedAt.Format(time.RFC3339),
+		LastProbeStatus: p.LastProbeStatus,
+		LastProbeAt:     lastProbeAtString(p.LastProbeAt),
+		LastProbeError:  p.LastProbeError,
 	}
+}
+
+// lastProbeAtString formats a possibly-zero time as RFC3339 or empty
+// string. Used so the UI distinguishes "never probed" from "probed at
+// this very moment" without a separate boolean.
+func lastProbeAtString(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format(time.RFC3339)
 }
 
 // proxyInput: on update an empty password CLEARS the stored one (proxies are
@@ -981,6 +1002,38 @@ func (e *ExtraHandlers) TestProxy(w http.ResponseWriter, r *http.Request) {
 		out["registryApiVersion"] = "2"
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// v0.5.10: ProbeProxy triggers an immediate reachability check for one
+// proxy entry. Unlike TestProxy (which fetches a target *through* the
+// proxy), this only confirms the proxy endpoint itself is reachable +
+// speaks HTTP/SOCKS, so a dead entry is flagged before any pull wastes
+// 15 minutes timing out.
+func (e *ExtraHandlers) ProbeProxy(w http.ResponseWriter, r *http.Request) {
+	if e.proxiesUnavailable(w, r) {
+		return
+	}
+	id := chiURLParam(r, "id")
+	if err := e.Proxies.Probe(id); err != nil {
+		// Still return 200 with ok:false so the UI can show the error
+		// inline; a 5xx here would force the page into a retry loop.
+		p, _ := e.Proxies.Get(id)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"id":       id,
+			"ok":       false,
+			"error":    err.Error(),
+			"status":   p.LastProbeStatus,
+			"probedAt": p.LastProbeAt,
+		})
+		return
+	}
+	p, _ := e.Proxies.Get(id)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":       id,
+		"ok":       true,
+		"status":   p.LastProbeStatus,
+		"probedAt": p.LastProbeAt,
+	})
 }
 
 // --- Stats ------------------------------------------------------------------

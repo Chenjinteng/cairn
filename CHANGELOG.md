@@ -52,6 +52,75 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.9] - 2026-09-26
+
+本轮主题:**配置单源化 — UI 唯一入口;env 只剩 5 个基础设施**。v0.5.8 之前,设置页上每个字段都带一个紫色「环境变量」标签,说明当前值是 `.env` 来的还是 UI 改的;Mutable > env 的双重优先级让运维首部署时被「我改了 UI 但 .env 里还有同一个值,到底用哪个?」反复困扰。本轮把业务配置全部砍成 UI 唯一来源,env 只剩 5 个基础设施变量(PORT / DATA_DIR / STORAGE_DIR / CREDENTIAL_KEY / GO_HUB_ENV)。
+
+本轮同步文案重命名:「默认上游地址」→「仓库地址(/前缀)」。「上游」一词让运维以为配的是上游镜像源,实际这个字段配的就是 cairn 自己对外暴露的地址(docker login / docker push 连的就是它)。
+
+### 新增
+- **代理连通性自动监测**(v0.5.9 hotfix):每个代理条目后台每 60 秒探测一次可达性,
+  状态写入 `Proxy.LastProbeAt` / `LastProbeStatus` (`ok` / `failed` / `unknown`)/ `LastProbeError`。
+  探测目标:**proxy endpoint 本身**(TCP dial + 短 HEAD),不依赖 docker.io 是否可达。
+  启动时 ProbeAll 一次 + 后台 ticker。代理管理页加「状态」「最后探测」两列 +
+  每行「探测」按钮(立即触发 POST /api/proxies/{id}/probe);拉取任务表单的下拉里
+  不可达代理加 `[不可用]` 标签 + disabled(仍可选,带 Tooltip 提示)。
+- **`internal/config.Config` 13 个无 env fallback 的 read helper**:之前 11 个 `EffectiveXxx()`
+  函数每个都做「Mutable override > env value > hardcoded default」三段判断,
+  现在 env 那段整个砍掉,逻辑简化为「Mutable override 或 hardcoded default」。
+
+### 变更
+- **`internal/config.Load()`**:不再读取 `REGISTRY_URL` / `REGISTRY_PROXY` / `REGISTRY_USERNAME` /
+  `REGISTRY_PASSWORD` / `REGISTRY_NAME` / `REGISTRY_NOTIFY_TOKEN` / `REGISTRY_ALLOW_*` /
+  `REGISTRY_PULL_PLATFORMS` / `REGISTRY_PULL_HISTORY_RETENTION_DAYS` /
+  `REGISTRY_STATS_RETENTION_DAYS` / `REGISTRY_STATS_IGNORE_USERAGENTS` 等业务 env。
+  设了也不再读,会被 panel 值覆盖。
+- **`internal/config.Config` struct 砍 9 个字段**:`RegistryURL` / `RegistryProxy` /
+  `RegistryUsername` / `RegistryPassword` / `RegistryName` / `AllowDelete` / `AllowPull` /
+  `NotifyToken` / `AllowRegistryEvents` / `StatsRetentionDay` /
+  `StatsIgnoreUserAgents` / `PullPlatforms` / `PullHistoryRetentionDay` /
+  `PullQueueSize` / `CacheTTL`(死的)/ `StatsAggregationInterval`(死的)全部移除。
+- **`cmd/server/main.go` slog.Info**:启动日志只打 `port` / `env` / `credentials_dir` /
+  `storage_dir`,不再打印业务字段。
+- **`internal/api/handlers.go` MutableSettings 砍 11 个 `*Source` 字段** + 删 `src()` dead helper。
+- **`internal/api/handlers_extra.go` ignoreRules.env 渲染分支移除**。
+- **`internal/pull/executor.go`**: `pull.NewExecutor` 第一参直接传 `50` 常量,
+  `PullQueueSize` 既不是 env 也不是 panel-tunable 的。
+- **`web/src/pages/settings-page.tsx`**:
+  - 「默认上游地址」→「仓库地址(/前缀)」语义重整
+  - 7 个 Form.Item 全部改成「灰显 + ✏️ 编辑 → 点开改 → 保存」模式
+  - 删 `SourceTag` 组件 + 7 处 inline 标签 + 「保存全部设置」按钮
+- **`web/src/types.ts` MutableSettings 删 9 个 `*Source` 字段**。
+- **`web/src/pages/proxies-page.tsx`** 加「状态」「最后探测」列 + 「探测」按钮 +
+  `handleProbe` + `probingIds` state。
+- **`web/src/pages/pull-page.tsx`** 代理下拉每项加 `[可用]/[不可用]` 标签,
+  不可达加 `disabled`(仍可在 advanced 选项里选)。
+
+### 修复
+- 顺手 `gofmt -w` 了 0.6.0 commit 残留的 handlers.go 缩进 + executor_test.go 末换行。
+
+### 影响 / 升级
+- **数据无破坏**:SQLite schema 没动,settings 表所有键/字段/默认值不变。
+- 之前 UI 改过的所有 `Mutable` override 一行一行都还在工作。
+- 升级前 `.env` 里如果有 `REGISTRY_URL/PROXY/NAME/NOTIFY_TOKEN` 等,升级后会被忽略,
+  行为以 UI 为准(默认值跟 v0.5.8 的 env 行为一致)。
+- **代理连通性监测**:158 这类断网环境现在 UI 上立刻能看到哪条代理挂了,
+  不会再因为拉镜像 timeout 才知道。
+- `go test ./...` 全绿;`gofmt -l .` 干净。
+
+### 文档
+- `.env.example` 从 27 个 env 砍到 5 + 构建期。设了也没用的旧业务 env
+  会被忽略,容器 restart 后行为不变。
+- `README.md` 当前状态 / 版本号 → 0.5.9。
+- `CHANGELOG.md` 新增本节。
+- `AGENTS.md` env-rule 新增门槛(新加业务 env 必须先回答「为什么不能走 UI?」)。
+
+### 留到 v0.5.10+
+- TLS 全套:DB `tls_certificates` 表 + 同端口根据 mode 切换 +
+  上传证书 + 生成自签名 + 热加载。
+
+---
+
 ## [0.5.8] - 2026-09-26
 
 本轮主题：**热度开箱即用**。v0.5.7 之前，热度统计依赖「事件共享密钥 + 外部 registry 的 notifications webhook」——自带 registry 的一次 push/pull 不会进入热度表，运维要么搭一套 Distribution 自己接 webhook，要么看不到数据。本轮把热度链路从「可选外部 webhook」改成「自带 registry 就地喂事件 + 外部 registry webhook 仍可选」两轨并行：默认就有数据，外接依然能接。

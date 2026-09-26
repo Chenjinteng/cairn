@@ -704,10 +704,20 @@ export default function PullPage({ config }: Props) {
                                     : '选择代理'
                                 }
                                 disabled={proxies.length === 0}
-                                options={proxies.map((p) => ({
-                                  value: p.id,
-                                  label: `${p.name}（${p.url}${p.hasAuth ? '，带认证' : ''}）`,
-                                }))}
+                                options={proxies.map((p) => {
+                                  const status = p.lastProbeStatus || '';
+                                  const tag =
+                                    status === 'ok'
+                                      ? ' [可用]'
+                                      : status === 'failed'
+                                        ? ' [不可用]'
+                                        : '';
+                                  return {
+                                    value: p.id,
+                                    label: `${p.name}（${p.url}${p.hasAuth ? '，带认证' : ''}）${tag}`,
+                                    disabled: status === 'failed',
+                                  };
+                                })}
                               />
                             </Form.Item>
                           );

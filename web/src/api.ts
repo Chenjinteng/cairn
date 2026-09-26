@@ -177,6 +177,13 @@ export const updateProxy = (id: string, patch: ProxyPatch) =>
 export const deleteProxy = (id: string) =>
   request<{ id: string }>(`/api/proxies/${encodeURIComponent(id)}`, { method: 'DELETE' });
 
+/** v0.5.10: 探测代理 URL 本身可达性（不拉任何 target）。返回 ok=false 不代表 proxy 不能用——只是当前不可达。 */
+export const probeProxy = (id: string) =>
+  request<{ id: string; ok: boolean; status?: string; probedAt?: string; error?: string }>(
+    `/api/proxies/${encodeURIComponent(id)}/probe`,
+    { method: 'POST' }
+  );
+
 /** 测试代理连通性；targetUrl 留空则服务端用本 registry 的 /v2/。 */
 export const testProxy = (id: string, targetUrl?: string) =>
   request<ProxyTestResult>(`/api/proxies/${encodeURIComponent(id)}/test`, {

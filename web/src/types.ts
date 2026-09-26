@@ -281,6 +281,10 @@ export interface ProxyEntry {
   note?: string;
   createdAt: string;
   updatedAt: string;
+  /** v0.5.10: reachability — 'ok' / 'failed' / 'unknown' (never probed) */
+  lastProbeStatus?: 'ok' | 'failed' | 'unknown' | '';
+  lastProbeAt?: string;
+  lastProbeError?: string;
 }
 
 export interface ProxyInput {

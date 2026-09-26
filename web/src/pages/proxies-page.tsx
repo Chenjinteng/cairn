@@ -50,6 +50,8 @@ export default function ProxiesPage({ config: initialConfig }: Props) {
   const { message, modal } = AntdApp.useApp();
   const [config, setConfig] = useState<AppConfig | null>(initialConfig);
   const [proxies, setProxies] = useState<ProxyEntry[]>([]);
+  // v0.5.10: per-row spinner for the '立即探测' button.
+  const [probingIds, setProbingIds] = useState<Record<string, boolean>>({});
   const [editing, setEditing] = useState<ProxyEntry | null>(null);
   const [form] = Form.useForm<FormValues>();
   const [modalOpen, setModalOpen] = useState(false);
@@ -155,7 +157,28 @@ export default function ProxiesPage({ config: initialConfig }: Props) {
     }
   };
 
-  const handleOpenTest = (p: ProxyEntry) => {
+  const handleProbe = async (p: ProxyEntry) => {
+  setProbingIds((prev) => ({ ...prev, [p.id]: true }));
+  try {
+    const r = await probeProxy(p.id);
+    if (r.success && r.data) {
+      const out = r.data;
+      if (out.ok) {
+        message.success(`${p.name} 可用`);
+      } else {
+        message.warning(`${p.name} 不可用: ${out.error || '未知错误'}`);
+      }
+      // Refresh from server so the row reflects persisted LastProbe* fields.
+      await refresh();
+    } else {
+      message.error(r.message ?? '探测失败');
+    }
+  } finally {
+    setProbingIds((prev) => ({ ...prev, [p.id]: false }));
+  }
+};
+
+const handleOpenTest = (p: ProxyEntry) => {
     setTesting(p);
     setTestTarget('');
     setTestResult(null);
@@ -242,13 +265,51 @@ export default function ProxiesPage({ config: initialConfig }: Props) {
       render: (_, p) => <Tooltip title={p.updatedAt}>{formatDateTime(p.updatedAt)}</Tooltip>,
     },
     {
+      title: '状态',
+      key: 'lastProbeStatus',
+      width: 110,
+      render: (_, p) => {
+        const s = p.lastProbeStatus || '';
+        if (s === 'ok') return <Tag color="success" icon={<CheckCircleOutlined />}>可用</Tag>;
+        if (s === 'failed')
+          return (
+            <Tooltip title={p.lastProbeError || '探测失败'}>
+              <Tag color="error" icon={<CloseCircleOutlined />}>不可用</Tag>
+            </Tooltip>
+          );
+        return <Tag>未探测</Tag>;
+      },
+    },
+    {
+      title: '最后探测',
+      key: 'lastProbeAt',
+      width: 150,
+      render: (_, p) =>
+        p.lastProbeAt ? (
+          <Tooltip title={p.lastProbeAt + (p.lastProbeError ? ' — ' + p.lastProbeError : '')}>
+            {formatDateTime(p.lastProbeAt)}
+          </Tooltip>
+        ) : (
+          <span style={{ color: 'var(--color-text-3)' }}>—</span>
+        ),
+    },
+    {
       title: '操作',
       key: 'actions',
       width: 230,
       fixed: 'right',
       render: (_, p) => (
         <Space size={4}>
-          <Button type="link" size="small" icon={<ApiOutlined />} onClick={() => handleOpenTest(p)}>
+          <Button
+            type="link"
+            size="small"
+            icon={<ApiOutlined />}
+            loading={probingIds[p.id]}
+            onClick={() => void handleProbe(p)}
+          >
+            探测
+          </Button>
+          <Button type="link" size="small" onClick={() => handleOpenTest(p)}>
             测试
           </Button>
           <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleOpenEdit(p)}>

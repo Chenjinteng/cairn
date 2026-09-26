@@ -262,6 +262,19 @@ func (r *Runtime) Start(ctx context.Context) error {
 	if r.DB != nil && r.Cfg != nil {
 		go r.retentionLoop(r.PullCtx)
 	}
+	// v0.5.10: background proxy reachability loop. Probes each registered
+	// proxy every 60s so the management page can show live status without
+	// forcing operators to wait for a failed pull to find out the entry
+	// is dead. Boot kicks one probe so the UI never lingers on "unknown".
+	// Lifecycle piggy-backs on r.PullCtx (cancelled in Stop).
+	if r.Proxies != nil {
+		go func() {
+			if err := r.Proxies.ProbeAll(r.PullCtx); err != nil {
+				slog.Info("proxy probe at boot: at least one entry failed", "err", err)
+			}
+			r.Proxies.StartProbeLoop(r.PullCtx, 60*time.Second)
+		}()
+	}
 
 	errCh := make(chan error, 1)
 	go func() {
