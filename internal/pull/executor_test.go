@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"testing"
 
+	"cairn/internal/config"
 	"cairn/internal/registry"
 )
 
@@ -229,5 +230,44 @@ func TestPlanTransferSingleArchManifestUnaffected(t *testing.T) {
 	}
 	if len(plan.blobs) != 2 {
 		t.Fatalf("single-arch manifest: want 2 blobs (config+layer), got %d", len(plan.blobs))
+	}
+}
+
+// TestPlatformAllowNilSafe pins the v0.5.16 fix. The allow-list used to be
+// a func field on Orchestrator that the single construction site forgot to
+// assign, so calling it panicked with a nil dereference and killed the
+// process (every in-memory job disappeared with it). It now reads live
+// config, and must stay nil-safe at every step of the chain.
+func TestPlatformAllowNilSafe(t *testing.T) {
+	var nilOrch *Orchestrator
+	if got := nilOrch.platformAllow(); got != nil {
+		t.Fatalf("nil orchestrator: got %v, want nil", got)
+	}
+	// A zero-value Orchestrator has no Cfg at all — must not panic.
+	if got := (&Orchestrator{}).platformAllow(); got != nil {
+		t.Fatalf("nil Cfg: got %v, want nil", got)
+	}
+	// A Cfg whose Mutable is nil (boot-before-settings) is equally fine.
+	if got := (&Orchestrator{Cfg: &config.Config{}}).platformAllow(); got != nil {
+		t.Fatalf("nil Mutable: got %v, want nil", got)
+	}
+}
+
+// TestPlatformAllowReadsLiveConfig: the list is normalised (trim +
+// lowercase) and re-read on every call, so a settings-page change applies
+// to the next queued job without a restart. An empty value means "pull
+// every platform", hence nil rather than an empty non-nil slice.
+func TestPlatformAllowReadsLiveConfig(t *testing.T) {
+	mut := &config.Mutable{}
+	mut.Set("pull.platforms", " Linux/AMD64 , linux/arm64 ")
+	o := &Orchestrator{Cfg: &config.Config{Mutable: mut}}
+
+	got := o.platformAllow()
+	if len(got) != 2 || got[0] != "linux/amd64" || got[1] != "linux/arm64" {
+		t.Fatalf("platformAllow = %v", got)
+	}
+	mut.Set("pull.platforms", "")
+	if got := o.platformAllow(); got != nil {
+		t.Fatalf("cleared allow-list: got %v, want nil", got)
 	}
 }
