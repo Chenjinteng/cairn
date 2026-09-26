@@ -20,7 +20,7 @@
 3. **库式后端**：HTTP handler 通过 `cmd/server` 装配，业务逻辑在 `internal/` 下，方便后续挂到别人的服务里
 4. **可观测性**：自带 `/healthz` `/readyz`
 
-## 当前状态:v0.5.13(2026-09-26) —— **代理交互:新增弹窗内「测试连接」,保存前先验证通路**
+## 当前状态:v0.5.14(2026-09-26) —— **设置页只留一个「编辑」:一按全字段可改,改完一次保存**
 
 ✅ 已实现（v0.1 – v0.4）：
 
@@ -72,7 +72,7 @@
 4. `README.md` 里所有 `docker build/tag/push` 示例
 5. `CHANGELOG.md` 新增一节
 
-当前版本：`0.5.13`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
+当前版本：`0.5.14`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
 
 ## 项目结构
 

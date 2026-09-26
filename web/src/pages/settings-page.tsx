@@ -38,18 +38,10 @@ interface Props {
 }
 
 /**
- * v0.5.9 amend B: 灰显值组件 — 显示当前值 + ✏️ 编辑图标按钮。
- * 不带校验、不带保存逻辑（由父级 useState + handlers 驱动）。
+ * v0.5.14: 只读值组件 — 只显示当前值，不带编辑控件。
+ * 编辑入口统一收在面板顶部的全局「编辑」按钮上，不再逐项给按钮。
  */
-function ReadonlyValue({
-  value,
-  mono,
-  onEdit,
-}: {
-  value: string;
-  mono?: boolean;
-  onEdit?: () => void;
-}) {
+function ReadonlyValue({ value, mono }: { value: string; mono?: boolean }) {
   return (
     <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
       <span
@@ -65,11 +57,6 @@ function ReadonlyValue({
       >
         {value}
       </span>
-      {onEdit ? (
-        <Button size="small" type="link" onClick={onEdit}>
-          ✏️ 编辑
-        </Button>
-      ) : null}
     </div>
   );
 }
@@ -108,9 +95,9 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
   const [registryUsernameDraft, setRegistryUsernameDraft] = useState<string>('');
   const [registryPasswordDraft, setRegistryPasswordDraft] = useState<string>('');
   const [savingBulk, setSavingBulk] = useState(false);
-  // v0.5.9 hotfix 2: 整页编辑 — 点「编辑」按钮后整个面板变可输入,
-  // 顶部「保存」一个 button 把所有变更一次性 PATCH,「取消」还原 draft + 退出。
-  // 不再按字段逐个切换(per-field editingKey 移除)。
+  // v0.5.9 hotfix 2 起：整页编辑 — 点顶部「编辑」按钮后整个面板变可输入,
+  // 「保存所有修改」把所有变更一次性 PATCH,「取消」还原 draft + 退出。
+  // v0.5.14 起：字段级「编辑」按钮全部移除,编辑入口只剩顶部这一个。
   const [editing, setEditing] = useState<boolean>(false);
 
   const beginEdit = () => setEditing(true);
@@ -389,7 +376,7 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
       ) : null}
 
       <div className="panel" style={{ padding: 16 }}>
-        {/* v0.5.9 hotfix 2: 全局操作条。点「编辑」-> 整页进入编辑模式(所有字段切换为 input),点「保存」一次性 PATCH 所有变更,「取消」还原 draft + 退出编辑态。 */}
+        {/* 全局操作条（v0.5.14 起是唯一编辑入口）。点「编辑」-> 整页进入编辑模式(所有字段切换为 input),点「保存所有修改」一次性 PATCH 所有变更,「取消」还原 draft + 退出编辑态。 */}
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 16 }}>
           {editing ? (
             <>
@@ -402,9 +389,14 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
               <span style={{ color: 'var(--color-text-3)', fontSize: 12 }}>所有改动一起保存</span>
             </>
           ) : (
-            <Button type="primary" icon={<EditOutlined />} onClick={beginEdit} disabled={!config}>
-              编辑
-            </Button>
+            <>
+              <Button type="primary" icon={<EditOutlined />} onClick={beginEdit} disabled={!config}>
+                编辑
+              </Button>
+              <span style={{ color: 'var(--color-text-3)', fontSize: 12 }}>
+                点「编辑」后下面所有参数一起改，改完一次保存
+              </span>
+            </>
           )}
         </div>
 
@@ -429,7 +421,6 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
               <ReadonlyValue
                 value={config?.mutable.registryUrl || '(空 — pull 任务回退到 Docker Hub)'}
                 mono
-                onEdit={() => beginEdit('registry.url')}
               />
             )}
           </Form.Item>
@@ -492,7 +483,6 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
             ) : (
               <ReadonlyValue
                 value={config?.mutable.registryName || '镜像仓库'}
-                onEdit={() => beginEdit('registry.name')}
               />
             )}
           </Form.Item>
@@ -514,7 +504,6 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
             ) : (
               <ReadonlyValue
                 value={config?.mutable.allowDelete ? '启用' : '只读（关闭）'}
-                onEdit={() => beginEdit('allow.delete')}
               />
             )}
           </Form.Item>
@@ -536,7 +525,6 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
             ) : (
               <ReadonlyValue
                 value={config?.mutable.allowPull ? '启用' : '禁用'}
-                onEdit={() => beginEdit('allow.pull')}
               />
             )}
           </Form.Item>
@@ -559,7 +547,6 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
             ) : (
               <ReadonlyValue
                 value={`${config?.mutable.statsRetentionDays ?? 365} 天`}
-                onEdit={() => beginEdit('stats.retention.days')}
               />
             )}
           </Form.Item>
@@ -622,7 +609,6 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
                     ? '未启用（拉取所有平台）'
                     : pullPlatformsDraft.join(', ')
                 }
-                onEdit={() => beginEdit('pull.platforms')}
               />
             )}
           </Form.Item>
