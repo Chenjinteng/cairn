@@ -6,6 +6,32 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.11] - 2026-09-26
+
+本轮主题:**hotfix — 收口 0.5.10 没修完的 ID 唯一性**。0.5.10 把 `randHex()` 的熵源从 `time.Now().UnixNano()` 换成了 `crypto/rand`，但随机后缀仍只有 **4 个 hex 字符(16 bit)**。400 个并发调用落在同一毫秒时，16 bit 的期望撞车数约 **1.2 次**——测试连跑 20 次有 **13 次 FAIL**。`newID()` 产出的是凭据库 / 代理库的**存储主键**，撞车等于静默覆盖(丢数据)，所以本轮把后缀加宽到 **8 个 hex 字符(32 bit)**，同场景期望撞车降到 **≈2e-5**。除此之外均为收尾。
+
+### 修复
+
+- **`internal/api/handlers_extra.go` `newID()`**：随机后缀 `randHex(4)` → `randHex(8)`。id 形状从 `20260926-111545-103-a83a`（秒级时间戳 + 毫秒 + 4 位随机）变为 `20260926-111545-103-a83ac1f7`（毫秒后跟 **8 位**随机）。这是本轮唯一的行为变更。
+- **`internal/api/id_internal_test.go`**：同步加宽形状断言（`+1+8`、`len(parts[3]) != 8`），并把 `TestNewIDUniqueUnderConcurrency` 的注释补上 16 bit / 32 bit 撞车率对照。
+
+### 验证
+
+- `go test -count=20 -run TestNewIDUniqueUnderConcurrency -v ./internal/api/`：改前(16 bit) **13/20 FAIL** → 改后(32 bit) **20/20 PASS**。
+- `go test -race -count=1 ./internal/...` 全绿；`go vet ./internal/...` 干净；`gofmt -l internal/api` 干净。
+
+### 兼容性
+
+- **磁盘格式没动**：凭据库 / 代理库按 JSON object 的 key 存 id，4 位后缀的旧 id 与 8 位后缀的新 id 可以共存，升级不需要迁移。
+- 只跑过 0.5.10 的实例直接升 0.5.11；还停在 0.5.9 及更早的实例建议一步跳到 0.5.11（0.5.10 的凭据库死锁修复也包含在内）。
+
+### 文档 / 收尾
+
+- 代码注释里 **8 处**把「代理连通性监测」误标成 `v0.5.10` 的地方统一改回 `v0.5.9`（该功能随 0.5.9 发布），兑现 0.5.10「已知遗留」里「留待统一清账」的承诺。
+- `.gitignore` 第 36 行的通配符粘连（`*.swp.tmp_nginx_header.conf`）修成 `*.swp`。
+- 新增 [`docs/ROADMAP.md`](./docs/ROADMAP.md)：排定后续号位。原 0.5.11「韧性轮」顺延为 **0.5.12**、原 0.5.12「工程化」顺延为 **0.5.13**；`0.6.0` TLS 由人指定，不随顺延改号。
+- 0.5.10「已知遗留」里另外两条仍开着，留给 0.5.12 韧性轮：`internal/events/events.go` 的 `UnixNano` 事件 ID（B6）、`internal/proxies` 缺 `writeMu`（B4）。
+
 ## [0.5.10] - 2026-09-26
 
 本轮主题:**hotfix — 修生产环境凭据库死锁,以及 ID 撞车导致的静默丢数据**。158 上「UI 点不动、新建凭据后整站卡死」的根因**不在前端**:凭据库 `Put` 在持有写锁的情况下做 AES 加密 + 磁盘落盘,返回时没有释放写锁,此后任何 `List` / `Get` 永久阻塞。前端所有请求都没有超时,于是每个按钮都卡在 loading —— 看起来像「前端卡死」,实际是后端把锁漏了。
