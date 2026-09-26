@@ -46,6 +46,17 @@ import type {
 } from '../types';
 import { formatDateTime } from '../utils';
 
+/**
+ * v0.5.15: 探测延迟的人类可读格式。探测是纯 TCP 建连，正常在毫秒级；
+ * 缺失 / 非有限值 / 0 统一显示「—」，跟状态列的"未探测"对齐。
+ */
+function formatLatency(ms?: number): string {
+  if (ms === undefined || !Number.isFinite(ms) || ms <= 0) {
+    return '—';
+  }
+  return ms >= 10 ? `${Math.round(ms)} ms` : `${ms.toFixed(1)} ms`;
+}
+
 interface Props {
   config: AppConfig | null;
 }
@@ -163,7 +174,8 @@ export default function ProxiesPage({ config: initialConfig }: Props) {
       if (r.success && r.data) {
         const out = r.data;
         if (out.ok) {
-          message.success(`${name} 可用`);
+          // v0.5.15: 探测现在会带回建连延迟，顺手一起告诉用户。
+          message.success(`${name} 可用 · 延迟 ${formatLatency(out.latencyMs)}`);
         } else {
           message.warning(`${name} 不可用: ${out.error || '未知错误'}`);
         }
@@ -308,6 +320,10 @@ export default function ProxiesPage({ config: initialConfig }: Props) {
    * v0.5.13: 保存前试连。只做「地址非空 + http(s)://」这一层校验 ——
    * 名称等字段不拦测试，因为试连的意义就是在填完一堆校验之前先知道通不通。
    * 服务端不落库，所以这里的结果不代表任何已存条目。
+   *
+   * v0.5.15: 编辑态复用同一个入口。编辑时密码框刻意留空（留空 = 不改），
+   * 所以把条目 id 一并带上：服务端在「密码为空 + 用户名与存量一致」时会回退用
+   * 已存的密码去试连 —— 否则一进编辑弹窗点「测试连接」必然是 407。
    */
   const handleTestDraft = async () => {
     const values = form.getFieldsValue() as Partial<FormValues>;
@@ -335,6 +351,8 @@ export default function ProxiesPage({ config: initialConfig }: Props) {
     setDraftTesting(true);
     try {
       const result = await testProxyDraft({
+        // v0.5.15: 编辑态带上 id，服务端据此在密码留空时回退存量密码。
+        id: editing?.id,
         url,
         username: values.username ?? '',
         password: values.password ?? '',
@@ -485,6 +503,13 @@ export default function ProxiesPage({ config: initialConfig }: Props) {
       },
     },
     {
+      // v0.5.15: 上一次探测的 TCP 建连延迟。
+      title: '延迟',
+      key: 'lastProbeLatencyMs',
+      width: 100,
+      render: (_, p) => <span className="mono">{formatLatency(p.lastProbeLatencyMs)}</span>,
+    },
+    {
       title: '最后探测',
       key: 'lastProbeAt',
       width: 150,
@@ -574,7 +599,7 @@ export default function ProxiesPage({ config: initialConfig }: Props) {
           <p className="page-subtitle">管理访问外部源时使用的 HTTP 代理。</p>
         </div>
         <div className="page-actions">
-          <Tooltip title="逐个探测所有代理地址本身是否可达（不穿过代理访问目标），结果直接更新状态列">
+          <Tooltip title="逐个探测所有代理的 ip:端口是否连得通，并测出建连延迟（不穿过代理、不发任何请求），结果更新状态列和延迟列">
             <Button
               icon={<ThunderboltOutlined />}
               loading={probingAll}
@@ -615,15 +640,22 @@ export default function ProxiesPage({ config: initialConfig }: Props) {
       <Alert
         type="info"
         showIcon
-        message="连通性测试说明"
+        message="「探测」和「测试」是两件事"
         description={
           <div>
+            <div>
+              <strong>探测</strong>：对每个代理的 <span className="mono">ip:端口</span> 做一次纯 TCP 建连（不穿过代理、不发任何请求），结果写进「状态」列和「延迟」列。
+            </div>
+            <div style={{ marginTop: 4 }}>
+              <strong>测试</strong>：实际穿过这个代理去访问一个目标，入口在每行的「测试」按钮，以及新增/编辑弹窗里的「测试连接」。
+            </div>
+            <div style={{ marginTop: 8 }}>下面这段说的是「测试」：</div>
             <div>
               代理本身没有可直接访问的资源，所以测试会<strong>实际穿过这个代理</strong>去访问一个目标。
             </div>
             <div style={{ marginTop: 4 }}>
               目标留空 = 本仓库的 <span className="mono">/v2/</span>；想验证"能不能出外网"就填{' '}
-              <span className="mono">https://registry-1.docker.io/v2/</span> 之类。超时上限 8 秒。
+              <span className="mono">https://registry-1.docker.io/v2/</span> 之类。超时上限 12 秒。
             </div>
           </div>
         }
@@ -636,16 +668,15 @@ export default function ProxiesPage({ config: initialConfig }: Props) {
         destroyOnClose
         footer={
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {editing ? null : (
-              <Button
-                icon={<ApiOutlined />}
-                loading={draftTesting}
-                disabled={saving}
-                onClick={() => void handleTestDraft()}
-              >
-                测试连接
-              </Button>
-            )}
+            {/* v0.5.15: 编辑态也保留这颗按钮 —— 改完地址最想确认的就是"到底通不通"。 */}
+            <Button
+              icon={<ApiOutlined />}
+              loading={draftTesting}
+              disabled={saving}
+              onClick={() => void handleTestDraft()}
+            >
+              测试连接
+            </Button>
             <span style={{ flex: 1 }} />
             <Button disabled={saving} onClick={() => setModalOpen(false)}>
               取消
@@ -698,30 +729,26 @@ export default function ProxiesPage({ config: initialConfig }: Props) {
           <Form.Item label="备注（可选）" name="note">
             <Input placeholder="例如：只有它能出外网" />
           </Form.Item>
-          {editing ? null : (
-            <>
-              <Form.Item
-                label="测试目标（可选，不保存）"
-                extra={
-                  <>
-                    留空 = 本仓库的 <span className="mono">/v2/</span>；想验证「能不能出外网」就填{' '}
-                    <span className="mono">https://registry-1.docker.io/v2/</span>。
-                  </>
-                }
-              >
-                <Input
-                  placeholder="留空 = 本仓库 /v2/"
-                  value={draftTarget}
-                  onChange={(e) => {
-                    setDraftTarget(e.target.value);
-                    setDraftTestResult(null);
-                  }}
-                  allowClear
-                />
-              </Form.Item>
-              {draftTestResult ? <ProxyTestAlert result={draftTestResult} /> : null}
-            </>
-          )}
+          <Form.Item
+            label="测试目标（可选，不保存）"
+            extra={
+              <>
+                留空 = 本仓库的 <span className="mono">/v2/</span>；想验证「能不能出外网」就填{' '}
+                <span className="mono">https://registry-1.docker.io/v2/</span>。
+              </>
+            }
+          >
+            <Input
+              placeholder="留空 = 本仓库 /v2/"
+              value={draftTarget}
+              onChange={(e) => {
+                setDraftTarget(e.target.value);
+                setDraftTestResult(null);
+              }}
+              allowClear
+            />
+          </Form.Item>
+          {draftTestResult ? <ProxyTestAlert result={draftTestResult} /> : null}
         </Form>
       </Modal>
 

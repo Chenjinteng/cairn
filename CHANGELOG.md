@@ -6,6 +6,48 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.15] - 2026-09-26
+
+本轮主题:**把「探测」降级为纯 TCP 连通性 + 延迟**,并**让「测试连接」也出现在编辑弹窗里**。原先的「探测」是拿代理服务器本身当 HTTP 目标发一次请求——对 `http://` 代理勉强可用,对 `socks5://` 代理或只做 CONNECT 转发的代理必然失败,于是出现「新增时测试通过、探测时却不可用」的矛盾。本轮把探测收敛成一句话:**这个 ip:端口从本机连得上吗、往返多慢**;至于「这代理能不能真的转发」,交给弹窗内与行内的「测试」按钮。
+
+### 变更
+
+- **`Store.Probe` 改为纯 TCP 建连**:`net.DialTimeout` 建连后立即关闭,不发请求、不握手、不校验协议,`http` / `https` / `socks5` 三种代理一视同仁,超时 `5s`。`internal/proxies/proxies.go` 里的 `net/http` 依赖随之移除。
+- **端口缺省规则**:地址未显式带端口时按协议补默认端口——`http` → `80`、`https` → `443`、`socks5` → `1080`(新增 `dialAddr`)。`http://proxy.example.com` 这种写法不再被当成缺端口。
+- **新增延迟字段 `lastProbeLatencyMs`**:探测往返耗时(毫秒,浮点)。`GET /api/proxies`、`POST /api/proxies/{id}/probe`、`POST /api/proxies/probe` 的响应都带上;**失败时省略**(`omitempty`),不用 `0` 冒充测量值。
+- **代理页新增「延迟」列**(「状态」列与「最后探测」列之间):上次探测的建连延迟;未探测或探测失败显示 `—`。
+- **「测试连接」按钮与「测试目标」输入框移入编辑弹窗**:该按钮自 v0.5.13 起只在新增态出现,本轮**编辑态同样可用**(这取代了 v0.5.13「编辑态隐藏该按钮」的决定)。`POST /api/proxies/test` 请求体新增可选 `id`。
+- **编辑态试连的密码回退规则**:编辑表单不回显已存密码,空密码因此有歧义。现在的规则是——`id` 能解析出条目,**且**提交的用户名与已存条目一致时复用已存密码;用户名被清空或改动则按匿名 / 新凭据试连,使测试结果与用户眼前的表单保持一致。
+- **页头「探测」Tooltip 与页底说明改为两段式**:明确「探测 = 纯 TCP 连通性」「测试 = 穿过代理去访问目标」是两件事。
+
+### 修复
+
+- **「新增时测试通过、探测时不可用」**:`<proxy>`(`http://proxy.example.com:4433`,只做 CONNECT 转发)新增时试连成功,探测却报 `context deadline exceeded`(错误里带 `Head http://proxy.example.com:4433`)。根因是探测把「代理服务器能否直接应答一个普通 HTTP 请求」当成了健康检查——那是对代理能力的额外要求,不是「ip:端口通不通」。改为纯 TCP 后该条目探测转为可用并带回延迟。
+- **页底超时文案与实现不符**:写的是「超时上限 8 秒」,而实际执行测试的路径最长 **12 秒**(`client.Timeout` 10 秒 + 上下文 12 秒),文案改为 12 秒。
+
+### 已知遗留(本轮未改)
+
+- **`UpdateProxy` 用空密码会清掉已存密码**:`internal/api/handlers_extra.go` 的 `UpdateProxy` 无条件执行 `existing.Password = in.Password`,而前端编辑态在密码留空时**不发送** `password` 字段,于是编辑任何条目(哪怕只改备注)都会把已存密码清掉,与表单上「密码(留空保留原密码)」的文案矛盾。修复需要把 `proxyInput.Password` 改成指针或引入显式 `keepPassword`,即**变更已文档化的 PATCH 语义**,故本轮不擅自改,记录待定。
+- 设置页 5 处 `TS6133` 未使用声明(`Descriptions`、`formatDateTime`、`inventory`、`savingRegistryUrl`、`setSavingRegistryUrl`)仍在基线里,未清理。
+
+### 验证
+
+- Go 侧:`gofmt -l internal cmd` 无输出;`go vet ./internal/...` 退出码 0;`go build ./...` 与 `go build -tags webui ./...` 退出码 0;`go test -count=1 ./internal/...` 全部 `ok`,含新增用例 `TestProbeSucceedsForPlainTCPListener` / `TestProbeReportsDialFailure` / `TestDialAddrDefaultsPort`。
+- 前端:`./web/node_modules/.bin/tsc --noEmit -p web/tsconfig.json` 与基线逐条比对 **10 → 10,无新增**;`cd web && npm run build` 退出码 0(`✓ 3040 modules transformed`),产物 `internal/webui/dist/assets/index-ZcXUjQDW.js`(约 1.20 MB,gzip 约 377 kB)。
+- **构建产物断言**:`assets/` 目录只含新哈希,`index.html` 引用新哈希;产物内 `lastProbeLatencyMs`、「是两件事」、「测试连接」三项 `grep -c` 均 > 0。
+- **隔离实例冒烟**(独立端口 `8899` + 独立数据目录):`/healthz` 返回 `status:ok`;`/api/config` 的 version 为 `0.5.15`;**指向在听的端口** `http://127.0.0.1:8899` 探测 → `ok:true` 且 `latencyMs:0.701`;**指向未监听的端口** `http://127.0.0.1:8901` 探测 → `ok:false` 且原因为 `connection refused`;`GET /api/proxies` 中可用条目带 `lastProbeLatencyMs`、失败条目**不带该键**;带 `id` 调 `POST /api/proxies/test` 仍正常返回(编辑态试连路径可用);退出时日志出现 `shutdown signal received, draining` 与 `http server stopped`。
+
+### 兼容性
+
+- **API 只增不改**:`lastProbeLatencyMs` / `latencyMs` 是新增响应字段,旧客户端忽略即可;`POST /api/proxies/test` 的 `id` 是可选字段,不传时行为与 v0.5.13 完全一致。
+- **磁盘格式未变**:`proxies.json` 结构未改(延迟随条目一起序列化,旧文件读入后该字段为零值,不影响加载),升级不需迁移。
+- ⚠️ **探测语义变更须知**:「探测」不再回答「这代理能不能转发」,只回答「ip:端口连不连得上」。要判断代理是否真能工作,请用行内「测试」按钮或 `POST /api/proxies/{id}/test`(可带 `targetUrl`)。相应地,升级后**首次探测结果可能与升级前不同**——原先因协议不匹配而判失败的条目,现在可能转为可用。
+
+### 轮次与号位
+
+- 本轮占 **0.5.15**:探测口径修正属**缺陷修复**,弹窗内「测试连接」与「延迟」列属既有功能优化,按 `AGENTS.md` 判定取小版本(第 3 位)+1。
+- `docs/ROADMAP.md` 已顺延:韧性轮 0.5.15 → **0.5.16**、工程化 0.5.16 → **0.5.17**;`0.6.0`(TLS 证书管理)由人指定,不随顺延改号。**历史小节里「留给韧性轮」的提法以 `docs/ROADMAP.md` 号位总览为准,现在指的是 0.5.16。**
+
 ## [0.5.14] - 2026-09-26
 
 本轮主题:**设置页只留一个「编辑」按钮**。设置页原本有**两套编辑入口**——面板顶部一个「编辑」(点开所有字段一起改),以及 6 个字段各自带的「✏️ 编辑」(点开单个字段改)。两个入口做的是同一件事,反而让人拿不准该点哪个;6 个字段就是 6 个按钮,视觉噪音也大。本轮把字段级按钮全部删掉,只留顶部那一个:**一按即全字段可编辑,改完一次保存**。

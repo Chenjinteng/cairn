@@ -15,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -28,25 +27,30 @@ import (
 // URL is the proxy endpoint (http://... or socks5://...). If Username /
 // Password are set, the proxy is used with basic auth.
 //
-// v0.5.9: the last three fields are populated by Store.Probe and surfaced
+// v0.5.9: the last four fields are populated by Store.Probe and surfaced
 // in the proxy-management page so operators can spot dead entries without
 // waiting for a pull to fail. LastProbeStatus is one of:
 //
 //	"ok"      last probe succeeded (proxy reachable)
 //	"failed"  last probe failed (timeout / connection refused / TCP error)
 //	"unknown" never probed yet (process just started, or entry was just added)
+//
+// v0.5.15: LastProbeLatencyMs holds the TCP connect round-trip in
+// milliseconds when the probe succeeded; it stays 0 (and is therefore
+// omitted from JSON) for failures.
 type Proxy struct {
-	ID              string    `json:"id"`
-	Name            string    `json:"name"`
-	URL             string    `json:"url"`
-	Username        string    `json:"username,omitempty"`
-	Password        string    `json:"password,omitempty"`
-	Note            string    `json:"note,omitempty"`
-	CreatedAt       time.Time `json:"createdAt"`
-	UpdatedAt       time.Time `json:"updatedAt"`
-	LastProbeAt     time.Time `json:"lastProbeAt,omitempty"`
-	LastProbeStatus string    `json:"lastProbeStatus,omitempty"`
-	LastProbeError  string    `json:"lastProbeError,omitempty"`
+	ID                 string    `json:"id"`
+	Name               string    `json:"name"`
+	URL                string    `json:"url"`
+	Username           string    `json:"username,omitempty"`
+	Password           string    `json:"password,omitempty"`
+	Note               string    `json:"note,omitempty"`
+	CreatedAt          time.Time `json:"createdAt"`
+	UpdatedAt          time.Time `json:"updatedAt"`
+	LastProbeAt        time.Time `json:"lastProbeAt,omitempty"`
+	LastProbeStatus    string    `json:"lastProbeStatus,omitempty"`
+	LastProbeError     string    `json:"lastProbeError,omitempty"`
+	LastProbeLatencyMs float64   `json:"lastProbeLatencyMs,omitempty"`
 }
 
 // Store is the on-disk proxy list.
@@ -194,17 +198,24 @@ func (s *Store) load() error {
 	return nil
 }
 
-// Probe runs a quick TCP+HTTP probe against the proxy endpoint itself
-// (NOT through the proxy to a target). It tries a HEAD on the proxy URL
-// and treats any 2xx/3xx/4xx as "reachable" — only connection refused,
-// timeout, or 5xx-with-no-response count as "failed". Records the
-// outcome (LastProbeAt / LastProbeStatus / LastProbeError) back into the
-// entry in memory and on disk.
+// Probe checks TCP reachability of the proxy endpoint and measures the
+// connect latency. It stops at "the TCP handshake completed" - no HTTP
+// request is sent, and nothing is sent through the proxy.
 //
-// 5-second total budget per probe. Returns the error if the probe
-// failed; nil if it succeeded (even when the proxy returned a non-2xx —
-// a misconfigured proxy that accepts the TCP connection is still better
-// than one that's not listening).
+// Rationale (v0.5.15): the previous implementation followed the dial with
+// a HEAD request aimed at the proxy URL itself. That works for a
+// transparent forward proxy (clash / mihomo), but not for a bare
+// CONNECT-only listener such as 3proxy: the socket accepts and then waits
+// for a CONNECT line, so a perfectly healthy proxy was reported as
+// "failed: context deadline exceeded" while the create-time test (which
+// really does go through the proxy to /v2/) passed. Operators only want
+// "is this ip:port reachable, and how fast", so we now report exactly
+// that. Whether the proxy can really forward traffic is still verified by
+// the "test connection" action, which dials through it.
+//
+// 5-second budget. Records LastProbeAt / LastProbeStatus /
+// LastProbeLatencyMs / LastProbeError back into the entry, in memory and
+// on disk. Returns the error when the probe failed, nil otherwise.
 func (s *Store) Probe(id string) error {
 	p, err := s.Get(id)
 	if err != nil {
@@ -212,72 +223,75 @@ func (s *Store) Probe(id string) error {
 	}
 	pu, perr := url.Parse(p.URL)
 	if perr != nil {
-		s.recordProbe(id, time.Now().UTC(), "failed", "parse url: "+perr.Error())
+		s.recordProbe(id, time.Now().UTC(), "failed", 0, "parse url: "+perr.Error())
 		return perr
 	}
-	// http:// or https:// → dial + small request; socks5:// → TCP dial only.
 	scheme := pu.Scheme
 	if scheme != "http" && scheme != "https" && scheme != "socks5" {
-		s.recordProbe(id, time.Now().UTC(), "failed", "unsupported scheme: "+scheme)
+		s.recordProbe(id, time.Now().UTC(), "failed", 0, "unsupported scheme: "+scheme)
 		return fmt.Errorf("proxies: unsupported scheme %q", scheme)
 	}
-	addr := pu.Host
+	addr := dialAddr(pu)
 	if addr == "" {
-		s.recordProbe(id, time.Now().UTC(), "failed", "missing host")
+		s.recordProbe(id, time.Now().UTC(), "failed", 0, "missing host")
 		return errors.New("proxies: missing host")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
 	defer cancel()
-	// Step 1: TCP reachability. If the proxy endpoint isn't listening /
-	// firewalled / DNS-broken, fail fast.
+	start := time.Now()
 	var d net.Dialer
 	conn, derr := d.DialContext(ctx, "tcp", addr)
+	latency := msSince(start)
 	if derr != nil {
-		s.recordProbe(id, time.Now().UTC(), "failed", "dial "+addr+": "+derr.Error())
+		s.recordProbe(id, time.Now().UTC(), "failed", 0, "dial "+addr+": "+derr.Error())
 		return derr
 	}
 	conn.Close()
-	if scheme == "socks5" {
-		// TCP reachability is the meaningful signal for SOCKS — the actual
-		// handshake happens per-request in the client, so we don't try it
-		// here (would require writing the SOCKS5 greeting bytes).
-		s.recordProbe(id, time.Now().UTC(), "ok", "")
-		return nil
-	}
-	// Step 2: HTTP-level sanity. Try a short HEAD with ResponseHeaderTimeout
-	// so a stuck / half-open TCP accept doesn't hang us forever. We treat
-	// any non-5xx as "proxy is alive enough" — 4xx means the proxy rejected
-	// our no-target request, but the wire is up.
-	transport := &http.Transport{
-		Proxy:                 http.ProxyURL(pu),
-		ResponseHeaderTimeout: 5 * time.Second,
-		IdleConnTimeout:       3 * time.Second,
-		DisableKeepAlives:     true,
-	}
-	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
-	req, _ := http.NewRequestWithContext(ctx, http.MethodHead, p.URL, nil)
-	resp, herr := client.Do(req)
-	if herr != nil {
-		// Couldn't complete the HTTP exchange (CONNECT failed, TLS broken,
-		// header timeout). Dial was OK but the proxy isn't usable end-to-end.
-		s.recordProbe(id, time.Now().UTC(), "failed", "http: "+herr.Error())
-		return herr
-	}
-	resp.Body.Close()
-	if resp.StatusCode >= 500 {
-		err := fmt.Errorf("proxy returned %d", resp.StatusCode)
-		s.recordProbe(id, time.Now().UTC(), "failed", err.Error())
-		return err
-	}
-	s.recordProbe(id, time.Now().UTC(), "ok", "")
+	s.recordProbe(id, time.Now().UTC(), "ok", latency, "")
 	return nil
+}
+
+// probeTimeout bounds a single TCP reachability check.
+const probeTimeout = 5 * time.Second
+
+// dialAddr turns a parsed proxy URL into the host:port we should dial. A
+// missing port is filled in from the scheme's conventional default so an
+// entry written as "http://proxy.example.com" still probes correctly. Returns
+// "" when the URL carries no host at all.
+func dialAddr(u *url.URL) string {
+	if u.Host == "" {
+		return ""
+	}
+	if u.Port() != "" {
+		return u.Host
+	}
+	port := ""
+	switch u.Scheme {
+	case "http":
+		port = "80"
+	case "https":
+		port = "443"
+	case "socks5":
+		port = "1080"
+	}
+	if port == "" {
+		return u.Host
+	}
+	return net.JoinHostPort(u.Hostname(), port)
+}
+
+// msSince returns the elapsed time as float milliseconds. Sub-millisecond
+// resolution is kept on purpose: a proxy on the same LAN answers in
+// microseconds and would otherwise always render as "0 ms".
+func msSince(start time.Time) float64 {
+	return float64(time.Since(start).Microseconds()) / 1000.0
 }
 
 // recordProbe writes the probe outcome into the entry and persists
 // proxies.json. It owns its own locking window (does NOT require the
 // caller to hold a lock). Disk I/O runs while no lock is held, so a slow
 // filesystem can't wedge concurrent readers.
-func (s *Store) recordProbe(id string, at time.Time, status, errMsg string) {
+func (s *Store) recordProbe(id string, at time.Time, status string, latencyMs float64, errMsg string) {
 	s.mu.Lock()
 	p, ok := s.items[id]
 	if !ok {
@@ -287,6 +301,7 @@ func (s *Store) recordProbe(id string, at time.Time, status, errMsg string) {
 	p.LastProbeAt = at
 	p.LastProbeStatus = status
 	p.LastProbeError = errMsg
+	p.LastProbeLatencyMs = latencyMs
 	s.items[id] = p
 	// Copy out the snapshot while still holding the lock.
 	out := make([]Proxy, 0, len(s.items))

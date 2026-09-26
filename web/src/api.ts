@@ -179,15 +179,30 @@ export const updateProxy = (id: string, patch: ProxyPatch) =>
 export const deleteProxy = (id: string) =>
   request<{ id: string }>(`/api/proxies/${encodeURIComponent(id)}`, { method: 'DELETE' });
 
-/** v0.5.9: 探测代理 URL 本身可达性（不拉任何 target）。返回 ok=false 不代表 proxy 不能用——只是当前不可达。 */
+/**
+ * v0.5.9: 探测代理地址本身的可达性。
+ *
+ * v0.5.15: 探测只做一次 TCP 建连（不握手、不发请求），回答「这个 ip:端口
+ * 从本机连得上吗、往返多慢」，因此 http/https/socks5 三种代理一视同仁。
+ * 返回 ok=false 不代表 proxy 不能用——只是此刻连不上；想看「能不能真的
+ * 代理转发」请用 testProxy（穿过代理去取一个 target）。
+ * latencyMs 为 0 / 缺失表示没测到延迟（失败，或条目由旧版本探测过）。
+ */
 export const probeProxy = (id: string) =>
-  request<{ id: string; ok: boolean; status?: string; probedAt?: string; error?: string }>(
+  request<{
+    id: string;
+    ok: boolean;
+    status?: string;
+    probedAt?: string;
+    error?: string;
+    latencyMs?: number;
+  }>(
     `/api/proxies/${encodeURIComponent(id)}/probe`,
     { method: 'POST' }
   );
 
 /**
- * v0.5.12: 一次探测全部代理的 URL 可达性。
+ * v0.5.12: 一次探测全部代理的可达性（v0.5.15 起为 TCP 建连，见 probeProxy）。
  *
  * 放服务端做而不是前端循环：服务端 ProbeAll 是并行的，整批最坏约 5 秒；
  * 前端逐条调用在全部不可达时最坏 N×5 秒。
@@ -204,7 +219,10 @@ export const testProxy = (id: string, targetUrl?: string) =>
 
 /**
  * v0.5.13: 用**尚未保存**的代理配置做一次连通性测试（保存前试连）。
- * 服务端不落库、不改探测状态，所以结果不代表任何已存条目。
+ * 服务端不落库、不改探测状态。
+ *
+ * v0.5.15: 编辑弹窗也用它（入参带 id），那时「未保存」指的是表单里改到
+ * 一半的值；服务端最多读一次已存密码，仍然不写任何东西。
  */
 export const testProxyDraft = (input: ProxyTestInput) =>
   request<ProxyTestResult>('/api/proxies/test', {

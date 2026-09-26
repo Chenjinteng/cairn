@@ -800,21 +800,25 @@ type proxyView struct {
 	LastProbeStatus string `json:"lastProbeStatus,omitempty"`
 	LastProbeAt     string `json:"lastProbeAt,omitempty"`
 	LastProbeError  string `json:"lastProbeError,omitempty"`
+	// v0.5.15: TCP connect round-trip in ms; omitted when the probe could
+	// not connect (and on entries last probed by an older build).
+	LastProbeLatencyMs float64 `json:"lastProbeLatencyMs,omitempty"`
 }
 
 func toProxyView(p proxies.Proxy) proxyView {
 	return proxyView{
-		ID:              p.ID,
-		Name:            p.Name,
-		URL:             p.URL,
-		Username:        p.Username,
-		HasAuth:         p.Password != "",
-		Note:            p.Note,
-		CreatedAt:       p.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:       p.UpdatedAt.Format(time.RFC3339),
-		LastProbeStatus: p.LastProbeStatus,
-		LastProbeAt:     lastProbeAtString(p.LastProbeAt),
-		LastProbeError:  p.LastProbeError,
+		ID:                 p.ID,
+		Name:               p.Name,
+		URL:                p.URL,
+		Username:           p.Username,
+		HasAuth:            p.Password != "",
+		Note:               p.Note,
+		CreatedAt:          p.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:          p.UpdatedAt.Format(time.RFC3339),
+		LastProbeStatus:    p.LastProbeStatus,
+		LastProbeAt:        lastProbeAtString(p.LastProbeAt),
+		LastProbeError:     p.LastProbeError,
+		LastProbeLatencyMs: p.LastProbeLatencyMs,
 	}
 }
 
@@ -976,8 +980,17 @@ func (e *ExtraHandlers) TestProxy(w http.ResponseWriter, r *http.Request) {
 // trying to establish. Nothing here is persisted and no probe status is
 // recorded, so a draft that fails to dial never shows up in the list and can
 // never overwrite the status of a saved entry.
+//
+// v0.5.15: the same endpoint now also serves the *edit* dialog, which is why
+// the body accepts an optional id. The edit form never echoes the stored
+// password, so a blank password is ambiguous: "keep the stored credential" or
+// "this proxy is anonymous now"? The stored password is reused only when the
+// id resolves AND the submitted username still equals the stored one, which
+// keeps the test in step with what the user is looking at (a cleared or
+// changed username falls through to an anonymous / new-credential dial).
 func (e *ExtraHandlers) TestProxyDraft(w http.ResponseWriter, r *http.Request) {
 	var body struct {
+		ID        string `json:"id"`
 		URL       string `json:"url"`
 		Username  string `json:"username"`
 		Password  string `json:"password"`
@@ -993,7 +1006,19 @@ func (e *ExtraHandlers) TestProxyDraft(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	target := e.proxyTestTarget(r, body.TargetURL)
-	proxyURL, err := proxyURLFrom(raw, strings.TrimSpace(body.Username), body.Password)
+
+	// Editing a saved entry: the form cannot echo the stored password, so an
+	// empty field means "reuse it" while the username is unchanged. Guarded
+	// on e.Proxies because this handler has no proxiesUnavailable() check.
+	username := strings.TrimSpace(body.Username)
+	password := body.Password
+	if password == "" && body.ID != "" && e.Proxies != nil {
+		if stored, gerr := e.Proxies.Get(body.ID); gerr == nil && strings.TrimSpace(stored.Username) == username {
+			password = stored.Password
+		}
+	}
+
+	proxyURL, err := proxyURLFrom(raw, username, password)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok": false, "error": err.Error(), "targetUrl": target,
@@ -1098,10 +1123,13 @@ func (e *ExtraHandlers) proxyTestThrough(w http.ResponseWriter, r *http.Request,
 }
 
 // v0.5.9: ProbeProxy triggers an immediate reachability check for one
-// proxy entry. Unlike TestProxy (which fetches a target *through* the
-// proxy), this only confirms the proxy endpoint itself is reachable +
-// speaks HTTP/SOCKS, so a dead entry is flagged before any pull wastes
-// 15 minutes timing out.
+// proxy entry.
+//
+// v0.5.15: the check is a plain TCP connect to the proxy's ip:port. Nothing
+// is sent and no proxy protocol is negotiated, so the result answers exactly
+// one question: "can this host reach that socket, and how slow is it". The
+// protocol-level question (does the proxy actually forward traffic) stays
+// with TestProxy, which dials a target *through* the entry.
 func (e *ExtraHandlers) ProbeProxy(w http.ResponseWriter, r *http.Request) {
 	if e.proxiesUnavailable(w, r) {
 		return
@@ -1112,20 +1140,22 @@ func (e *ExtraHandlers) ProbeProxy(w http.ResponseWriter, r *http.Request) {
 		// inline; a 5xx here would force the page into a retry loop.
 		p, _ := e.Proxies.Get(id)
 		writeJSON(w, http.StatusOK, map[string]any{
-			"id":       id,
-			"ok":       false,
-			"error":    err.Error(),
-			"status":   p.LastProbeStatus,
-			"probedAt": p.LastProbeAt,
+			"id":        id,
+			"ok":        false,
+			"error":     err.Error(),
+			"status":    p.LastProbeStatus,
+			"probedAt":  p.LastProbeAt,
+			"latencyMs": p.LastProbeLatencyMs,
 		})
 		return
 	}
 	p, _ := e.Proxies.Get(id)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"id":       id,
-		"ok":       true,
-		"status":   p.LastProbeStatus,
-		"probedAt": p.LastProbeAt,
+		"id":        id,
+		"ok":        true,
+		"status":    p.LastProbeStatus,
+		"probedAt":  p.LastProbeAt,
+		"latencyMs": p.LastProbeLatencyMs,
 	})
 }
 
@@ -1138,6 +1168,9 @@ type proxyProbeView struct {
 	Status   string `json:"status,omitempty"`
 	ProbedAt string `json:"probedAt,omitempty"`
 	Error    string `json:"error,omitempty"`
+	// v0.5.15: TCP connect round-trip; omitted when the probe could not
+	// connect (and always omitted on successful-by-luck 0ms entries).
+	LatencyMs float64 `json:"latencyMs,omitempty"`
 }
 
 // v0.5.12: ProbeAllProxies probes every proxy entry at once — the "探测全部"
@@ -1171,12 +1204,13 @@ func (e *ExtraHandlers) ProbeAllProxies(w http.ResponseWriter, r *http.Request) 
 			unknownN++
 		}
 		results = append(results, proxyProbeView{
-			ID:       p.ID,
-			Name:     p.Name,
-			OK:       p.LastProbeStatus == "ok",
-			Status:   p.LastProbeStatus,
-			ProbedAt: lastProbeAtString(p.LastProbeAt),
-			Error:    p.LastProbeError,
+			ID:        p.ID,
+			Name:      p.Name,
+			OK:        p.LastProbeStatus == "ok",
+			Status:    p.LastProbeStatus,
+			ProbedAt:  lastProbeAtString(p.LastProbeAt),
+			Error:     p.LastProbeError,
+			LatencyMs: p.LastProbeLatencyMs,
 		})
 	}
 
