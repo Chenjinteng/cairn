@@ -98,14 +98,23 @@ type Orchestrator struct {
 	// when Mutable is nil OR was never written to).
 	DefaultSourceURL string
 
-	// pullPlatforms returns the platform allow-list the executor applies
-	// to multi-arch image indexes. Empty = "pull every platform" (the
-	// behaviour before the allow-list existed). Read through Config so a
-	// runtime change via PATCH /api/config takes effect on the next queued
-	// job.
-	pullPlatforms func() []string
-
 	PullHistoryRetention int
+}
+
+// platformAllow returns the multi-arch allow-list for the next transfer.
+//
+// It deliberately reads the live config instead of caching the value in a
+// struct field: an unset field is indistinguishable from "pull every
+// platform" (which is the documented meaning of an empty list), so a
+// forgotten assignment at the construction site silently changes behaviour.
+// v0.5.15 shipped exactly that — a nil func field, called unguarded, took
+// the whole process down. Reading Cfg.PullPlatforms() is nil-safe on both
+// the receiver and the config. (v0.5.16)
+func (o *Orchestrator) platformAllow() []string {
+	if o == nil {
+		return nil
+	}
+	return o.Cfg.PullPlatforms()
 }
 
 // RunOne executes one job to completion; returns nil on success.
@@ -168,7 +177,7 @@ func (o *Orchestrator) RunOne(ctx context.Context, j *Job) error {
 		return fmt.Errorf("fetch source manifest %s:%s from %s: %w", srcRepo, srcTag, srcURL, err)
 	}
 
-	plan, err := planTransfer(ctx, src, srcRepo, srcManifest, o.pullPlatforms())
+	plan, err := planTransfer(ctx, src, srcRepo, srcManifest, o.platformAllow())
 	if err != nil {
 		updatePhase(j, 0, func(p *Phase) {
 			p.Status = PhaseFailed

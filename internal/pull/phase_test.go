@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -133,5 +134,35 @@ func TestExecuteOneCancelledMarksPhases(t *testing.T) {
 	}
 	if got.Phases[0].Status != PhaseFailed || got.Phases[0].Message != "Task cancelled" {
 		t.Fatalf("cancelled straggler = %+v", got.Phases[0])
+	}
+}
+
+// TestExecuteOneRecoversFromPanic pins the second half of the v0.5.16 fix.
+// The orchestrator is injected code; a nil dereference inside it used to
+// propagate out of the worker goroutine and kill the whole process, taking
+// the HTTP server and every in-memory job with it — the user saw the job
+// they had just submitted vanish, and the history was empty. The panic is
+// now contained per job: the row reports failed, and the queue keeps going.
+func TestExecuteOneRecoversFromPanic(t *testing.T) {
+	e := NewExecutor(2, func(ctx context.Context, j *Job) error {
+		updatePhase(j, 0, func(p *Phase) { p.Status = PhaseRunning })
+		panic("simulated nil dereference")
+	})
+	v := e.Submit(NewJob{SourceRef: "alpine:3.19"})
+	e.executeOne(context.Background(), e.jobs[v.ID])
+
+	got := e.Get(v.ID)
+	if got.State != StateFailed {
+		t.Fatalf("state = %s, want failed", got.State)
+	}
+	if !strings.Contains(got.Error, "simulated nil dereference") {
+		t.Fatalf("error should name the panic, got %q", got.Error)
+	}
+	if got.Phases[0].Status == PhaseRunning || got.Phases[0].Status == PhasePending {
+		t.Fatalf("straggler phase survived: %+v", got.Phases[0])
+	}
+	// The executor must still be usable after a panic.
+	if again := e.Submit(NewJob{SourceRef: "busybox:1.36"}); again.ID == "" {
+		t.Fatal("executor stopped accepting jobs after a panic")
 	}
 }

@@ -6,6 +6,63 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.16] - 2026-09-27
+
+本轮主题:**修掉「拉取任务点完「添加」就从列表消失、且看不到任何历史」**。现象看着像前端不刷新、像数据库没写,实际是**进程被一次空指针 panic 打死了**:只要拉取成功拿到源 manifest,`Orchestrator.RunOne` 就会去调一个**永远为 `nil`** 的函数字段,当场 SIGSEGV;Go 的 panic 不 recover 就是整个进程退出,容器被 `restart: unless-stopped` 拉起,而任务表在**内存**里,重启即清空——任务不是「消失」,是**承载它的进程没有了**。这也正是「没有历史任务」的直接原因:历史本来就只在内存,进程一死什么都没留下。
+
+### 修复
+
+- **删除 `Orchestrator.pullPlatforms` 字段,改为方法 `platformAllow()`**(`internal/pull/executor.go`):该字段**未导出**,而 `Orchestrator` 的**唯一构造点在另一个包**(`internal/server/server.go`),外部包无法给它赋值,所以它从**引入之日起恒为 `nil`**;`RunOne` 在成功取得源 manifest 之后无保护地调用它 → 空指针解引用。现在改为 `func (o *Orchestrator) platformAllow() []string`,内部读**实时**配置 `o.Cfg.PullPlatforms()`,并带 `o == nil` 与 `Cfg == nil` 保护。**语义与原意图完全一致**(未配置返回 `nil` = 不过滤平台),但**从结构上消灭了「忘记接线」这一类缺陷**——不再有任何需要跨包赋值的字段,`internal/server/server.go` 因此无需改动。
+- **队列增加 panic 兜底 `runJobGuarded`**(`internal/pull/queue.go`):`executeOne` 现在经 `runJobGuarded` 调用编排器,后者用 `recover()` 接住 panic,记一条 `slog.Error("pull job panicked", …)`(**带完整 `debug.Stack()`**)并把该任务置为 `failed`(文案 `internal error: <值>`)。**一个任务的 bug 从此只降级一个任务,不再拖垮整个进程**——这才是「任务消失」真正的放大机制。
+
+### 影响范围(升级须知)
+
+- 该缺陷由提交 `8836c92`(写的是 v0.6.0 拉取平台白名单,后被 `e46dc3c` 并入 `[0.5.8]` 小节)引入。`git show <release>:internal/pull/executor.go | grep -c pullPlatforms` 实测:**0.5.7 = 0 次,0.5.8 / 0.5.9 / 0.5.11 / 0.5.14 / 0.5.15 均为 3 次**。即**受影响版本为 0.5.8 ~ 0.5.15**,0.5.7 及更早不受影响。
+- **触发条件既窄又具欺骗性**:必须**成功取得源 manifest**才会走到崩溃点。源地址写错(404)、认证失败(401)、代理连不通时,代码在更早的位置就 `return` 了,**怎么复现都复现不出来**——这就是它在 0.5.8 之后一直没被发现的原因(包括上一轮 0.5.15 的冒烟:当时验的是「探测」而非真实拉取,根本没走到这一行)。
+
+### 已知遗留(本轮未改)
+
+- **「拉取历史」是一个从未接线的能力缺口,不是本修复的回归**:`pull_jobs` 表(`internal/db/db.go` 迁移 1)与 `PullJobRecord` 结构体都在,但**没有任何调用者**;配置项 `PullHistoryRetention` 被赋值却从未被读取;`ListPullJobs` 从不合并数据库;前端 `fromHistory` 分支不可达,也没有「历史」选项卡。**本轮解决的是「进程活着时不再丢任务」,重启仍然清空**。补齐持久化 + 保留清理 + 历史 API + UI 入口属**面向用户的新能力**,按 `AGENTS.md` 应为中版本且需**人工指定号位**(`0.6.0` 已被 TLS 证书管理占用),故本轮不动。
+- **`UpdateProxy` 用空密码会清掉已存密码**(`internal/api/handlers_extra.go`):0.5.15 已记录,本轮未改,原因同前——修复要变更已文档化的 PATCH 语义。
+- 设置页 5 处 `TS6133` 未使用声明(`Descriptions`、`formatDateTime`、`inventory`、`savingRegistryUrl`、`setSavingRegistryUrl`)仍在基线里,未清理。
+
+### 验证
+
+- **生产现场证据(158,`cairn:0.5.15`)**:`docker logs cairn` 中的 panic 栈逐帧如下;其后 **约 4 秒**即出现 `config loaded`(容器被拉起),再下一次 `GET /api/pull/jobs` 的响应体从 **624 字节掉到 52 字节**(即 `data:[]`——任务没了):
+
+```
+panic: runtime error: invalid memory address or nil pointer dereference
+[signal SIGSEGV: segmentation violation code=0x1 addr=0x0 pc=0x9566d7]
+
+goroutine 34 [running]:
+cairn/internal/pull.(*Orchestrator).RunOne(...)
+	cairn/internal/pull/executor.go:171 +0x637
+cairn/internal/pull.(*Executor).executeOne(...)
+	cairn/internal/pull/queue.go:392 +0x202
+cairn/internal/pull.(*Executor).Run(...)
+	cairn/internal/pull/queue.go:353 +0x85
+created by cairn/internal/server.(*Runtime).Start in goroutine 1
+	cairn/internal/server/server.go:257 +0xb0
+```
+
+- **A/B 隔离冒烟(决定性对照)**——两个二进制、各自独立端口与数据目录,跑**同一条**真实拉取(`library/alpine:3.19`,经 `http://127.0.0.1:7890` 代理):
+  - **旧二进制(v0.5.15,`266a9fa`)**:任务在 `t=2s` / `t=3s` 两次 `GET /api/pull/jobs/{id}` 均可见,随后 **`PROCESS DIED at t=3s`**;日志命中 `panic`,栈与上面 158 生产栈**逐帧一致**(仅行号随版本偏移);收尾打印 `--- process after run --- DEAD`。
+  - **新二进制(含本轮修复)**:同一条拉取**跑完全程**——`status=succeeded`、`bytes=23260729`、`blobs 34/34`、`finalDigest=sha256:6baf43584bcb…`;`GET /api/pull/jobs` 返回 **`rows=1`**,任务**留在列表**;**日志零 panic**;**进程 `ALIVE`**。
+  - 该对照同时排除了「无 panic 只是因为没走到崩溃点」的假阳性:旧二进制在同一条测试下**必然**崩溃,新二进制在同一条测试下**必然**不崩。
+- Go 侧:`gofmt -l internal/` 无输出;`go vet ./internal/...` 退出码 0;`go build ./...` 与 `go build -tags webui -o /tmp/cairn-gate ./cmd/server` 退出码 0;`go test -count=1 ./internal/...` 全部 `ok`。新增用例 `TestPlatformAllowNilSafe`(nil 接收者与 nil 配置都不 panic)、`TestPlatformAllowReadsLiveConfig`(读的是实时配置而非构造期快照)、`TestExecuteOneRecoversFromPanic`(编排器 panic → 任务 `failed` 且进程存活)。
+- 前端:`./web/node_modules/.bin/tsc --noEmit` 与基线逐条比对 **10 → 10,无新增**。本轮**零前端改动**,`internal/webui/dist/` 属构建产物且在 `.gitignore` 中,由 Docker 构建期生成。
+
+### 兼容性
+
+- **无 API 变更、无磁盘格式变更**:纯后端缺陷修复,升级不需迁移。
+- **失败语义变更须知**:编排器若 panic,该任务现在**保持可见**并显示为 `failed`,错误文案为 `internal error: …`(此前是进程消失、任务一并消失)。这是行为改进,但会有人第一次在列表里看到这类 `failed` 条目——它不是新缺陷,而是过去那些「凭空消失」的任务。
+- **`platformAllow` 的语义与配置键未变**:设置页的「拉取平台白名单」行为与 v0.5.15 完全一致(未配置 = 不限制平台)。
+
+### 轮次与号位
+
+- 本轮占 **0.5.16**:纯**缺陷修复**(空指针崩溃 + 队列兜底),按 `AGENTS.md` 判定为小版本(第 3 位)+1。
+- `docs/ROADMAP.md` 已顺延:韧性轮 0.5.16 → **0.5.17**、工程化 0.5.17 → **0.5.18**;`0.6.0`(TLS 证书管理)由人指定,不随顺延改号。
+
 ## [0.5.15] - 2026-09-26
 
 本轮主题:**把「探测」降级为纯 TCP 连通性 + 延迟**,并**让「测试连接」也出现在编辑弹窗里**。原先的「探测」是拿代理服务器本身当 HTTP 目标发一次请求——对 `http://` 代理勉强可用,对 `socks5://` 代理或只做 CONNECT 转发的代理必然失败,于是出现「新增时测试通过、探测时却不可用」的矛盾。本轮把探测收敛成一句话:**这个 ip:端口从本机连得上吗、往返多慢**;至于「这代理能不能真的转发」,交给弹窗内与行内的「测试」按钮。

@@ -16,6 +16,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -382,6 +384,7 @@ func (e *Executor) nextQueued(ctx context.Context) *Job {
 func (e *Executor) executeOne(parent context.Context, j *Job) {
 	jobCtx, cancel := context.WithCancel(parent)
 	j.mu.Lock()
+	jobID := j.view.ID
 	j.view.State = StateRunning
 	j.view.StartedAt = time.Now().UTC()
 	j.cancelFn = cancel
@@ -389,7 +392,7 @@ func (e *Executor) executeOne(parent context.Context, j *Job) {
 
 	defer cancel()
 
-	err := e.runJob(jobCtx, j)
+	err := e.runJobGuarded(jobCtx, j, jobID)
 	j.mu.Lock()
 	j.view.EndedAt = time.Now().UTC()
 	if jobCtx.Err() != nil {
@@ -422,6 +425,28 @@ func (e *Executor) executeOne(parent context.Context, j *Job) {
 	}
 	j.cancelFn = nil
 	j.mu.Unlock()
+}
+
+// runJobGuarded calls runJob but converts a panic into an ordinary error.
+//
+// A single malformed job must never take the process down. An unrecovered
+// panic inside the orchestrator (nil dereference, index out of range, ...)
+// kills the HTTP server with every in-memory job it holds — the submitted
+// job then looks like it "vanished", and the queue history is gone too.
+// Degrading it to a failed job keeps the service (and the other jobs)
+// alive and surfaces the defect in the UI row instead of the logs alone.
+// (v0.5.16)
+func (e *Executor) runJobGuarded(ctx context.Context, j *Job, jobID string) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("pull job panicked",
+				"job", jobID,
+				"panic", fmt.Sprint(r),
+				"stack", string(debug.Stack()))
+			err = fmt.Errorf("internal error: %v", r)
+		}
+	}()
+	return e.runJob(ctx, j)
 }
 
 // evictLocked removes the oldest terminal job if the queue is over capacity.
