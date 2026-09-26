@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -450,10 +451,15 @@ var (
 	ErrJobNotTerminal = errors.New("pull job is not in a terminal state")
 )
 
-// newJobID returns a short, time-ordered identifier.
-var jobCounter uint64
+// jobCounter disambiguates jobs created within the same clock tick.
+//
+// v0.5.10: this used to be a plain uint64 incremented with jobCounter++ in
+// newJobID, which Submit calls BEFORE taking e.mu — an unsynchronised
+// read-modify-write on a package-level variable, i.e. a real data race (the
+// race detector flags it and concurrent submits can lose increments).
+var jobCounter atomic.Uint64
 
+// newJobID returns a short, time-ordered identifier.
 func newJobID() string {
-	jobCounter++
-	return fmt.Sprintf("job-%d-%d", time.Now().UnixNano(), jobCounter)
+	return fmt.Sprintf("job-%d-%d", time.Now().UnixNano(), jobCounter.Add(1))
 }

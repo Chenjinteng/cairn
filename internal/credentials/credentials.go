@@ -22,8 +22,23 @@
 //     schema (name, registry_url, username) would leak structure even if
 //     values were encrypted.
 //
-// Concurrency: safe for concurrent use. File updates use an atomic
-// write-rename pattern; reads are lock-free after the initial load.
+// Concurrency: safe for concurrent use, and no lock is ever held across
+// encryption or disk I/O.
+//
+//   - Readers (List/Get) hold v.mu only for the duration of one in-memory
+//     map copy; they never wait on the filesystem.
+//   - Writers (Put/Delete) take v.writeMu, then v.mu. Under v.mu they mutate
+//     the map and copy it, then release v.mu before touching the disk.
+//     v.writeMu stays held across the whole mutate+persist pair so that two
+//     concurrent writers cannot race their renames and leave the older
+//     snapshot on disk (a credential that reported success would silently
+//     disappear on restart).
+//   - Lock order is always v.writeMu then v.mu, never the reverse.
+//
+// Holding a lock across a slow filesystem wedges every concurrent reader,
+// and a lock that is never released wedges the vault permanently -- that
+// was the v0.5.9 production deadlock, and it also took the pull feature
+// down because handlers_extra.go reads the vault on every pull job. See Put.
 package credentials
 
 import (
@@ -64,6 +79,19 @@ type Vault struct {
 
 	mu    sync.RWMutex
 	items map[string]Credential // id → Credential
+
+	// writeMu serialises the mutate+persist pair across writers.
+	//
+	// mu alone is not enough once encryption and the file write moved outside
+	// the lock: two concurrent Puts can snapshot in order A then B and still
+	// race their renames, leaving the file holding A's snapshot -- B reported
+	// success but would vanish on the next restart. Holding writeMu
+	// end-to-end keeps the on-disk file equal to the last writer that
+	// returned nil.
+	//
+	// Readers never take writeMu, so List/Get never wait on disk I/O.
+	// Lock order is always writeMu then mu, never the reverse.
+	writeMu sync.Mutex
 }
 
 // Open loads (or creates) the vault at path using key as the AES key source.
@@ -121,6 +149,13 @@ func (v *Vault) Put(c Credential) error {
 		return errors.New("credentials: URL required")
 	}
 
+	// writeMu first: it orders the mutate+persist pair end-to-end, so an
+	// earlier snapshot can never overwrite a later one on disk.
+	v.writeMu.Lock()
+	defer v.writeMu.Unlock()
+
+	// mu is held only for the in-memory mutation and the copy below; it is
+	// released before anything is encrypted or written.
 	v.mu.Lock()
 	now := time.Now().UTC()
 	existing, hadExisting := v.items[c.ID]
@@ -131,26 +166,69 @@ func (v *Vault) Put(c Credential) error {
 	}
 	c.UpdatedAt = now
 	v.items[c.ID] = c
-	return v.persistLocked()
+	// Snapshot under the lock, then release it before any disk I/O.
+	//
+	// The previous implementation ended with `return v.persistLocked()`
+	// while still holding the write lock and never unlocked it. Lock state
+	// lives on the mutex, not the goroutine, so the vault stayed write-locked
+	// forever: every later Get/List/Put/Delete blocked on semacquire until
+	// the process restarted, and because the pull path also reads the vault
+	// (handlers_extra.go), "create credential" took the whole pull feature
+	// down with it.
+	snap := v.snapshotLocked()
+	v.mu.Unlock()
+
+	return v.persistToDisk(snap)
 }
 
 // Delete removes a credential by id. ErrNotFound if it didn't exist.
 func (v *Vault) Delete(id string) error {
+	v.writeMu.Lock()
+	defer v.writeMu.Unlock()
+
 	v.mu.Lock()
-	defer v.mu.Unlock()
 	if _, ok := v.items[id]; !ok {
+		v.mu.Unlock()
 		return ErrNotFound
 	}
 	delete(v.items, id)
-	return v.persistLocked()
+	snap := v.snapshotLocked()
+	v.mu.Unlock()
+
+	return v.persistToDisk(snap)
 }
 
 // ErrNotFound is returned when an ID doesn't exist.
 var ErrNotFound = errors.New("credential not found")
 
-// persistLocked writes the encrypted file. Caller holds v.mu (write lock).
-func (v *Vault) persistLocked() error {
-	plaintext, err := json.MarshalIndent(v.items, "", "  ")
+// snapshotLocked returns a shallow copy of the items map. Caller holds v.mu.
+//
+// Copying while the lock is still held is what makes the disk write
+// lock-free: the snapshot is a private value that stays consistent even if
+// another writer mutates the map the instant after Unlock.
+func (v *Vault) snapshotLocked() map[string]Credential {
+	snap := make(map[string]Credential, len(v.items))
+	for id, c := range v.items {
+		snap[id] = c
+	}
+	return snap
+}
+
+// persistToDisk encrypts the given snapshot and writes it atomically
+// (write-temp + rename).
+//
+// Callers hold v.writeMu but NOT v.mu while calling this. v.writeMu is what
+// keeps concurrent writers ordered; v.mu is deliberately released first so
+// that readers never queue behind AES or the filesystem. The old "caller
+// MUST hold v.mu" contract is gone -- that convention is exactly what let
+// Put leak the write lock unnoticed.
+//
+// path and key are set once in Open and never mutated, so reading them here
+// needs no synchronisation. The on-disk envelope is unchanged from earlier
+// releases (version 1 + base64 nonce + base64 AES-256-GCM ciphertext over
+// the whole items object), so existing vault files keep working.
+func (v *Vault) persistToDisk(items map[string]Credential) error {
+	plaintext, err := json.MarshalIndent(items, "", "  ")
 	if err != nil {
 		return fmt.Errorf("credentials: marshal: %w", err)
 	}

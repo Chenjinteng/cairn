@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"io"
@@ -1301,18 +1302,41 @@ func parseLimit(r *http.Request, def int) int {
 	return def
 }
 
+// newID returns a short, time-ordered id of the form 20060102-150405.000-xxxx.
+// It is the primary key of both the credential and the proxy library.
+//
+// v0.5.10: the random suffix used to be derived from time.Now().UnixNano()%16
+// with a time.Sleep(time.Microsecond) per character. The low bits of the clock
+// repeat under load, so two concurrent creates could receive the SAME id, and
+// because Put overwrites by id the second one silently replaced the first
+// (measured: 20 concurrent creates lost 3 entries). The suffix is now drawn
+// from crypto/rand.
 func newID() string {
 	return strings.ReplaceAll(time.Now().UTC().Format("20060102-150405.000"), ".", "-") + "-" + randHex(4)
 }
 
+// randHex returns n lowercase hex characters from crypto/rand, so concurrent
+// callers cannot collide the way the old nanosecond-clock derivation did.
 func randHex(n int) string {
 	const hex = "0123456789abcdef"
-	b := make([]byte, n)
-	for i := range b {
-		b[i] = hex[time.Now().UnixNano()%16]
-		time.Sleep(time.Microsecond) // cheap randomness
+	out := make([]byte, n)
+	buf := make([]byte, (n+1)/2)
+	if _, err := rand.Read(buf); err != nil {
+		// crypto/rand only fails when the OS entropy source is broken and
+		// there is no clean recovery inside a request handler: degrade to the
+		// clock (which still advances per call) rather than panicking.
+		for i := range buf {
+			buf[i] = byte(time.Now().UnixNano())
+		}
 	}
-	return string(b)
+	for i := 0; i < n; i++ {
+		if i%2 == 0 {
+			out[i] = hex[buf[i/2]>>4]
+		} else {
+			out[i] = hex[buf[i/2]&0x0f]
+		}
+	}
+	return string(out)
 }
 
 func decodeJSON(r *http.Request, dst any) error {
