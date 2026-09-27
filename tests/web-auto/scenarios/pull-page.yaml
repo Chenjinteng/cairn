@@ -1,17 +1,37 @@
-# cairn 镜像拉取页 — 深度场景
+# cairn 镜像拉取页 — 深度场景（只读，不新增任务）
 #
-# 覆盖：拉取表单填写、平台选择下拉打开、任务列表渲染
-# 严格不点提交——避免真创建拉取任务
+# 覆盖：表单真实字段、高级选项 Collapse 展开、源端代理模式切换的联动字段、
+#       任务列表渲染。**刻意不点「加入队列」**——它会打开预览 Modal 并对源端
+#       真实发一次 GET /v2/，属于有副作用的写操作。
+#
+# 三条源码取证事实（web/src/pages/pull-page.tsx）：
+#   1. 页面上没有「平台」字段：全文件 grep "平台" 零命中。
+#      旧版场景的「点击平台下拉」步骤针对的是不存在的控件（第二轮就是它卡的）。
+#   2. 「源镜像名」(:619) 的 Input placeholder="alpine:3.19" (:647)；
+#      「目标镜像名」(:651) 的 Input placeholder="与源镜像同名" (:681)。
+#      两者都用 placeholder 全等定位，不用 placeholder 子串模糊匹配
+#      （子串匹配会命中「目标镜像名」，因为它的 placeholder 里也有「源」字）。
+#      表单 initialValues 已预填 library/alpine:3.19 (:613)，故用 fill 覆盖为 nginx:latest。
+#   3. 「高级选项（来源地址 / 来源代理 / 认证）」是 Collapse (:685-694)，
+#      无 defaultActiveKey → 默认收起，子节点不进 DOM。所以必须先点标题展开，
+#      之后才断言 input[placeholder="自动推断"] (:709)。
+#      「源端代理」(:714) 与「源认证」(:795) 两个 Radio.Group 各有
+#      「不用 / 代理库 / 临时输入」三档 (:719-723 / :804-812)，
+#      点「临时输入」必须按 Form.Item 作用域限定，否则两组歧义。
+#      mode='temp' 才渲染「临时代理地址」input[placeholder="http://proxy.example.com:8080"] (:786)。
 #
 # 用法：POST /api/run {scenario: "cairn/pull-page", env: "dev"}
 name: cairn-pull-page
 description: |
-  镜像拉取页深度交互：
+  镜像拉取页深度交互（只读）：
     1. 切到镜像拉取 Tab
-    2. 在「源镜像」输入框填值（不提交）
-    3. 验证表单字段接受输入
-    4. 检查平台下拉可打开
-    5. 检查任务列表渲染
+    2. 断言源镜像名 / 目标镜像名输入框（placeholder 全等定位）
+    3. 在源镜像名填写 nginx:latest
+    4. 展开「高级选项」Collapse（默认收起）
+    5. 断言展开后「来源 registry 地址」进入 DOM
+    6. 切「源端代理」到「临时输入」，断言「临时代理地址」联动渲染
+    7. 断言「源认证」组渲染、断言「加入队列」存在但不点击
+    8. 断言任务列表渲染
 env: dev
 tags: [medium, pull, cairn]
 
@@ -45,73 +65,94 @@ steps:
         - { type: css, value: '.app-nav .ant-segmented-item:has-text("镜像拉取")' }
     timeout: 8000
 
+  # placeholder="alpine:3.19" 是「源镜像名」的 Input（pull-page.tsx:647）
   - name: 等待拉取表单渲染
     action: assert
     type: visible
-    selector: '.app-content .ant-form, .app-content input[placeholder*="源"], .app-content input[placeholder*="镜像"]'
+    selector: '.app-content input[placeholder="alpine:3.19"], input[placeholder="alpine:3.19"]'
     timeout: 15000
 
-  # ---- 1. 填写源镜像（只填字段，不点提交） ----
-  - name: 在「源镜像」输入框填写「nginx:latest」
+  - name: 在「源镜像名」填写「nginx:latest」
     action: fill
     locator:
       strategies:
-        - { type: css, value: '.app-content .ant-form-item:has-text("源镜像") input' }
-        - { type: css, value: '.app-content input[placeholder*="源"]' }
+        - { type: css, value: '.app-content input[placeholder="alpine:3.19"]' }
+        - { type: css, value: 'input[placeholder="alpine:3.19"]' }
     value: "nginx:latest"
     timeout: 5000
 
-  - name: 断言表单字段接受输入
+  # placeholder="与源镜像同名" 是「目标镜像名」的 Input（pull-page.tsx:681）
+  - name: 断言「目标镜像名」输入框存在
     action: assert
-    type: value
-    selector: '.app-content .ant-form-item:has-text("源镜像") input'
-    value: "nginx:latest"
-    timeout: 3000
+    type: visible
+    selector: '.app-content input[placeholder="与源镜像同名"], input[placeholder="与源镜像同名"]'
+    timeout: 5000
 
-  - name: 截取填写后状态
-    action: screenshot
-    name: pull-after-fill
+  # Collapse 默认收起，标题仍可见
+  - name: 断言「高级选项」入口存在
+    action: assert
+    type: visible
+    selector: '.app-content .ant-collapse-header:has-text("高级选项"), .ant-collapse-header:has-text("高级选项")'
+    timeout: 5000
 
-  - name: 清空源镜像
-    action: fill
-    locator:
-      strategies:
-        - { type: css, value: '.app-content .ant-form-item:has-text("源镜像") input' }
-    value: ""
-
-  # ---- 2. 平台下拉 ----
-  - name: 点击「平台」下拉
+  - name: 点击「高级选项」展开
     action: click
     locator:
       strategies:
-        - { type: css, value: '.app-content .ant-form-item:has-text("平台") .ant-select-selector' }
-        - { type: css, value: '.app-content .ant-form-item:has-text("平台") .ant-select' }
+        - { type: css, value: '.app-content .ant-collapse-header:has-text("高级选项")' }
+        - { type: css, value: '.ant-collapse-header:has-text("高级选项")' }
+        - { type: css, value: '.ant-collapse-header-text:has-text("高级选项")' }
     timeout: 5000
 
-  - name: 断言平台下拉选项出现
+  # 展开后才进 DOM 的「来源 registry 地址」（pull-page.tsx:698/709）
+  - name: 断言展开后「来源 registry 地址」出现
     action: assert
     type: visible
-    selector: '.ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item'
+    selector: 'input[placeholder="自动推断"]'
     timeout: 5000
 
-  - name: 关闭下拉（点 body）
+  # 作用域限定到「源端代理」那一组，避免与「源认证」组的同名按钮歧义
+  - name: 切「源端代理」为「临时输入」
     action: click
     locator:
       strategies:
-        - { type: css, value: '.app-content h2, .app-content .ant-card-head' }
-    timeout: 3000
+        - { type: css, value: '.ant-form-item:has-text("源端代理") .ant-radio-button-wrapper:has-text("临时输入")' }
+        - { type: css, value: '.ant-form-item:has-text("源端代理") label:has-text("临时输入")' }
+    timeout: 5000
 
-  # ---- 3. 任务列表 ----
-  - name: 检查拉取任务列表渲染
+  # mode='temp' 才渲染（pull-page.tsx:768-787）
+  - name: 断言「临时代理地址」联动渲染
     action: assert
     type: visible
-    selector: '.app-content .ant-table, .app-content .ant-empty'
+    selector: 'input[placeholder="http://proxy.example.com:8080"]'
+    timeout: 5000
+
+  - name: 断言「源认证」组渲染（凭据库 / 临时输入）
+    action: assert
+    type: visible
+    selector: '.ant-form-item:has-text("源认证") .ant-radio-button-wrapper:has-text("凭据库"), .ant-radio-button-wrapper:has-text("凭据库")'
+    timeout: 5000
+
+  # 刻意不点击：点它会打开预览 Modal 并对源端真实发一次 GET /v2/
+  - name: 断言「加入队列」按钮存在（不点击）
+    action: assert
+    type: visible
+    selector: '.app-content button:has-text("加入队列"), button:has-text("加入队列")'
+    timeout: 5000
+
+  - name: 断言任务列表渲染
+    action: assert
+    type: visible
+    selector: '.app-content .ant-table, .app-content .ant-empty, .ant-table, .ant-empty'
     timeout: 10000
+
+  - name: pull-advanced-expanded
+    action: screenshot
 
   - name: pull-page-end
     action: screenshot
 
-# 期望结果
+# 期望结果（步数与 steps 逐一对应：16）
 expected:
-  totalSteps: 12
+  totalSteps: 16
   maxDuration: 90000

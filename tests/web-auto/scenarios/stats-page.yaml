@@ -1,16 +1,33 @@
-# cairn 镜像热度页 — 深度场景
+# cairn 镜像热度页 — 深度场景（v0.5.18 重写）
 #
-# 覆盖：子 Tab 切换（仓库 / 客户端 / 事件）、贡献图渲染、忽略规则 Modal
+# 为什么重写：旧版按「子 Tab（仓库 / 客户端 / 事件）+ 忽略规则入口」写，
+# 但热度页既没有子 Tab，也没有一个叫「忽略规则」的入口：
+#   旧版第 7 / 9 / 11 步是假通过（选择器落到了导航上的同名文本），第 13 步是真超时。
+# 现按 web/src/pages/stats-page.tsx 的真实结构重写。
+#
+# 覆盖：
+#   1. 导航进入「镜像热度」
+#   2. 头部：页面标题 / 刷新按钮（用图标定位，绕开 antd 给双汉字按钮插的空格）
+#   3. KPI 卡片网格 .metric-grid —— 等价断言 statsEnabled 为真
+#      （!statsEnabled 是早退分支，只渲染 Alert + 配置片段面板，没有 .metric-grid）
+#   4. 两块无条件渲染的面板：按天趋势（热力图）/ 见过的客户端
+#   5. 「最近事件（排查用）」Collapse 默认收起 → 点击展开 → 内容区渲染
+#   6. 窗口 30 天 → 90 天：KPI 文案随真实重取而变化（默认 days = 30）
+#   7. 刷新收口：按钮不得停在 loading（F1 无超时 / F4 setLoading 未收口的回归点）
+#
+# 刻意不做：不点「忽略」按钮（addIgnoreRule 有真实副作用，会写忽略规则）。
+# 刻意不做：不点「刷新」按钮本身（点击窗口切换已触发一次真实重取）。
 #
 # 用法：POST /api/run {scenario: "cairn/stats-page", env: "dev"}
 name: cairn-stats-page
 description: |
-  镜像热度页深度交互：
-    1. 切到镜像热度 Tab
-    2. 检查贡献图渲染（canvas/svg）
-    3. 切换子 Tab（仓库 / 客户端 / 事件）
-    4. 在事件 Tab 打开「忽略规则」Modal
-    5. 关闭 Modal
+  镜像热度页深度交互（按 stats-page.tsx 真实 DOM 结构重写）：
+    1. 切到「镜像热度」Tab
+    2. 断言页面标题 / 刷新按钮 / KPI 卡片网格（statsEnabled 为真）
+    3. 断言「按天趋势」热力图 +「见过的客户端」两块常驻面板
+    4. 展开「最近事件（排查用）」Collapse 并断言内容区渲染
+    5. 窗口 30 天 → 90 天，断言 KPI 文案随真实重取而变化
+    6. 等待刷新按钮收口（loading 不得悬挂）
 env: dev
 tags: [medium, stats, cairn]
 
@@ -44,90 +61,87 @@ steps:
         - { type: css, value: '.app-nav .ant-segmented-item:has-text("镜像热度")' }
     timeout: 8000
 
-  - name: 等待热度页主体渲染
+  - name: 断言热度页标题
     action: assert
     type: visible
-    selector: '.app-content .ant-segmented, .app-content .ant-card, .app-content .ant-empty'
+    selector: '.page-title:has-text("镜像热度"), .app-content h2:has-text("镜像热度")'
     timeout: 15000
 
-  # ---- 1. 贡献图 ----
-  - name: 断言贡献图渲染（svg/canvas/recharts/heatmap class）
+  - name: 断言刷新按钮（图标定位）
     action: assert
     type: visible
-    selector: '.app-content svg, .app-content canvas, .app-content .recharts-wrapper, .app-content [class*="heatmap"], .app-content [class*="contribution"]'
+    selector: '.page-actions button:has(.anticon-reload), .page-actions button.ant-btn'
     timeout: 10000
 
-  - name: stats-heatmap
-    action: screenshot
-
-  # ---- 2. 子 Tab 切换 ----
-  - name: 切到「仓库」子 Tab
-    action: click
-    locator:
-      strategies:
-        - { type: text, value: "仓库", match: contains }
-        - { type: css, value: '.app-content .ant-segmented-item:has-text("仓库")' }
-    timeout: 5000
-
-  - name: 断言仓库列表渲染
+  - name: 断言 KPI 卡片网格（statsEnabled 为真）
     action: assert
     type: visible
-    selector: '.app-content .ant-table, .app-content .ant-empty'
+    selector: '.metric-grid, .app-content .metric-grid'
     timeout: 10000
 
-  - name: 切到「客户端」子 Tab
-    action: click
-    locator:
-      strategies:
-        - { type: text, value: "客户端", match: contains }
-        - { type: css, value: '.app-content .ant-segmented-item:has-text("客户端")' }
-
-  - name: 断言客户端表渲染
+  - name: 断言「按天趋势」面板
     action: assert
     type: visible
-    selector: '.app-content .ant-table, .app-content .ant-empty'
+    selector: 'h3.stats-panel-title:has-text("按天趋势"), .app-content h3:has-text("按天趋势")'
     timeout: 10000
 
-  - name: 切到「事件」子 Tab
-    action: click
-    locator:
-      strategies:
-        - { type: text, value: "事件", match: contains }
-        - { type: css, value: '.app-content .ant-segmented-item:has-text("事件")' }
-
-  - name: 断言事件表渲染
+  - name: 断言热力图网格渲染
     action: assert
     type: visible
-    selector: '.app-content .ant-table, .app-content .ant-empty'
+    selector: '.heatmap-grid, .heatmap, .app-content .heatmap-grid'
     timeout: 10000
 
-  # ---- 3. 忽略规则 Modal ----
-  - name: 点击「忽略规则」入口
-    action: click
-    locator:
-      strategies:
-        - { type: text, value: "忽略规则", match: contains }
-        - { type: css, value: '.app-content button:has-text("忽略规则")' }
-    timeout: 5000
-
-  - name: 断言忽略规则 Modal 出现
+  - name: 断言「见过的客户端」面板
     action: assert
     type: visible
-    selector: '.ant-modal-content, .ant-modal-title:has-text("忽略")'
-    timeout: 5000
+    selector: 'h3.stats-panel-title:has-text("见过的客户端"), .app-content h3:has-text("见过的客户端")'
+    timeout: 10000
 
-  - name: 关闭 Modal
+  - name: 断言「最近事件」Collapse 入口
+    action: assert
+    type: visible
+    selector: '.ant-collapse-header:has-text("最近事件"), .ant-collapse:has-text("最近事件")'
+    timeout: 10000
+
+  - name: 展开「最近事件（排查用）」
     action: click
     locator:
       strategies:
-        - { type: css, value: '.ant-modal-close' }
-        - { type: aria, value: "Close" }
-    timeout: 3000
+        - { type: css, value: '.ant-collapse-header:has-text("最近事件")' }
+        - { type: text, value: "最近事件（排查用）", match: contains }
+    timeout: 8000
+
+  - name: 断言最近事件内容区渲染
+    action: assert
+    type: visible
+    selector: '.ant-collapse-content-active .ant-table, .ant-collapse-content-active .ant-table-wrapper, .ant-collapse-content-active .ant-empty, .ant-collapse-content-active .table-scroll'
+    timeout: 10000
+
+  - name: 切到「90 天」窗口
+    action: click
+    locator:
+      strategies:
+        - { type: css, value: '.page-actions .ant-segmented-item:has-text("90 天")' }
+        - { type: css, value: '.page-actions .ant-segmented-item-label[title="90 天"]' }
+    timeout: 8000
+
+  - name: 断言窗口切换生效（KPI 文案随真实重取变化）
+    action: assert
+    type: visible
+    selector: '.metric-grid:has-text("事件总数（90 天）"), .app-content *:has-text("事件总数（90 天）")'
+    timeout: 15000
+
+  - name: 等待刷新收口（F1/F4 回归点：loading 不得悬挂）
+    action: waitFor
+    locator:
+      strategies:
+        - { type: css, value: ".page-actions button.ant-btn:not(.ant-btn-loading)" }
+    timeout: 15000
 
   - name: stats-page-end
     action: screenshot
 
 # 期望结果
 expected:
-  totalSteps: 15
-  maxDuration: 90000
+  totalSteps: 16
+  maxDuration: 240000

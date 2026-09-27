@@ -1,19 +1,24 @@
-# cairn 设置页 — 深度场景
+# cairn 设置页 — 深度场景（v2 / 2026-09-27 按 probe 实测 DOM 重写）
 #
-# 覆盖：版本号徽章、探测按钮、刷新按钮、编辑态、忽略规则 Modal
-# 探测 / 刷新会真发 /api/probe 和 /api/refresh（仅 GET 类操作）
+# 首轮（2026-09-27 17:33）失败根因 = 场景臆造文案，非产品缺陷。修正对照：
+#   「探测」          → 不存在；真实按钮为「测试连接」        （hasProbeText=false）
+#   「刷新」          → 设置页不存在；真实按钮为「重新扫描」  （hasRescan=true）
+#   「取消」          → antd 对 2 个汉字按钮自动插空格，DOM 实为「取 消」
+#   「忽略规则」入口  → 设置页无此按钮；真实入口「添加规则」，弹窗标题「忽略这个客户端的热度」
+# 证据：run r-20260927100143-c08d（probe-settings-stats-dom）
+#       run r-20260927100306-c838（probe-settings-edit-stats-tag）
 #
-# 用法：POST /api/run {scenario: "cairn/settings-page", env: "dev"}
+# 安全边界：绝不点击「清空热度数据」「清空（恢复全部）」「启用只读/启用禁用」（会改状态）。
+# 「测试连接」只读探测；编辑态只点「取 消」，不改任何值。
 name: cairn-settings-page
 description: |
   设置页深度交互：
-    1. 切到设置 Tab
-    2. 验证顶部版本号徽章可见（v0.5.X）
-    3. 点击「探测」按钮（验证 /api/probe 请求）
-    4. 点击「刷新」按钮（验证 /api/refresh 请求）
-    5. 进入编辑态，确认表单字段可改
-    6. 取消编辑（不改任何值）
-    7. 打开「忽略规则」Modal
+    1. 切到设置 Tab，验证版本号徽章可见
+    2. DOM 取证：断言 5 个核心按钮存在（测试连接/重新扫描/编辑/添加规则/清空热度数据）
+    3. 点击「测试连接」，观察反馈（只读探测）
+    4. 进入编辑态，确认保存/取消按钮出现
+    5. 点「取 消」退出编辑（不改任何值）
+    6. 打开「添加规则」Modal，断言标题并关闭
 env: dev
 tags: [medium, settings, cairn]
 
@@ -50,7 +55,7 @@ steps:
   - name: 等待设置页渲染
     action: assert
     type: visible
-    selector: '.app-content .ant-form, .app-content .ant-card, .app-content button:has-text("刷新")'
+    selector: '.app-content .ant-form, .app-content .ant-card'
     timeout: 15000
 
   # ---- 1. 顶部版本号徽章 ----
@@ -60,88 +65,151 @@ steps:
     selector: '.app-brand .app-brand-version, span[title^="当前运行版本"]'
     timeout: 5000
 
-  # ---- 2. 探测按钮 ----
-  - name: 点击「探测」按钮
+  # ---- 2. DOM 取证：核心按钮集合（硬断言，缺一个即失败） ----
+  - name: DOM 取证：设置页核心按钮齐全
+    action: evaluate
+    script: |
+      (() => {
+        const norm = (s) => (s || '').replace(/\s+/g, '');
+        const btns = Array.from(document.querySelectorAll('.app-content button'))
+          .map((b) => (b.textContent || '').trim());
+        const have = new Set(btns.map(norm));
+        const need = ['测试连接', '重新扫描', '编辑', '添加规则', '清空热度数据'];
+        const missing = need.filter((n) => !have.has(n));
+        const heads = Array.from(document.querySelectorAll('.app-content h1, .app-content h2, .app-content h3'))
+          .map((e) => (e.textContent || '').trim());
+        if (missing.length) {
+          throw new Error('missing buttons: ' + missing.join(' | ') + ' ; have=' + btns.join(' | '));
+        }
+        return { buttonCount: btns.length, buttons: btns, headings: heads };
+      })()
+    timeout: 6000
+
+  # ---- 3. 只读探测：测试连接 ----
+  - name: 点击「测试连接」按钮
     action: click
     locator:
       strategies:
-        - { type: text, value: "探测", match: exact }
-        - { type: css, value: '.app-content button:has-text("探测")' }
+        - { type: css, value: '.app-content button:has-text("测试连接")' }
+        - { type: text, value: "测试连接", match: exact }
     timeout: 5000
 
-  - name: 等探测响应（message notification 或 alert）
-    action: waitFor
-    locator:
-      strategies:
-        - { type: css, value: '.ant-message, .ant-notification, .app-content .ant-alert' }
-    timeout: 15000
+  - name: 观察「测试连接」反馈（最多 8s，不判死）
+    action: evaluate
+    script: |
+      (async () => {
+        const norm = (s) => (s || '').replace(/\s+/g, '').trim();
+        const sel = '.ant-message, .ant-notification, .ant-alert, .ant-form-item-explain-error';
+        const t0 = Date.now();
+        let hits = [];
+        while (Date.now() - t0 < 8000) {
+          hits = Array.from(document.querySelectorAll(sel)).map((e) => norm(e.textContent));
+          if (hits.length) break;
+          await new Promise((r) => setTimeout(r, 250));
+        }
+        const btn = Array.from(document.querySelectorAll('.app-content button'))
+          .find((b) => norm(b.textContent) === '测试连接');
+        return {
+          waitedMs: Date.now() - t0,
+          hitCount: hits.length,
+          texts: hits.slice(0, 5),
+          btnStillLoading: btn ? String(btn.className).indexOf('ant-btn-loading') >= 0 : null,
+        };
+      })()
+    timeout: 9000
 
-  # ---- 3. 刷新按钮 ----
-  - name: 点击「刷新」按钮
-    action: click
-    locator:
-      strategies:
-        - { type: text, value: "刷新", match: exact }
-        - { type: css, value: '.app-content button:has-text("刷新")' }
-    timeout: 5000
-
-  - name: 等刷新完成（loading 结束）
-    action: waitFor
-    locator:
-      strategies:
-        - { type: css, value: '.app-content button:has-text("刷新"):not(.ant-btn-loading)' }
-    timeout: 60000
-
-  # ---- 4. 进入编辑态 ----
+  # ---- 4. 编辑态 ----
   - name: 点击「编辑」按钮
     action: click
     locator:
       strategies:
-        - { type: text, value: "编辑", match: exact }
         - { type: css, value: '.app-content button:has-text("编辑")' }
+        - { type: text, value: "编辑", match: exact }
     timeout: 5000
 
-  - name: 断言保存/取消按钮出现
+  - name: 断言编辑态出现「保存所有修改」
     action: assert
     type: visible
-    selector: '.app-content button:has-text("保存"), .app-content button:has-text("保存全部"), .app-content button:has-text("取消")'
+    selector: '.app-content button:has-text("保存所有修改")'
     timeout: 5000
 
-  - name: 取消编辑
+  - name: 断言「取 消」按钮可见（antd 双汉字插空格）
+    action: assert
+    type: visible
+    selector: '.app-content button:has-text("取 消")'
+    timeout: 5000
+
+  - name: 点击「取 消」退出编辑（不改任何值）
     action: click
     locator:
       strategies:
+        - { type: css, value: '.app-content button:has-text("取 消")' }
+        - { type: text, value: "取 消", match: exact }
         - { type: css, value: '.app-content button:has-text("取消")' }
-        - { type: text, value: "取消", match: exact }
-    timeout: 3000
-
-  # ---- 5. 忽略规则 Modal ----
-  - name: 点击「忽略规则」入口
-    action: click
-    locator:
-      strategies:
-        - { type: text, value: "忽略规则", match: contains }
-        - { type: css, value: '.app-content button:has-text("忽略规则")' }
     timeout: 5000
 
-  - name: 断言忽略规则 Modal 出现
+  - name: 断言已退出编辑态（「编辑」按钮回归）
     action: assert
     type: visible
-    selector: '.ant-modal-content, .ant-modal-title:has-text("忽略")'
+    selector: '.app-content button:has-text("编辑")'
     timeout: 5000
 
-  - name: 关闭 Modal
+  # ---- 5. 添加规则 Modal ----
+  - name: 点击「添加规则」按钮
     action: click
     locator:
       strategies:
+        - { type: css, value: '.app-content button:has-text("添加规则")' }
+        - { type: text, value: "添加规则", match: exact }
+    timeout: 5000
+
+  - name: 断言弹窗标题为「忽略这个客户端的热度」
+    action: assert
+    type: text
+    selector: '.ant-modal-title'
+    value: "忽略这个客户端的热度"
+    match: contains
+    timeout: 5000
+
+  - name: 断言弹窗「保 存」按钮可见（antd 插空格）
+    action: assert
+    type: visible
+    selector: '.ant-modal button:has-text("保 存")'
+    timeout: 5000
+
+  - name: 点击弹窗「取 消」关闭（不保存规则）
+    action: click
+    locator:
+      strategies:
+        - { type: css, value: '.ant-modal button:has-text("取 消")' }
         - { type: css, value: '.ant-modal-close' }
-        - { type: aria, value: "Close" }
-    timeout: 3000
+    timeout: 5000
+
+  - name: 确认弹窗已关闭（轮询，不判死）
+    action: evaluate
+    script: |
+      (async () => {
+        const t0 = Date.now();
+        const vis = () => {
+          const el = document.querySelector('.ant-modal-wrap, .ant-modal');
+          if (!el) return false;
+          const cs = getComputedStyle(el);
+          if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+          return el.getBoundingClientRect().height > 0;
+        };
+        let still = vis();
+        while (Date.now() - t0 < 5000 && still) {
+          await new Promise((r) => setTimeout(r, 250));
+          still = vis();
+        }
+        return { waitedMs: Date.now() - t0, modalStillVisible: still };
+      })()
+    timeout: 7000
 
   - name: settings-page-end
     action: screenshot
 
 # 期望结果
 expected:
-  totalSteps: 17
-  maxDuration: 120000
+  totalSteps: 19
+  maxDuration: 240000
