@@ -1,0 +1,213 @@
+# cairn 镜像列表页 — 深度场景
+# 覆盖：搜索过滤、查看详情 Drawer、删除确认弹窗、运行 GC 弹窗
+# 注：删除 / GC 都有二次确认，不会真发请求
+name: cairn-images-page
+description: |
+  镜像列表页深度交互：
+   1. 切到镜像列表 Tab
+   2. 输入搜索词，确认表格过滤生效
+   3. 打开第一个仓库的详情 Drawer
+   4. 关闭 Drawer
+   5. 触发"删除仓库"二次确认弹窗并取消（不真删）
+   6. 触发"运行 GC"二次确认弹窗并取消（不真跑）
+env: "*"
+tags: [medium, images, cairn]
+
+target:
+  baseUrl: "{{env.baseUrl}}"
+
+artifacts:
+  screenshot: on-failure
+  trace: on-failure
+
+steps:
+  # ---- 0. 导航到镜像列表 ----
+  - name: 打开首页
+    action: goto
+    url: "{{baseUrl}}/"
+    timeout: 30000
+
+  - name: 等待主框架
+    action: waitFor
+    locator:
+      strategies:
+        - type: css
+          value: ".app-shell"
+    timeout: 15000
+
+  - name: 点击「镜像列表」
+    action: click
+    locator:
+      strategies:
+        - type: text
+          value: "镜像列表"
+          match: exact
+        - type: css
+          value: '.app-nav .ant-segmented-item:has-text("镜像列表")'
+
+  - name: 等待列表渲染
+    action: assert
+    type: visible
+    locator:
+      strategies:
+        - type: css
+          value: '.app-content input[placeholder*="搜索"]'
+        - type: css
+          value: '.app-content .ant-table, .app-content .ant-empty'
+    timeout: 15000
+
+  # ---- 1. 搜索过滤 ----
+  - name: 在搜索框输入「library」
+    action: fill
+    locator:
+      strategies:
+        - type: css
+          value: '.app-content input[placeholder*="搜索"]'
+        - type: css
+          value: '.app-content .ant-input-affix-wrapper input'
+    value: "library"
+    timeout: 5000
+
+  - name: 等表格响应（搜索触发的 inventory 重查）
+    action: waitFor
+    locator:
+      strategies:
+        - type: css
+          value: '.app-content .ant-table-row, .app-content .ant-empty'
+    timeout: 10000
+
+  - name: 清空搜索框
+    action: fill
+    locator:
+      strategies:
+        - type: css
+          value: '.app-content input[placeholder*="搜索"]'
+    value: ""
+
+  # ---- 2. 打开详情 Drawer（如果有数据） ----
+  - name: 检查表格是否有行
+    action: assert
+    type: visible
+    locator:
+      strategies:
+        - type: css
+          value: '.app-content .ant-table-row, .app-content .ant-empty'
+
+  - name: 点击第一行的「详情」链接
+    action: click
+    locator:
+      strategies:
+        - type: css
+          value: '.app-content .ant-table-row:first-child button:has-text("详情")'
+        - type: css
+          value: '.app-content .ant-table-row:first-child a:has-text("查看")'
+        - type: css
+          value: '.app-content .ant-table-row:first-child button.ant-btn-link'
+    timeout: 5000
+    optional: true   # 空表时跳过
+
+  - name: 断言详情 Drawer 打开
+    action: assert
+    type: visible
+    locator:
+      strategies:
+        - type: css
+          value: '.ant-drawer-open .ant-drawer-content'
+        - type: css
+          value: '.ant-drawer-content-wrapper'
+    timeout: 8000
+    optional: true
+
+  - name: 关闭 Drawer
+    action: click
+    locator:
+      strategies:
+        - type: css
+          value: '.ant-drawer-close'
+        - type: aria
+          value: "Close"
+    timeout: 3000
+    optional: true
+
+  # ---- 3. 删除确认弹窗（不真删） ----
+  - name: 点击第一行「删除」按钮
+    action: click
+    locator:
+      strategies:
+        - type: css
+          value: '.app-content .ant-table-row:first-child button.ant-btn-dangerous'
+        - type: css
+          value: '.app-content .ant-table-row:first-child .ant-btn:has(.anticon-delete)'
+    timeout: 5000
+    optional: true
+
+  - name: 断言「确认删除」弹窗出现
+    action: assert
+    type: visible
+    locator:
+      strategies:
+        - type: css
+          value: '.ant-modal-confirm .ant-modal-confirm-title'
+        - type: css
+          value: '.ant-popconfirm, .ant-modal'
+    timeout: 5000
+    optional: true
+
+  - name: 点击「取消」
+    action: click
+    locator:
+      strategies:
+        - type: text
+          value: "取消"
+          match: exact
+        - type: css
+          value: '.ant-modal-confirm-btns button:has-text("取消"), .ant-popconfirm-buttons .ant-btn:has-text("取消")'
+    timeout: 3000
+    optional: true
+
+  # ---- 4. GC 确认弹窗（不真跑） ----
+  - name: 点击「运行 GC」按钮
+    action: click
+    locator:
+      strategies:
+        - type: text
+          value: "运行 GC"
+          match: contains
+        - type: css
+          value: '.app-content button:has-text("运行 GC")'
+    timeout: 5000
+
+  - name: 断言「确认运行 GC」弹窗
+    action: assert
+    type: visible
+    locator:
+      strategies:
+        - type: css
+          value: '.ant-modal-confirm-title'
+        - type: css
+          value: '.ant-popconfirm .ant-popover-inner'
+    timeout: 5000
+
+  - name: 点击「取消」
+    action: click
+    locator:
+      strategies:
+        - type: text
+          value: "取消"
+          match: exact
+        - type: css
+          value: '.ant-modal-confirm-btns button:has-text("取消"), .ant-popconfirm button:has-text("取消")'
+    timeout: 3000
+
+  # ---- 5. 截底 ----
+  - name: 截取最终状态
+    action: screenshot
+    name: images-page-end
+
+cleanup:
+  - action: screenshot
+    name: images-page-cleanup
+
+expected:
+  totalSteps: 18
+  maxDuration: 90000

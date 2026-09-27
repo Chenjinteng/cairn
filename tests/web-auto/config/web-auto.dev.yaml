@@ -1,0 +1,24 @@
+# web-auto dev 环境配置
+# dev 跑在 developer 本机/容器，cairn 通常监听 :80 或 :8088
+env: dev
+
+baseUrl: "http://localhost:80"      # docker-compose 起容器默认 :80
+
+# 凭据占位——cairn **没有登录**，这里仅作 schema 占位
+# runner 会忽略未使用的 users 字段
+users: {}
+
+timeouts:
+  default: 30000
+  navigation: 15000
+  locator: 8000
+
+artifacts:
+  defaultPolicy:
+    screenshot: always              # dev 阶段每步留图，方便肉眼 diff
+    trace: on-failure
+    video: never
+    har: never
+  retention:
+    keepLast: 20
+    archiveToGitLfs: false          # dev 不入 LFS，省事

@@ -1,0 +1,181 @@
+# cairn 镜像热度页 — 深度场景
+# 覆盖：子 Tab 切换（Summary / 仓库 / 客户端 / 事件）、贡献图渲染、忽略规则 Modal
+name: cairn-stats-page
+description: |
+  镜像热度页深度交互：
+   1. 切到镜像热度 Tab
+   2. 检查贡献图渲染（canvas/svg）
+   3. 切换子 Tab（仓库 / 客户端 / 事件）
+   4. 在事件 Tab 打开「忽略规则」Modal
+   5. 关闭 Modal
+env: "*"
+tags: [medium, stats, cairn]
+
+target:
+  baseUrl: "{{env.baseUrl}}"
+
+artifacts:
+  screenshot: on-failure
+  trace: on-failure
+
+steps:
+  - name: 打开首页
+    action: goto
+    url: "{{baseUrl}}/"
+    timeout: 30000
+
+  - name: 等待主框架
+    action: waitFor
+    locator:
+      strategies:
+        - type: css
+          value: ".app-shell"
+    timeout: 15000
+
+  - name: 点击「镜像热度」
+    action: click
+    locator:
+      strategies:
+        - type: text
+          value: "镜像热度"
+          match: exact
+        - type: css
+          value: '.app-nav .ant-segmented-item:has-text("镜像热度")'
+
+  - name: 等待热度页主体渲染
+    action: assert
+    type: visible
+    locator:
+      strategies:
+        - type: css
+          value: '.app-content .ant-segmented'
+        - type: css
+          value: '.app-content .ant-card'
+    timeout: 15000
+
+  # ---- 1. 贡献图 ----
+  - name: 断言贡献图渲染（canvas/svg/recharts）
+    action: assert
+    type: visible
+    locator:
+      strategies:
+        - type: css
+          value: '.app-content svg'
+        - type: css
+          value: '.app-content canvas'
+        - type: css
+          value: '.app-content .recharts-wrapper'
+        - type: css
+          value: '.app-content [class*="heatmap"], .app-content [class*="contribution"]'
+    timeout: 10000
+
+  - name: 截取贡献图
+    action: screenshot
+    name: stats-heatmap
+
+  # ---- 2. 子 Tab 切换 ----
+  - name: 切到「仓库」子 Tab
+    action: click
+    locator:
+      strategies:
+        - type: text
+          value: "仓库"
+          match: contains
+        - type: css
+          value: '.app-content .ant-segmented-item:has-text("仓库")'
+    timeout: 5000
+
+  - name: 断言仓库列表渲染
+    action: assert
+    type: visible
+    locator:
+      strategies:
+        - type: css
+          value: '.app-content .ant-table, .app-content .ant-empty'
+    timeout: 10000
+
+  - name: 切到「客户端」子 Tab
+    action: click
+    locator:
+      strategies:
+        - type: text
+          value: "客户端"
+          match: contains
+        - type: css
+          value: '.app-content .ant-segmented-item:has-text("客户端")'
+
+  - name: 断言客户端表渲染
+    action: assert
+    type: visible
+    locator:
+      strategies:
+        - type: css
+          value: '.app-content .ant-table, .app-content .ant-empty'
+    timeout: 10000
+
+  - name: 切到「事件」子 Tab
+    action: click
+    locator:
+      strategies:
+        - type: text
+          value: "事件"
+          match: contains
+        - type: css
+          value: '.app-content .ant-segmented-item:has-text("事件")'
+
+  - name: 断言事件表渲染
+    action: assert
+    type: visible
+    locator:
+      strategies:
+        - type: css
+          value: '.app-content .ant-table, .app-content .ant-empty'
+    timeout: 10000
+
+  # ---- 3. 忽略规则 Modal（点击头部按钮触发） ----
+  - name: 点击「忽略规则」入口
+    action: click
+    locator:
+      strategies:
+        - type: text
+          value: "忽略规则"
+          match: contains
+        - type: css
+          value: '.app-content button:has-text("忽略规则")'
+    timeout: 5000
+    optional: true   # 没有事件或按钮位置不固定时跳过
+
+  - name: 断言忽略规则 Modal 出现
+    action: assert
+    type: visible
+    locator:
+      strategies:
+        - type: css
+          value: '.ant-modal-content'
+        - type: css
+          value: '.ant-modal-title:has-text("忽略")'
+    timeout: 5000
+    optional: true
+
+  - name: 关闭 Modal
+    action: click
+    locator:
+      strategies:
+        - type: css
+          value: '.ant-modal-close'
+        - type: aria
+          value: "Close"
+    timeout: 3000
+    optional: true
+
+  - name: 截取最终状态
+    action: screenshot
+    name: stats-page-end
+
+cleanup:
+  - action: screenshot
+    name: stats-page-cleanup
+
+expected:
+  totalSteps: 14
+  maxDuration: 90000

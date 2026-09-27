@@ -1,0 +1,26 @@
+# web-auto UAT 环境配置
+# UAT 跳板机后内网服务：cairn 跑在 158:80 (容器 :8787 → host :80)
+env: uat
+
+baseUrl: "http://registry.example.com:80"
+
+# cairn **没有登录**——cairn 是「一次管理一个 registry」单进程设计
+# 这里留空结构仅为兼容 runner schema
+users: {}
+
+timeouts:
+  default: 60000
+  navigation: 20000
+  locator: 10000
+  # /api/inventory 第一次慢操作（120s），smoke 场景要拉满
+  inventory: 120000
+
+artifacts:
+  defaultPolicy:
+    screenshot: on-failure          # UAT 阶段截图减半
+    trace: on-failure
+    video: never
+    har: never
+  retention:
+    keepLast: 50
+    archiveToGitLfs: true

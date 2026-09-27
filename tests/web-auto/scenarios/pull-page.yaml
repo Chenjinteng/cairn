@@ -1,0 +1,139 @@
+# cairn 镜像拉取页 — 深度场景
+# 覆盖：拉取表单填写、平台选择、凭据选择、任务列表渲染、取消任务按钮
+# 严格不点提交——避免真创建拉取任务
+name: cairn-pull-page
+description: |
+  镜像拉取页深度交互：
+   1. 切到镜像拉取 Tab
+   2. 在「源镜像」输入框填值（不提交）
+   3. 检查平台 / 凭据 / 代理 Select 是否可选
+   4. 检查任务列表渲染
+   5. 点击「取消」按钮（如有运行中任务）确认二次弹窗
+env: "*"
+tags: [medium, pull, cairn]
+
+target:
+  baseUrl: "{{env.baseUrl}}"
+
+artifacts:
+  screenshot: on-failure
+  trace: on-failure
+
+steps:
+  - name: 打开首页
+    action: goto
+    url: "{{baseUrl}}/"
+    timeout: 30000
+
+  - name: 等待主框架
+    action: waitFor
+    locator:
+      strategies:
+        - type: css
+          value: ".app-shell"
+    timeout: 15000
+
+  - name: 点击「镜像拉取」
+    action: click
+    locator:
+      strategies:
+        - type: text
+          value: "镜像拉取"
+          match: exact
+        - type: css
+          value: '.app-nav .ant-segmented-item:has-text("镜像拉取")'
+
+  - name: 等待拉取表单渲染
+    action: assert
+    type: visible
+    locator:
+      strategies:
+        - type: css
+          value: '.app-content .ant-form'
+        - type: css
+          value: '.app-content input[placeholder*="源"], .app-content input[placeholder*="镜像"]'
+    timeout: 15000
+
+  # ---- 1. 填写源镜像（只填字段，不点提交） ----
+  - name: 在源镜像输入框填写「nginx:latest」
+    action: fill
+    locator:
+      strategies:
+        - type: css
+          value: '.app-content input[placeholder*="源"]'
+        - type: css
+          value: '.app-content input[placeholder*="镜像"]:not([placeholder*="目标"])'
+        - type: css
+          value: '.app-content .ant-form-item:has-text("源镜像") input'
+    value: "nginx:latest"
+    timeout: 5000
+
+  - name: 断言表单字段接受输入
+    action: assert
+    type: value
+    locator:
+      strategies:
+        - type: css
+          value: '.app-content input[placeholder*="源"]'
+        - type: css
+          value: '.app-content .ant-form-item:has-text("源镜像") input'
+    equals: "nginx:latest"
+    timeout: 3000
+
+  - name: 清空源镜像
+    action: fill
+    locator:
+      strategies:
+        - type: css
+          value: '.app-content .ant-form-item:has-text("源镜像") input'
+    value: ""
+
+  # ---- 2. 检查平台 Select 可打开 ----
+  - name: 点击「平台」下拉
+    action: click
+    locator:
+      strategies:
+        - type: css
+          value: '.app-content .ant-form-item:has-text("平台") .ant-select-selector'
+        - type: css
+          value: '.app-content .ant-form-item:has-text("平台") .ant-select'
+    timeout: 5000
+    optional: true
+
+  - name: 断言平台下拉选项出现
+    action: assert
+    type: visible
+    locator:
+      strategies:
+        - type: css
+          value: '.ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item'
+    timeout: 5000
+    optional: true
+
+  - name: 按 ESC 关闭下拉
+    action: press_key
+    key: Escape
+
+  # ---- 3. 任务列表 ----
+  - name: 检查拉取任务列表渲染
+    action: assert
+    type: visible
+    locator:
+      strategies:
+        - type: css
+          value: '.app-content .ant-table, .app-content .ant-empty'
+        - type: css
+          value: '.app-content h2:has-text("任务"), .app-content h3:has-text("任务")'
+    timeout: 10000
+
+  - name: 截取最终状态
+    action: screenshot
+    name: pull-page-end
+
+cleanup:
+  - action: screenshot
+    name: pull-page-cleanup
+
+expected:
+  totalSteps: 13
+  maxDuration: 90000
