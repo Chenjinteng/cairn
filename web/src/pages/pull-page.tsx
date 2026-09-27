@@ -41,6 +41,7 @@ import {
   removePullJob,
 } from '../api';
 import type {
+  ApiFailureInfo,
   ApiResult,
   AppConfig,
   Credential,
@@ -180,6 +181,13 @@ export default function PullPage({ config }: Props) {
   const [jobs, setJobs] = useState<PullJob[]>([]);
   const [error, setError] = useState<ApiResult<unknown> | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  /**
+   * v0.5.18（F2）：配置读不到时这一页的**表单与历史任务仍然可用**（只是拿不到
+   * allowPull / host 这些约束），所以不做整页错误态，只加一条提示 + 重试，
+   * 不把还能干的事一起遮掉。
+   */
+  const [configError, setConfigError] = useState<ApiFailureInfo | null>(null);
+  const [configLoading, setConfigLoading] = useState(false);
   /** 创建前的预览：表单点击"加入队列"后打开 Modal 确认 + 源预检。 */
   const [pendingInput, setPendingInput] = useState<PullJobInput | null>(null);
   const [credentials, setCredentials] = useState<Credential[]>([]);
@@ -288,6 +296,18 @@ export default function PullPage({ config }: Props) {
     void refreshProxies();
   }, [refreshProxies]);
 
+  const loadConfig = useCallback(async () => {
+    setConfigLoading(true);
+    const result = await fetchConfig();
+    setConfigLoading(false);
+    if (result.success && result.data) {
+      liveConfigRef.current = result.data;
+      setConfigError(null);
+    } else {
+      setConfigError(result);
+    }
+  }, []);
+
   const refresh = useCallback(async () => {
     const result = await listPullJobs();
     if (result.success && result.data) {
@@ -306,13 +326,9 @@ export default function PullPage({ config }: Props) {
   useEffect(() => {
     void refresh();
     if (!config) {
-      void fetchConfig().then((result) => {
-        if (result.success && result.data) {
-          liveConfigRef.current = result.data;
-        }
-      });
+      void loadConfig();
     }
-  }, [refresh, config]);
+  }, [refresh, config, loadConfig]);
 
   useEffect(() => {
     if (!hasActive) {
@@ -552,6 +568,32 @@ export default function PullPage({ config }: Props) {
           onClose={() => setError(null)}
           message={error.message}
           description={error.code ? `错误分类：${error.code}` : undefined}
+          action={
+            <Button size="small" onClick={() => void refresh()}>
+              重试
+            </Button>
+          }
+        />
+      ) : null}
+
+      {configError ? (
+        <Alert
+          type="warning"
+          showIcon
+          message="服务配置读取失败，拉取表单可能不完整"
+          description={
+            <div>
+              <div>{configError.message}</div>
+              <div style={{ marginTop: 4, color: 'var(--color-text-3)' }}>
+                {`错误分类：${configError.code}`}
+              </div>
+            </div>
+          }
+          action={
+            <Button size="small" loading={configLoading} onClick={() => void loadConfig()}>
+              重试
+            </Button>
+          }
         />
       ) : null}
 

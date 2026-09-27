@@ -22,6 +22,7 @@ import {
 import ImageDetailDrawer from '../components/image-detail-drawer';
 import MetricCard from '../components/metric-card';
 import type {
+  ApiFailureInfo,
   ApiResult,
   AppConfig,
   DeleteTagPayload,
@@ -57,6 +58,11 @@ export default function ImagesPage({
   const [loading, setLoading] = useState(!inventory);
   const [error, setError] = useState<ApiResult<unknown> | null>(null);
   /**
+   * v0.5.18（F2）：config 拿不到不影响镜像清单（清单来自 /api/inventory），
+   * 但会让「运行 GC」「删除」这些按钮的可用性判断失真，所以单独提示一条。
+   */
+  const [configError, setConfigError] = useState<ApiFailureInfo | null>(null);
+  /**
    * 表格的滚动容器。页面用 .page--fill 撑满视口，滚动只发生在这里 ——
    * 所以搜索框、时间窗、KPI 往下翻表格时不会被顶走。
    */
@@ -88,6 +94,9 @@ export default function ImagesPage({
       const configResult = await fetchConfig();
       if (configResult.success && configResult.data) {
         onConfigChange(configResult.data);
+        setConfigError(null);
+      } else {
+        setConfigError(configResult);
       }
       const result = force ? await refreshInventory() : await fetchInventory();
       if (result.success && result.data) {
@@ -333,6 +342,33 @@ export default function ImagesPage({
                 </Button>
               </div>
             </div>
+          }
+          action={
+            <Button size="small" loading={loading} onClick={() => void load(false)}>
+              重试
+            </Button>
+          }
+        />
+      ) : null}
+
+      {configError && !config ? (
+        /* 清单还能用，只有按钮可用性失真 —— 给一条提示 + 重试，不做整页错误态。 */
+        <Alert
+          type="warning"
+          showIcon
+          message="服务配置读取失败"
+          description={
+            <div>
+              <div>{configError.message}</div>
+              <div style={{ marginTop: 4, color: 'var(--color-text-3)' }}>
+                {`错误分类：${configError.code}`}；忽略规则的开关状态可能显示不准。
+              </div>
+            </div>
+          }
+          action={
+            <Button size="small" loading={loading} onClick={() => void load(false)}>
+              重试
+            </Button>
           }
         />
       ) : null}

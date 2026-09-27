@@ -35,7 +35,9 @@ import {
   testProxyDraft,
   updateProxy,
 } from '../api';
+import LoadError from '../components/load-error';
 import type {
+  ApiFailureInfo,
   ApiResult,
   AppConfig,
   ProxyEntry,
@@ -115,6 +117,14 @@ export default function ProxiesPage({ config: initialConfig }: Props) {
   const [form] = Form.useForm<FormValues>();
   const [modalOpen, setModalOpen] = useState(false);
   const [error, setError] = useState<ApiResult<unknown> | null>(null);
+  /**
+   * v0.5.18（F2）：配置读不到 ≠ 代理库为空。
+   *
+   * 「allowProxies=false」是正常态（这一页本来就不该管代理），请求失败则是
+   * 故障态 —— 过去两者都只画一张空表，用户看不出该去改开关还是该重试。
+   */
+  const [configError, setConfigError] = useState<ApiFailureInfo | null>(null);
+  const [configLoading, setConfigLoading] = useState(false);
 
   /** 连通性测试弹窗状态。 */
   const [testing, setTesting] = useState<ProxyEntry | null>(null);
@@ -132,6 +142,18 @@ export default function ProxiesPage({ config: initialConfig }: Props) {
    */
   const [saving, setSaving] = useState(false);
 
+  const loadConfig = useCallback(async () => {
+    setConfigLoading(true);
+    const result = await fetchConfig();
+    setConfigLoading(false);
+    if (result.success && result.data) {
+      setConfig(result.data);
+      setConfigError(null);
+    } else {
+      setConfigError(result);
+    }
+  }, []);
+
   const refresh = useCallback(async () => {
     if (!config?.allowProxies) {
       return;
@@ -147,13 +169,9 @@ export default function ProxiesPage({ config: initialConfig }: Props) {
 
   useEffect(() => {
     if (!config) {
-      void fetchConfig().then((r) => {
-        if (r.success && r.data) {
-          setConfig(r.data);
-        }
-      });
+      void loadConfig();
     }
-  }, [config]);
+  }, [config, loadConfig]);
 
   useEffect(() => {
     void refresh();
@@ -615,27 +633,44 @@ export default function ProxiesPage({ config: initialConfig }: Props) {
         </div>
       </div>
 
-      {error?.message ? (
-        <Alert
-          type="warning"
-          showIcon
-          closable
-          onClose={() => setError(null)}
-          message={error.message}
-          description={error.code ? `错误分类：${error.code}` : undefined}
+      {configError ? (
+        /* 配置读不到：「是否允许管代理」都无从判断，空表会把故障伪装成"还没添加"。 */
+        <LoadError
+          title="服务配置加载失败，代理列表无法确认"
+          failure={configError}
+          retrying={configLoading}
+          onRetry={() => void loadConfig()}
         />
-      ) : null}
+      ) : (
+        <>
+          {error?.message ? (
+            <Alert
+              type="warning"
+              showIcon
+              closable
+              onClose={() => setError(null)}
+              message={error.message}
+              description={error.code ? `错误分类：${error.code}` : undefined}
+              action={
+                <Button size="small" onClick={() => void refresh()}>
+                  重试
+                </Button>
+              }
+            />
+          ) : null}
 
-      <div className="panel">
-        <Table<ProxyEntry>
-          rowKey="id"
-          size="middle"
-          columns={columns}
-          dataSource={proxies}
-          pagination={false}
-          locale={{ emptyText: '还没有代理，点击右上「新增代理」' }}
-        />
-      </div>
+          <div className="panel">
+            <Table<ProxyEntry>
+              rowKey="id"
+              size="middle"
+              columns={columns}
+              dataSource={proxies}
+              pagination={false}
+              locale={{ emptyText: '还没有代理，点击右上「新增代理」' }}
+            />
+          </div>
+        </>
+      )}
 
       <Alert
         type="info"
