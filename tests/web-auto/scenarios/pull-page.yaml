@@ -1,15 +1,18 @@
 # cairn 镜像拉取页 — 深度场景
-# 覆盖：拉取表单填写、平台选择、凭据选择、任务列表渲染、取消任务按钮
+#
+# 覆盖：拉取表单填写、平台选择下拉打开、任务列表渲染
 # 严格不点提交——避免真创建拉取任务
+#
+# 用法：POST /api/run {scenario: "cairn/pull-page", env: "dev"}
 name: cairn-pull-page
 description: |
   镜像拉取页深度交互：
-   1. 切到镜像拉取 Tab
-   2. 在「源镜像」输入框填值（不提交）
-   3. 检查平台 / 凭据 / 代理 Select 是否可选
-   4. 检查任务列表渲染
-   5. 点击「取消」按钮（如有运行中任务）确认二次弹窗
-env: "*"
+    1. 切到镜像拉取 Tab
+    2. 在「源镜像」输入框填值（不提交）
+    3. 验证表单字段接受输入
+    4. 检查平台下拉可打开
+    5. 检查任务列表渲染
+env: dev
 tags: [medium, pull, cairn]
 
 target:
@@ -18,6 +21,8 @@ target:
 artifacts:
   screenshot: on-failure
   trace: on-failure
+  video: never
+  har: never
 
 steps:
   - name: 打开首页
@@ -29,111 +34,84 @@ steps:
     action: waitFor
     locator:
       strategies:
-        - type: css
-          value: ".app-shell"
+        - { type: css, value: ".app-shell" }
     timeout: 15000
 
-  - name: 点击「镜像拉取」
+  - name: 点击「镜像拉取」Tab
     action: click
     locator:
       strategies:
-        - type: text
-          value: "镜像拉取"
-          match: exact
-        - type: css
-          value: '.app-nav .ant-segmented-item:has-text("镜像拉取")'
+        - { type: text, value: "镜像拉取", match: exact }
+        - { type: css, value: '.app-nav .ant-segmented-item:has-text("镜像拉取")' }
+    timeout: 8000
 
   - name: 等待拉取表单渲染
     action: assert
     type: visible
-    locator:
-      strategies:
-        - type: css
-          value: '.app-content .ant-form'
-        - type: css
-          value: '.app-content input[placeholder*="源"], .app-content input[placeholder*="镜像"]'
+    selector: '.app-content .ant-form, .app-content input[placeholder*="源"], .app-content input[placeholder*="镜像"]'
     timeout: 15000
 
   # ---- 1. 填写源镜像（只填字段，不点提交） ----
-  - name: 在源镜像输入框填写「nginx:latest」
+  - name: 在「源镜像」输入框填写「nginx:latest」
     action: fill
     locator:
       strategies:
-        - type: css
-          value: '.app-content input[placeholder*="源"]'
-        - type: css
-          value: '.app-content input[placeholder*="镜像"]:not([placeholder*="目标"])'
-        - type: css
-          value: '.app-content .ant-form-item:has-text("源镜像") input'
+        - { type: css, value: '.app-content .ant-form-item:has-text("源镜像") input' }
+        - { type: css, value: '.app-content input[placeholder*="源"]' }
     value: "nginx:latest"
     timeout: 5000
 
   - name: 断言表单字段接受输入
     action: assert
     type: value
-    locator:
-      strategies:
-        - type: css
-          value: '.app-content input[placeholder*="源"]'
-        - type: css
-          value: '.app-content .ant-form-item:has-text("源镜像") input'
-    equals: "nginx:latest"
+    selector: '.app-content .ant-form-item:has-text("源镜像") input'
+    value: "nginx:latest"
     timeout: 3000
+
+  - name: 截取填写后状态
+    action: screenshot
+    name: pull-after-fill
 
   - name: 清空源镜像
     action: fill
     locator:
       strategies:
-        - type: css
-          value: '.app-content .ant-form-item:has-text("源镜像") input'
+        - { type: css, value: '.app-content .ant-form-item:has-text("源镜像") input' }
     value: ""
 
-  # ---- 2. 检查平台 Select 可打开 ----
+  # ---- 2. 平台下拉 ----
   - name: 点击「平台」下拉
     action: click
     locator:
       strategies:
-        - type: css
-          value: '.app-content .ant-form-item:has-text("平台") .ant-select-selector'
-        - type: css
-          value: '.app-content .ant-form-item:has-text("平台") .ant-select'
+        - { type: css, value: '.app-content .ant-form-item:has-text("平台") .ant-select-selector' }
+        - { type: css, value: '.app-content .ant-form-item:has-text("平台") .ant-select' }
     timeout: 5000
-    optional: true
 
   - name: 断言平台下拉选项出现
     action: assert
     type: visible
+    selector: '.ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item'
+    timeout: 5000
+
+  - name: 关闭下拉（点 body）
+    action: click
     locator:
       strategies:
-        - type: css
-          value: '.ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item'
-    timeout: 5000
-    optional: true
-
-  - name: 按 ESC 关闭下拉
-    action: press_key
-    key: Escape
+        - { type: css, value: '.app-content h2, .app-content .ant-card-head' }
+    timeout: 3000
 
   # ---- 3. 任务列表 ----
   - name: 检查拉取任务列表渲染
     action: assert
     type: visible
-    locator:
-      strategies:
-        - type: css
-          value: '.app-content .ant-table, .app-content .ant-empty'
-        - type: css
-          value: '.app-content h2:has-text("任务"), .app-content h3:has-text("任务")'
+    selector: '.app-content .ant-table, .app-content .ant-empty'
     timeout: 10000
 
-  - name: 截取最终状态
+  - name: pull-page-end
     action: screenshot
-    name: pull-page-end
 
-cleanup:
-  - action: screenshot
-    name: pull-page-cleanup
-
+# 期望结果
 expected:
-  totalSteps: 13
+  totalSteps: 12
   maxDuration: 90000

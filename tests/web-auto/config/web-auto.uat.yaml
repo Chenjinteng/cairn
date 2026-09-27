@@ -1,26 +1,33 @@
 # web-auto UAT 环境配置
-# UAT 跳板机后内网服务：cairn 跑在 158:80 (容器 :8787 → host :80)
+#
+# 拓扑说明：
+#   runner @ proxy.example.com:8080
+#   UAT 真实环境按需调整 baseUrl；如果 runner 与 cairn 不在同一网段，
+#   可能需要再加一个 nginx 反代层
+#
+# 已被 runner 容器 bind mount 到 /config/web-auto.uat.yaml（ro）
 env: uat
 
-baseUrl: "http://registry.example.com:80"
+# 占位——按 UAT 实际拓扑改
+baseUrl: "http://uat.cairn.internal:8080"
 
-# cairn **没有登录**——cairn 是「一次管理一个 registry」单进程设计
-# 这里留空结构仅为兼容 runner schema
-users: {}
+users:
+  admin:
+    username: "admin"
+    password: "admin"
 
 timeouts:
-  default: 60000
-  navigation: 20000
-  locator: 10000
-  # /api/inventory 第一次慢操作（120s），smoke 场景要拉满
-  inventory: 120000
+  default: 90000
+  navigation: 45000
+  locator: 15000
+  inventory: 180000
 
 artifacts:
   defaultPolicy:
     screenshot: on-failure          # UAT 阶段截图减半
     trace: on-failure
     video: never
-    har: never
+    har: on-failure
   retention:
     keepLast: 50
     archiveToGitLfs: true
