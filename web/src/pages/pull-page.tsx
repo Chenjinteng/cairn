@@ -977,7 +977,12 @@ function PullPreviewModal({
         authRequired?: boolean;
         tokenRealm?: string;
         tokenError?: string;
+        /** v0.5.17：后端按真实源引用校验过 manifest，回填真正被探测的 repo / tag。 */
+        sourceRepo?: string;
+        sourceTag?: string;
         dest?: DestStatus;
+        /** v0.5.17：dest 段探测自身失败的原因（此时 dest 是缺字段的兜底对象）。 */
+        destError?: string;
       }
     | { state: 'failed'; message: string; origin?: 'source' | 'dest' }
   >({ state: 'idle' });
@@ -991,26 +996,41 @@ function PullPreviewModal({
     let cancelled = false;
     setProbeResult({ state: 'loading' });
     probePullSource({
-        sourceUrl: input.sourceUrl,
-        sourceProxy: input.sourceProxy,
-        credentialId: input.sourceCredentialId,
-        proxyId: input.sourceProxyId,
-        sourceRef: input.sourceRef,
-        destRepo: input.destRepo,
-        destTag: input.destTag,
-      })
+      sourceUrl: input.sourceUrl,
+      sourceProxy: input.sourceProxy,
+      credentialId: input.sourceCredentialId,
+      proxyId: input.sourceProxyId,
+      sourceRef: input.sourceRef,
+      destRepo: input.destRepo,
+      destTag: input.destTag,
+    })
       .then((result) => {
         if (cancelled) return;
-        if (result.success && result.data) {
-          setProbeResult({
-            state: 'ok',
-            apiVersion: result.data.apiVersion,
-            host: result.data.host,
-            authRequired: result.data.authRequired,
-            tokenRealm: result.data.tokenRealm,
-            tokenError: result.data.tokenError,
-            dest: result.data.dest,
-          });
+        const data = result.data;
+        if (result.success && data) {
+          // v0.5.17：信封上的 success 只说明这次 HTTP 调用成功，不代表源可用。
+          // 此前判定漏读 data.ok，于是"源 registry 不可达"也会被渲染成绿色的
+          // 「源可达」，用户确认入队后任务必然卡在拉取中——正是这个缺陷。
+          if (data.ok === false) {
+            setProbeResult({
+              state: 'failed',
+              message: data.error || '源端预检未通过',
+              origin: 'source',
+            });
+          } else {
+            setProbeResult({
+              state: 'ok',
+              apiVersion: data.apiVersion,
+              host: data.host,
+              authRequired: data.authRequired,
+              tokenRealm: data.tokenRealm,
+              tokenError: data.tokenError,
+              sourceRepo: data.sourceRepo,
+              sourceTag: data.sourceTag,
+              dest: data.dest,
+              destError: data.destError,
+            });
+          }
         } else {
           setProbeResult({
             state: 'failed',
@@ -1140,7 +1160,7 @@ function PullPreviewModal({
               }
             />
           ) : null}
-          {probeResult.state === 'ok' && probeResult.dest && !probeResult.dest.exists ? (
+          {probeResult.state === 'ok' && probeResult.dest && !probeResult.dest.exists && !probeResult.dest.probeError ? (
             <Alert
               type="success"
               showIcon
@@ -1153,13 +1173,15 @@ function PullPreviewModal({
               }
             />
           ) : null}
-          {probeResult.state === 'ok' && probeResult.dest?.probeError ? (
+          {probeResult.state === 'ok' && (probeResult.dest?.probeError || probeResult.destError) ? (
             <Alert
               type="warning"
               showIcon
               message="未能确认目标 tag 的现状"
               description={
-                <span style={{ color: 'var(--color-text-3)' }}>{probeResult.dest.probeError}</span>
+                <span style={{ color: 'var(--color-text-3)' }}>
+                  {probeResult.dest?.probeError ?? probeResult.destError}
+                </span>
               }
             />
           ) : null}
@@ -1177,10 +1199,12 @@ function PullPreviewModal({
               probeResult.state === 'idle'
                 ? '准备预检'
                 : probeResult.state === 'loading'
-                ? '正在测试源 registry 连通性…'
+                ? '正在校验源镜像是否可拉取…'
                 : probeResult.state === 'ok'
-                ? `源可达 · API ${probeResult.apiVersion}（${probeResult.host}）`
-                : `源不可达${probeResult.origin === 'source' ? '' : ''}`
+                ? probeResult.sourceRepo
+                  ? `源镜像可拉取 · ${probeResult.sourceRepo}:${probeResult.sourceTag}（API ${probeResult.apiVersion}）`
+                  : `源可达 · API ${probeResult.apiVersion}（${probeResult.host}）`
+                : '源端预检未通过'
             }
             description={
               probeResult.state === 'failed' ? (

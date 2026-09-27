@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -418,14 +419,88 @@ func (e *ExtraHandlers) ProbePullSource(w http.ResponseWriter, r *http.Request) 
 	if probeErr != nil {
 		out["error"] = probeErr.Error()
 	}
+	// v0.5.17: "/v2/ 可达"并不等于"这个源镜像能拉"。此前只探 /v2/，于是出网不通
+	// （或源上根本没有这个 tag）时界面照样打绿勾，任务入队后才卡住——用户看到的
+	// 就是"检测通过，却一直卡在拉取中"。这里按拉取任务同一套规则（同限定、同凭据、
+	// 同代理）解析出真实的 repo:tag 并取一次 manifest，让预检结论与真实拉取一致。
+	var (
+		sourceRepo   string
+		sourceTag    string
+		sourceDigest string
+		sourceExists bool
+		hasSource    bool
+	)
+	if probeErr == nil {
+		if repo, tag, ok := splitSourceRef(req.SourceRef); ok {
+			sourceRepo, sourceTag, hasSource = pull.QualifySourceRepo(target, repo), tag, true
+			out["sourceRepo"] = sourceRepo
+			out["sourceTag"] = sourceTag
+			manifest, merr := client.GetManifest(r.Context(), sourceRepo, sourceTag)
+			var re *registry.Error
+			switch {
+			case merr == nil:
+				sourceExists = true
+				sourceDigest = manifest.Digest
+			case errors.As(merr, &re) && re.IsNotFound():
+				out["ok"] = false
+				out["error"] = fmt.Sprintf(
+					"源 registry 可达，但源镜像 %s:%s 不存在——请检查镜像名与 tag 拼写",
+					sourceRepo, sourceTag)
+			default:
+				out["ok"] = false
+				out["error"] = fmt.Sprintf("源镜像 %s:%s 探测失败：%v",
+					sourceRepo, sourceTag, merr)
+			}
+			out["sourceExists"] = sourceExists
+			if sourceDigest != "" {
+				out["sourceDigest"] = sourceDigest
+			}
+		}
+	}
 	// Probe the destination tag too so the UI can warn about overwrites.
 	if req.DestRepo != "" && req.DestTag != "" {
-		if dest, derr := e.probeDest(r.Context(), req.DestRepo, req.DestTag); derr != "" {
+		dest, derr := e.probeDest(r.Context(), req.DestRepo, req.DestTag)
+		if derr != "" {
+			// probeDest 失败时也得给出 dest 对象：前端"未能确认目标 tag 的现状"
+			// 那条提示读的是 dest.probeError（types.ts 里就是这么声明的）。
+			// 不设 exists，避免被误判成"将新建"。
 			out["destError"] = derr
+			fallback := map[string]any{
+				"destRepo":   req.DestRepo,
+				"destTag":    req.DestTag,
+				"probeError": derr,
+			}
+			if hasSource {
+				fallback["sourceRepo"] = sourceRepo
+				fallback["sourceTag"] = sourceTag
+				fallback["sourceExists"] = sourceExists
+			}
+			out["dest"] = fallback
 		} else {
+			// v0.5.17: dest 一并带上源侧事实。types.ts 早就声明了
+			// sourceRepo/sourceTag/sourceExists/sourceDigest/identical，
+			// 但 Go 侧从未填充，前端那几条提示一直是死代码。
+			if hasSource {
+				dest["sourceRepo"] = sourceRepo
+				dest["sourceTag"] = sourceTag
+				dest["sourceExists"] = sourceExists
+				if sourceDigest != "" {
+					dest["sourceDigest"] = sourceDigest
+				}
+			}
+			// 目标 tag 已存在时用 digest 比对区分"替换"与"内容完全一致"，
+			// 而不是无条件 willReplace。
+			if existing, _ := dest["existingDigest"].(string); existing != "" && sourceDigest != "" {
+				same := existing == sourceDigest
+				dest["identical"] = same
+				dest["willReplace"] = !same
+			}
 			out["dest"] = dest
 		}
 	}
+	// v0.5.17: 源侧现在还要取一次 manifest，耗时不再只等于 /v2/ 探测；重算一次，
+	// 免得运维拿这个数字判断"探测很快所以网络没问题"。
+	out["elapsedMs"] = time.Since(start).Milliseconds()
 	writeJSON(w, http.StatusOK, out)
 }
 

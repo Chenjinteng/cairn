@@ -6,6 +6,72 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.17] - 2026-09-27
+
+本轮主题:**修掉「没配代理也显示源可达、入队后却卡在拉取中」**。用户报的现象是「增加队列时检测没过关,结果加进去又一直卡着」,但**后端一直是如实报告的**——把同一份探测请求直接打到 158 上,它回的清清楚楚是失败:
+
+```
+ok:false, elapsedMs:5000,
+error:"registry: GET /v2/: Get \"https://registry-1.docker.io/v2/\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)"
+```
+
+**失败的是前端:它拿到这份响应后不看 `ok`,直接画了绿勾「源可达」。** 这是本轮第一层成因(P0)。第二层(P1):`/v2/` 这一个裸端点**能通只说明「源 registry 存在」**,既不说明「你要拉的镜像存在」,也不说明「这条链路真能取到 manifest」;于是「配了代理但 tag 写错」这类输入,后端探测会给出**假阳性** `ok:true`(158 实测,见「验证」)。两层叠加,就得到了「检测通过 → 入队 → 永远卡住」。
+
+### 修复
+
+- **前端改为消费后端结论**(`web/src/api.ts`、`web/src/pages/pull-page.tsx`):探测响应的 `ok` / `error` 此前**从未被读取过**(`git log -S 'data.ok' -- web/src/pages/pull-page.tsx web/src/api.ts` 输出为空,即**自 v0.2 引入该探测起一直是死字段**;`api.ts` 的返回类型里甚至在 TS 层面就没有这两个字段)。现在判定改为 **`ok !== false` 才通过**:`ok === false` 时结论行落 `state:'failed'`,原文展示后端给出的原因(标 `源端预检未通过`),入队按钮保持禁用。拦截线是 **`ok === false` 而不是 `!ok`**——缺字段的旧/异常响应不会被误判成失败。
+- **后端补上源镜像级校验**(`internal/api/handlers_extra.go` 的 `ProbePullSource`):`/v2/` 探测成功后,再按**与拉取任务完全相同的规则**去取一次源 manifest——同一个 `splitSourceRef` 解析、同一个 `pull.QualifySourceRepo` 归一化仓库名(Docker Hub 的 `alpine` → `library/alpine`)、同一套凭据、同一个代理(`registry.NewClient`)。取到即 `sourceExists:true` 并回报 `sourceDigest`。失败分两种文案:
+  - **源镜像不存在**(`registry.Error.IsNotFound()`,即 404 MANIFEST_UNKNOWN):`ok:false` + 「源 registry 可达,但源镜像 `<repo>:<tag>` 不存在——请检查镜像名与 tag 拼写」。这正是「配了代理、tag 打错」的场景——旧版会在这里给出 `ok:true`。
+  - **其它取用失败**(认证 401、代理不通、超时等):`ok:false` + 「源镜像 `<repo>:<tag>` 探测失败:`<原因>`」。
+- **前后端契约对齐**(`internal/api/handlers_extra.go`):`web/src/types.ts` 的 `DestStatus` 一直声明着 `sourceRepo` / `sourceTag` / `sourceExists` / `sourceDigest` / `identical` / `probeError`,而 Go 侧**零产出**——声明了却永远收不到。现在 `dest` 段真实注入这四个源侧事实,并据此计算 `identical`(目标 tag 已有 digest **且**与源 `sourceDigest` 相同 → 内容一致,不必重拉)与 `willReplace`;**dest 侧探测失败时同时给出 `destError` 与兜底 `dest`(带 `probeError`)**,前端黄色告警接受两种来源(`dest?.probeError ?? probeResult.destError`)——旧版只给 `destError` 一个字段,另一条路径取不到。
+- **`elapsedMs` 改在响应组装末尾计算**:旧版在 `/v2/` 探测后立刻取值,新增的 manifest 校验耗时不在其内;现在覆盖全程(前端目前不展示该字段)。
+
+### 文档
+
+- **校准 README 的版本面**:`README.md` 的「当前状态」标题与「当前版本」行都停在 `v0.5.15`。经查 **0.5.16 轮的提交 `c2a1319` 整份没有改动 `README.md`**——`AGENTS.md`「一次改动要同时更新这几处」中的 README 这处被漏掉了(该轮其余四处均已改)。本轮一并校正到 `0.5.17`。
+- README 的构建示例用的是不带版本的 `cairn:dev`,无镜像 tag 需要同步(已逐行核对 `docker build` / `IMAGE` 相关行)。
+
+### 影响范围(升级须知)
+
+- **受影响版本为 v0.2 ~ v0.5.16**(探测能力与前端调用同在 `d232aee`「feat: v0.2 …」引入,而 `data.ok` 自那以后从未被读取)。0.5.16 及更早的版本里,**「源可达」绿勾是一个不反映后端结论的装饰**:后端说 false 它也画绿勾。
+- **触发条件与观感**:不配代理访问 Docker Hub 这类「源 registry 可达、但你这条链路取不到」的最常见;表现为入队后任务停在拉取中直到失败(158 现场一次 `library/alpine:3.15` 的任务在 **61.7s** 后以 `manifest failed` 收场、状态 `cancelled`——拉取阶段的超时/取消语义本轮未改,见「已知遗留」)。
+- **升级后行为变化**:原本「检测通过、入队卡住」的输入,现在会在**入队前**就红字拦住并说明原因;原本「配了代理但 tag 写错」也能通过的输入,现在会被明确指出是镜像名/tag 拼写问题。这两类都是**从假绿变真红**,不是新增限制。
+
+### 已知遗留(本轮未改)
+
+- **`asErr` 恒为 false**(`internal/registry/client.go:374-384`):该函数无条件返回 `false`,使调用方无法据此区分错误类型。本轮未改(涉及的调用面比本轮主题大,需单独评估)。
+- **拉取阶段超时/快速失败未改造**:本轮只修「入队前的预检」,不含「入队后卡多久」。源不可达时任务仍会走到拉取阶段的超时才收场(现场 61.7s)。
+- **不引入「全局代理回落」**:没配代理就是直连,不静默改用某个已存代理——那会把「配错」变成「猜对」,更难排查。
+- `UpdateProxy` 用空密码会清掉已存密码(`internal/api/handlers_extra.go`):0.5.15 已记录,本轮未改(修复要变更已文档化的 PATCH 语义)。
+- 设置页 5 处 `TS6133` 未使用声明仍在基线里,未清理。
+
+### 验证
+
+- **生产现场对照(158,`cairn:0.5.16`,升级前)**——同一份探测请求直接打到 API,绕开前端:
+  - 无代理 + `library/alpine:3.16` → **`ok:false`**,`elapsedMs:5000`,错误为 `context deadline exceeded`(158 无直连外网)→ **后端如实报失败,前端却显示绿勾**,此即 P0 铁证。
+  - 走代理(`<proxy>`,`http://proxy.example.com:7890`)+ **不存在的 tag** `library/alpine:9.99-nope` → **`ok:true`** ❌ → 旧版自身误报,此即 P1 铁证。
+  - 走代理 + 真实 tag `library/alpine:3.16` → `ok:true`,`elapsedMs:2684`,响应里**没有任何**存在性/digest 信息(旧契约)。
+- **前端源码铁证(升级前源码)**:`pull-page.tsx` 的探测回调为 `if (result.success && result.data) { setProbeResult({ state:'ok', … }) }`——**只要 HTTP 成功就画绿勾**;`api.ts` 的 `probePullSource` 返回类型不含 `ok`/`error`/`sourceExists`/`sourceDigest`/`destError`。新文案在旧源码中计数为 0(`源端预检未通过` 0/2、`正在校验源镜像是否可拉取` 0/1)。
+- **本地隔离实例冒烟**(独立端口 `18787` + 独立数据目录,二进制 `version=0.5.17`):
+  - A. 无代理 + `library/alpine:3.19`(开发机可直连 Docker Hub)→ `ok:true`、`sourceExists:true`、`sourceDigest:sha256:6baf43584bcb…`、`elapsedMs:2110`。
+  - B. 带代理(`http://127.0.0.1:7890`)+ 同一真实镜像 → `ok:true` + digest(两条链路都验证)。
+  - C. 带代理 + **不存在的 tag** `library/alpine:9.99-nope` → **`ok:false`**、`sourceExists:false`、文案为「源 registry 可达,但源镜像 library/alpine:9.99-nope 不存在——请检查镜像名与 tag 拼写」——即 P1 的假阳性已被消除。
+  - D. 带代理 + 真实镜像 + `destRepo`/`destTag` → `dest` 段真实注入 `sourceRepo`/`sourceTag`/`sourceExists`/`sourceDigest`,并给出 `exists:false`、`willReplace:false`(本地未配自身仓库,`probeDest` 走 `storage.ErrNotFound` 分支)。
+  - E. `sourceRef:"library/alpine"`(不带 tag)→ `ok:true` 且不带源侧字段;经查前端表单校验(`pull-page.tsx`)强制要求 tag,**该输入在 UI 上不可达**,故后端不加 tag 兜底。
+- **门禁**:`gofmt -l internal/ cmd/` 无输出;`go vet ./internal/...` 退出码 0;`go build ./...` 退出码 0;`go build -tags webui -o /tmp/cairn-gate2 ./cmd/server` 退出码 0;`go test -count=1 ./internal/...` 全部 `ok`;前端 `tsc --noEmit -p web/tsconfig.json` 与 `c2a1319` 基线**逐条 diff 一致(10 条 → 10 条,零新增)**,其中 5 条在 `settings-page.tsx`、3 条在 `api.ts`(行号 :86/:93/:100,均为未改动的既有 `TS2304`)、2 条在 `images-page.tsx`,本轮改动的 `api.ts` / `pull-page.tsx` 新增行零错误。
+
+### 兼容性
+
+- **API 的 `ok` 字段语义未变**,只是**终于被让消费**;响应新增 `sourceRepo`/`sourceTag`/`sourceExists`/`sourceDigest` 与更丰富的 `dest`(均为新增字段,旧客户端忽略即可)。
+- **磁盘格式与配置未变**:纯请求处理路径的改动,无迁移、无配置项增减。
+- ⚠️ **升级后首次预检变慢属正常**:源镜像级校验比裸 `/v2/` 多一次 manifest 往返(本地实测总计约 2.1~2.7s,受网络影响);`elapsedMs` 已覆盖全程。
+- ⚠️ **升级后「预检通过」的门槛实质变高**:以前「源 registry 通」就算过,现在要「这个镜像取得回来」才算过。若某条链路此前一直靠假绿通过,升级后会被挡住——这是本轮的目标行为。
+
+### 轮次与号位
+
+- 本轮占 **0.5.17**:纯**缺陷修复**(前端误报 + 后端探测口径不足),按 `AGENTS.md` 判定为小版本(第 3 位)+1。
+- 因该 hotfix 优先于原定的「韧性轮」,按 `docs/ROADMAP.md`「号位是预留,不是承诺……本表自上而下整体顺延」的规则**整表顺延**:韧性轮 0.5.17 → **0.5.18**、工程化 0.5.18 → **0.5.19**;`0.6.0`(TLS 证书管理)由人指定,不随顺延改号。
+
 ## [0.5.16] - 2026-09-27
 
 本轮主题:**修掉「拉取任务点完「添加」就从列表消失、且看不到任何历史」**。现象看着像前端不刷新、像数据库没写,实际是**进程被一次空指针 panic 打死了**:只要拉取成功拿到源 manifest,`Orchestrator.RunOne` 就会去调一个**永远为 `nil`** 的函数字段,当场 SIGSEGV;Go 的 panic 不 recover 就是整个进程退出,容器被 `restart: unless-stopped` 拉起,而任务表在**内存**里,重启即清空——任务不是「消失」,是**承载它的进程没有了**。这也正是「没有历史任务」的直接原因:历史本来就只在内存,进程一死什么都没留下。
