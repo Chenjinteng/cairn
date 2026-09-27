@@ -30,7 +30,9 @@ import {
   testCredential,
   updateCredential,
 } from '../api';
+import LoadError from '../components/load-error';
 import type {
+  ApiFailureInfo,
   ApiResult,
   AppConfig,
   Credential,
@@ -60,6 +62,27 @@ export default function CredentialsPage({ config: initialConfig }: Props) {
   const [modalOpen, setModalOpen] = useState(false);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [error, setError] = useState<ApiResult<unknown> | null>(null);
+  /**
+   * v0.5.18（F2）：配置拉不到时**不能**只留一张空表。
+   *
+   * 「本部署不允许管凭据」和「压根没读到配置」在这一页的呈现是相反的：
+   * 前者是正常态（该提示去哪开开关），后者是故障态（必须给重试入口）。
+   * 过去两种情况都只渲染空表 + emptyText，用户看不出区别。
+   */
+  const [configError, setConfigError] = useState<ApiFailureInfo | null>(null);
+  const [configLoading, setConfigLoading] = useState(false);
+
+  const loadConfig = useCallback(async () => {
+    setConfigLoading(true);
+    const result = await fetchConfig();
+    setConfigLoading(false);
+    if (result.success && result.data) {
+      setConfig(result.data);
+      setConfigError(null);
+    } else {
+      setConfigError(result);
+    }
+  }, []);
 
   const refresh = useCallback(async () => {
     if (!config?.allowCredentials) {
@@ -76,13 +99,9 @@ export default function CredentialsPage({ config: initialConfig }: Props) {
 
   useEffect(() => {
     if (!config) {
-      void fetchConfig().then((r) => {
-        if (r.success && r.data) {
-          setConfig(r.data);
-        }
-      });
+      void loadConfig();
     }
-  }, [config]);
+  }, [config, loadConfig]);
 
   useEffect(() => {
     void refresh();
@@ -335,27 +354,44 @@ export default function CredentialsPage({ config: initialConfig }: Props) {
         </div>
       </div>
 
-      {error?.message ? (
-        <Alert
-          type="warning"
-          showIcon
-          closable
-          onClose={() => setError(null)}
-          message={error.message}
-          description={error.code ? `错误分类：${error.code}` : undefined}
+      {configError ? (
+        /* 配置读不到：「是否允许管凭据」都无从判断，空表会把故障伪装成"还没添加"。 */
+        <LoadError
+          title="服务配置加载失败，凭据列表无法确认"
+          failure={configError}
+          retrying={configLoading}
+          onRetry={() => void loadConfig()}
         />
-      ) : null}
+      ) : (
+        <>
+          {error?.message ? (
+            <Alert
+              type="warning"
+              showIcon
+              closable
+              onClose={() => setError(null)}
+              message={error.message}
+              description={error.code ? `错误分类：${error.code}` : undefined}
+              action={
+                <Button size="small" onClick={() => void refresh()}>
+                  重试
+                </Button>
+              }
+            />
+          ) : null}
 
-      <div className="panel">
-        <Table<Credential>
-          rowKey="id"
-          size="middle"
-          columns={columns}
-          dataSource={credentials}
-          pagination={false}
-          locale={{ emptyText: '还没有凭据，点击右上「新增凭据」' }}
-        />
-      </div>
+          <div className="panel">
+            <Table<Credential>
+              rowKey="id"
+              size="middle"
+              columns={columns}
+              dataSource={credentials}
+              pagination={false}
+              locale={{ emptyText: '还没有凭据，点击右上「新增凭据」' }}
+            />
+          </div>
+        </>
+      )}
 
       <Modal
         open={modalOpen}

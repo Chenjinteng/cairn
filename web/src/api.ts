@@ -38,6 +38,10 @@ import type {
  * 停在 loading：既没有错误提示，也没有重试入口。超时后返回**可区分**的
  * TIMEOUT code，让「服务在但没回应」和「连不上服务」（NETWORK_ERROR）
  * 能分别呈现，而不是都塌进同一个网络错误。
+ *
+ * v0.5.18（F2）：失败结果再带上 `status` 与 `detail`（见类型的 ApiFailureInfo），
+ * 让调用方能区分「服务没回 / 回话的不是 cairn / cairn 明确拒绝」，从而
+ * 决定是给重试入口还是把领域原因念给用户听。
  */
 
 /** 本地 SQLite / 内存读写的快接口预算。 */
@@ -57,6 +61,40 @@ interface RequestOptions {
   timeoutMs?: number;
 }
 
+/**
+ * 非预期正文的摘要上限。
+ *
+ * 200 字符足够回答「这是谁回的」——网关错误页的标题行、反代版本行、HTML
+ * 骨架都在前 200 字符里 —— 又不会把整页 HTML 塞进界面。
+ */
+const DETAIL_MAX_CHARS = 200;
+
+/** 折叠空白 + 截断，把任意正文变成一行能放进 Alert 的摘要。 */
+function summarizeBody(body: string): string {
+  const collapsed = body.replace(/\s+/g, ' ').trim();
+  return collapsed.length <= DETAIL_MAX_CHARS
+    ? collapsed
+    : `${collapsed.slice(0, DETAIL_MAX_CHARS)}\u2026`;
+}
+
+/** 把 unknown 形式的异常收敛成一句人话。 */
+function describeError(error: unknown): string {
+  return (error as Error)?.message ?? String(error);
+}
+
+/**
+ * 超时结果集中一处：header 之前、header 之后、body 读取中三个位置都会超时，
+ * 文案必须一致，否则用户看到的「10 秒」「120 秒」会随分支漂移。
+ */
+function timeoutResult<T>(timeoutMs: number, path: string, status: number): ApiResult<T> {
+  return {
+    success: false,
+    code: 'TIMEOUT',
+    message: `请求超时（${Math.round(timeoutMs / 1000)} 秒）已中止: ${path}`,
+    status,
+  };
+}
+
 async function request<T>(
   path: string,
   init?: RequestInit,
@@ -64,8 +102,8 @@ async function request<T>(
 ): Promise<ApiResult<T>> {
   const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const controller = new AbortController();
-  // 计时器挂到 response.json() 结束为止：响应头回来了但 body 卡住（大清单 /
-  // 半截响应）同样属于 hang，abort 会一并中断 body 读取。
+  // 计时器挂到响应体读完为止：响应头回来了但 body 卡住（大清单 / 半截响应）
+  // 同样属于 hang，abort 会一并中断 body 读取。
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(path, {
@@ -74,23 +112,69 @@ async function request<T>(
       // 必须排在 ...init 之后：写在前面会被调用方传入的同名字段覆盖。
       signal: controller.signal,
     });
-    const payload = (await response.json()) as ApiResult<T>;
+    // v0.5.18（F2）：先按文本读、再自己解析，好把三类响应分开。
+    //
+    // 过去直接 `await response.json()`：网关的 HTML 错误页、反代的 502 页、
+    // 半截 JSON 全都塌进同一个 NETWORK_ERROR（文案还是"无法连接管理服务"），
+    // 把「服务在、但回话的不是 cairn」误报成「连不上」。现在：
+    //   - 正文读不到        → NETWORK_ERROR（确实没拿到完整响应，含被掐断）
+    //   - 读到了但不是 JSON → INVALID_RESPONSE + HTTP status + 正文摘要
+    //   - JSON 但不是信封   → INVALID_RESPONSE + HTTP status + 正文摘要
+    //   - 信封 success:false → 原样透传，另附 HTTP status
+    let body: string;
+    try {
+      body = await response.text();
+    } catch (error) {
+      if (controller.signal.aborted) {
+        return timeoutResult<T>(timeoutMs, path, response.status);
+      }
+      return {
+        success: false,
+        code: 'NETWORK_ERROR',
+        message: `读取服务响应失败: ${describeError(error)}`,
+        status: response.status,
+      };
+    }
+    // body 读完了，但读的过程中已经超时：语义仍是超时，不能当成正常响应。
+    if (controller.signal.aborted) {
+      return timeoutResult<T>(timeoutMs, path, response.status);
+    }
+    let payload: ApiResult<T>;
+    try {
+      payload = JSON.parse(body) as ApiResult<T>;
+    } catch {
+      return {
+        success: false,
+        code: 'INVALID_RESPONSE',
+        message: `服务返回了非 JSON 响应（HTTP ${response.status}）: ${path}`,
+        status: response.status,
+        detail: summarizeBody(body),
+      };
+    }
     if (typeof payload?.success !== 'boolean') {
-      return { success: false, code: 'INVALID_RESPONSE', message: '服务返回了非预期响应' };
+      return {
+        success: false,
+        code: 'INVALID_RESPONSE',
+        message: `服务返回了非预期响应（HTTP ${response.status}）: ${path}`,
+        status: response.status,
+        detail: summarizeBody(body),
+      };
+    }
+    if (!payload.success) {
+      // cairn 明确拒绝：领域 code / message 是页面要展示的事实，原样保留，
+      // 只补一个 HTTP status 方便跟访问日志对账。
+      return { ...payload, status: response.status };
     }
     return payload;
   } catch (error) {
     if (controller.signal.aborted) {
-      return {
-        success: false,
-        code: 'TIMEOUT',
-        message: `请求超时（${Math.round(timeoutMs / 1000)} 秒）已中止: ${path}`,
-      };
+      return timeoutResult<T>(timeoutMs, path, 0);
     }
     return {
       success: false,
       code: 'NETWORK_ERROR',
-      message: `无法连接管理服务: ${(error as Error)?.message ?? error}`,
+      message: `无法连接管理服务: ${describeError(error)}`,
+      status: 0,
     };
   } finally {
     clearTimeout(timer);

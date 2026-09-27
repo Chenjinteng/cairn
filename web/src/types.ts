@@ -117,10 +117,32 @@ export interface MutableSettings {
   pullPlatforms: string;
 }
 
-export interface ApiResult<T> {
-  success: boolean;
+/**
+ * v0.5.18（F2）：一次失败的**可诊断信息**。
+ *
+ * 三类失败在界面上的处置完全不同，但过去都塌进同一句话（"无法连接管理服务"）：
+ *
+ *   1. 服务没回 —— `NETWORK_ERROR`（连不上 / 正文读不全）或 `TIMEOUT`
+ *      （预算内没读完），`status` 为 0；
+ *   2. 回话的不是 cairn —— 网关 HTML 错误页、反代 502、非 JSON 正文，
+ *      `INVALID_RESPONSE` + 真实 HTTP `status` + `detail`（正文摘要）；
+ *   3. cairn 明确拒绝 —— 后端信封 `success:false`，`code` 是领域原因
+ *      （例如 registry 未开启删除），另带 `status` 便于与访问日志对账。
+ *
+ * 页面凭这个结构决定「重试」还是「把原因念给用户听」，
+ * 见 components/load-error.tsx。
+ */
+export interface ApiFailureInfo {
   code: string;
   message: string;
+  /** HTTP 状态码；0 / undefined 表示没拿到响应（连不上或超时）。 */
+  status?: number;
+  /** 非预期响应的正文摘要（已折叠空白并截断，见 api.ts summarizeBody）。 */
+  detail?: string;
+}
+
+export interface ApiResult<T> extends ApiFailureInfo {
+  success: boolean;
   data?: T;
 }
 
