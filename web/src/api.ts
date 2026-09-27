@@ -30,12 +30,49 @@ import type {
  * 所有接口都返回 `{ success, code, message, data }`。
  * 失败不抛异常而是返回结构体：错误原因是页面要内联展示的领域事实
  * （例如 registry 未开启删除），需要连同 code 一起渲染。
+ *
+ * v0.5.18（F1）：每个请求都带 AbortController + 超时预算。
+ *
+ * 在这之前 fetch 是不设防的——后端进程 hang 住时（SIGSTOP 停住、连接被
+ * 中间设备黑洞、上游 registry 卡住不返回）请求永远不 settle，页面就永久
+ * 停在 loading：既没有错误提示，也没有重试入口。超时后返回**可区分**的
+ * TIMEOUT code，让「服务在但没回应」和「连不上服务」（NETWORK_ERROR）
+ * 能分别呈现，而不是都塌进同一个网络错误。
  */
-async function request<T>(path: string, init?: RequestInit): Promise<ApiResult<T>> {
+
+/** 本地 SQLite / 内存读写的快接口预算。 */
+const DEFAULT_TIMEOUT_MS = 10_000;
+
+/**
+ * 出网探测、全量扫描、删除类操作的预算。
+ *
+ * 这一档也不设成「无限」：管理界面宁可超时后给用户一个明确的重试入口，
+ * 也不要一个永不结束的转圈。服务端 handler 用的是 r.Context()，前端
+ * abort 会连带取消服务端正在跑的扫描，不会留下无人认领的后台工作。
+ */
+const SLOW_TIMEOUT_MS = 120_000;
+
+interface RequestOptions {
+  /** 覆盖该次请求的超时预算（毫秒），默认 DEFAULT_TIMEOUT_MS。 */
+  timeoutMs?: number;
+}
+
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  options?: RequestOptions
+): Promise<ApiResult<T>> {
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const controller = new AbortController();
+  // 计时器挂到 response.json() 结束为止：响应头回来了但 body 卡住（大清单 /
+  // 半截响应）同样属于 hang，abort 会一并中断 body 读取。
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(path, {
       headers: { 'Content-Type': 'application/json' },
       ...init,
+      // 必须排在 ...init 之后：写在前面会被调用方传入的同名字段覆盖。
+      signal: controller.signal,
     });
     const payload = (await response.json()) as ApiResult<T>;
     if (typeof payload?.success !== 'boolean') {
@@ -43,12 +80,29 @@ async function request<T>(path: string, init?: RequestInit): Promise<ApiResult<T
     }
     return payload;
   } catch (error) {
+    if (controller.signal.aborted) {
+      return {
+        success: false,
+        code: 'TIMEOUT',
+        message: `请求超时（${Math.round(timeoutMs / 1000)} 秒）已中止: ${path}`,
+      };
+    }
     return {
       success: false,
       code: 'NETWORK_ERROR',
       message: `无法连接管理服务: ${(error as Error)?.message ?? error}`,
     };
+  } finally {
+    clearTimeout(timer);
   }
+}
+
+/**
+ * 走 SLOW_TIMEOUT_MS 预算的请求：出网探测 / 全量扫描 / 删除类操作。
+ * 只读写本地 SQLite 与内存的接口直接用 request()。
+ */
+function requestSlow<T>(path: string, init?: RequestInit): Promise<ApiResult<T>> {
+  return request<T>(path, init, { timeoutMs: SLOW_TIMEOUT_MS });
 }
 
 export const fetchConfig = () => request<AppConfig>('/api/config');
@@ -68,36 +122,37 @@ export interface ConfigPatch {
 export const updateConfig = (patch: ConfigPatch) =>
   request<AppConfig>('/api/config', { method: 'PATCH', body: JSON.stringify(patch) });
 
-export const fetchInventory = () => request<Inventory>('/api/inventory');
+export const fetchInventory = () => requestSlow<Inventory>('/api/inventory');
 
-export const refreshInventory = () => request<Inventory>('/api/refresh', { method: 'POST' });
+export const refreshInventory = () =>
+  requestSlow<Inventory>('/api/refresh', { method: 'POST' });
 
 export const probeRegistry = () =>
-  request<{ apiVersion: string; host: string }>('/api/probe', { method: 'POST' });
+  requestSlow<{ apiVersion: string; host: string }>('/api/probe', { method: 'POST' });
 
 export const deleteTag = (repository: string, tag: string) =>
-  request<DeleteTagPayload>(
+  requestSlow<DeleteTagPayload>(
     `/api/tags?repository=${encodeURIComponent(repository)}&tag=${encodeURIComponent(tag)}`,
     { method: 'DELETE' }
   );
 
 // v0.5.0: 删除整个仓库（不可逆；UI 必须二次确认）。
 export const deleteRepository = (repo: string) =>
-  request<DeleteRepositoryPayload>(
+  requestSlow<DeleteRepositoryPayload>(
     `/api/repositories/${encodeURIComponent(repo)}`,
     { method: 'DELETE' }
   );
 
 // v0.5.0: 按 digest 删除 manifest，返回受影响 tag 列表。
 export const deleteManifestByDigest = (repo: string, digest: string) =>
-  request<DeleteManifestPayload>(
+  requestSlow<DeleteManifestPayload>(
     `/api/repositories/${encodeURIComponent(repo)}/manifests/${encodeURIComponent(digest)}`,
     { method: 'DELETE' }
   );
 
 // v0.5.0: 触发一次存储 GC 扫描，返回本次回收的 blob 数与字节数。
 export const runGC = () =>
-  request<GCResult>('/api/gc', { method: 'POST' });
+  requestSlow<GCResult>('/api/gc', { method: 'POST' });
 
 export const createPullJob = (input: PullJobInput) =>
   request<PullJob>('/api/pull/jobs', {
@@ -125,7 +180,7 @@ export const probePullSource = (input: {
   destRepo?: string;
   destTag?: string;
 }) =>
-  request<{
+  requestSlow<{
     /**
      * 服务端预检的真结论。false = 别入队，这一单必然拉不下来：源 registry
      * 不可达，或源 registry 可达但没有这个源镜像 / 源镜像探测失败。
@@ -176,7 +231,12 @@ export const deleteCredential = (id: string) =>
   request<{ id: string }>(`/api/credentials/${encodeURIComponent(id)}`, { method: 'DELETE' });
 
 export const testCredential = (id: string) =>
-  request<{ apiVersion: string; host: string; registryUrl: string; purpose: string }>(
+  requestSlow<{
+    apiVersion: string;
+    host: string;
+    registryUrl: string;
+    purpose: string
+  }>(
     `/api/credentials/${encodeURIComponent(id)}/test`,
     { method: 'POST' }
   );
@@ -208,7 +268,7 @@ export const deleteProxy = (id: string) =>
  * latencyMs 为 0 / 缺失表示没测到延迟（失败，或条目由旧版本探测过）。
  */
 export const probeProxy = (id: string) =>
-  request<{
+  requestSlow<{
     id: string;
     ok: boolean;
     status?: string;
@@ -227,11 +287,11 @@ export const probeProxy = (id: string) =>
  * 前端逐条调用在全部不可达时最坏 N×5 秒。
  */
 export const probeAllProxies = () =>
-  request<ProxyProbeAllResult>('/api/proxies/probe', { method: 'POST' });
+  requestSlow<ProxyProbeAllResult>('/api/proxies/probe', { method: 'POST' });
 
 /** 测试代理连通性；targetUrl 留空则服务端用本 registry 的 /v2/。 */
 export const testProxy = (id: string, targetUrl?: string) =>
-  request<ProxyTestResult>(`/api/proxies/${encodeURIComponent(id)}/test`, {
+  requestSlow<ProxyTestResult>(`/api/proxies/${encodeURIComponent(id)}/test`, {
     method: 'POST',
     body: JSON.stringify({ targetUrl: targetUrl || '' }),
   });
@@ -244,7 +304,7 @@ export const testProxy = (id: string, targetUrl?: string) =>
  * 一半的值；服务端最多读一次已存密码，仍然不写任何东西。
  */
 export const testProxyDraft = (input: ProxyTestInput) =>
-  request<ProxyTestResult>('/api/proxies/test', {
+  requestSlow<ProxyTestResult>('/api/proxies/test', {
     method: 'POST',
     body: JSON.stringify(input),
   });
@@ -279,7 +339,8 @@ export const fetchStatsClients = (days: number) =>
  * 清空全部热度数据（不按保留期），用于口径改正后从头重计。
  * **只清热度**，拉取历史不受影响。
  */
-export const purgeHeat = () => request<HeatPurgeResult>('/api/stats/heat', { method: 'DELETE' });
+export const purgeHeat = () =>
+  requestSlow<HeatPurgeResult>('/api/stats/heat', { method: 'DELETE' });
 
 // ── 热度忽略规则（界面上管理，存 SQLite，立即生效）──
 
