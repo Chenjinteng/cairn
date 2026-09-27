@@ -3,6 +3,7 @@ import {
   Alert,
   App as AntdApp,
   Button,
+  Empty,
   Form,
   Input,
   Modal,
@@ -25,14 +26,13 @@ import type { ColumnsType } from 'antd/es/table';
 import {
   createCredential,
   deleteCredential,
-  fetchConfig,
   listCredentials,
   testCredential,
   updateCredential,
 } from '../api';
 import LoadError from '../components/load-error';
+import { useAppConfig } from '../config-store';
 import type {
-  ApiFailureInfo,
   ApiResult,
   AppConfig,
   Credential,
@@ -53,9 +53,8 @@ interface FormValues {
   note?: string;
 }
 
-export default function CredentialsPage({ config: initialConfig }: Props) {
+export default function CredentialsPage({ config }: Props) {
   const { message, modal } = AntdApp.useApp();
-  const [config, setConfig] = useState<AppConfig | null>(initialConfig);
   const [credentials, setCredentials] = useState<Credential[]>([]);
   const [editing, setEditing] = useState<Credential | null>(null);
   const [form] = Form.useForm<FormValues>();
@@ -63,26 +62,13 @@ export default function CredentialsPage({ config: initialConfig }: Props) {
   const [testingId, setTestingId] = useState<string | null>(null);
   const [error, setError] = useState<ApiResult<unknown> | null>(null);
   /**
-   * v0.5.18（F2）：配置拉不到时**不能**只留一张空表。
+   * v0.5.18（F6）：配置从模块级 store 取，不再自己拉。
    *
    * 「本部署不允许管凭据」和「压根没读到配置」在这一页的呈现是相反的：
    * 前者是正常态（该提示去哪开开关），后者是故障态（必须给重试入口）。
    * 过去两种情况都只渲染空表 + emptyText，用户看不出区别。
    */
-  const [configError, setConfigError] = useState<ApiFailureInfo | null>(null);
-  const [configLoading, setConfigLoading] = useState(false);
-
-  const loadConfig = useCallback(async () => {
-    setConfigLoading(true);
-    const result = await fetchConfig();
-    setConfigLoading(false);
-    if (result.success && result.data) {
-      setConfig(result.data);
-      setConfigError(null);
-    } else {
-      setConfigError(result);
-    }
-  }, []);
+  const { failure: configFailure, loading: configLoading, reload: reloadConfig } = useAppConfig();
 
   const refresh = useCallback(async () => {
     if (!config?.allowCredentials) {
@@ -96,12 +82,6 @@ export default function CredentialsPage({ config: initialConfig }: Props) {
       setError(result);
     }
   }, [config?.allowCredentials]);
-
-  useEffect(() => {
-    if (!config) {
-      void loadConfig();
-    }
-  }, [config, loadConfig]);
 
   useEffect(() => {
     void refresh();
@@ -354,14 +334,21 @@ export default function CredentialsPage({ config: initialConfig }: Props) {
         </div>
       </div>
 
-      {configError ? (
+      {!config ? (
         /* 配置读不到：「是否允许管凭据」都无从判断，空表会把故障伪装成"还没添加"。 */
-        <LoadError
-          title="服务配置加载失败，凭据列表无法确认"
-          failure={configError}
-          retrying={configLoading}
-          onRetry={() => void loadConfig()}
-        />
+        configFailure ? (
+          <LoadError
+            title="服务配置加载失败，凭据列表无法确认"
+            failure={configFailure}
+            retrying={configLoading}
+            onRetry={() => void reloadConfig()}
+          />
+        ) : (
+          /* 还没拿到结果（首屏在途）：比空表诚实，也不与「本部署禁止管凭据」混淆。 */
+          <div className="panel" style={{ padding: 16 }}>
+            <Empty description="正在读取服务配置…" />
+          </div>
+        )
       ) : (
         <>
           {error?.message ? (

@@ -27,6 +27,8 @@ import {
   updateConfig,
 } from '../api';
 import IgnoreRuleModal from '../components/ignore-rule-modal';
+import LoadError from '../components/load-error';
+import { useAppConfig } from '../config-store';
 import type { ApiResult, AppConfig, IgnoreRules, Inventory } from '../types';
 import { formatDateTime } from '../utils';
 
@@ -63,6 +65,11 @@ function ReadonlyValue({ value, mono }: { value: string; mono?: boolean }) {
 
 export default function SettingsPage({ config, onConfigChange, inventory, onInventoryChange }: Props) {
   const { message, modal } = App.useApp();
+  /**
+   * v0.5.18（F6/F7）：读取/缓存/单飞都在 config-store；本页只在 config 缺失时
+   * 用「加载中 / 加载失败」替换整页表单。
+   */
+  const { failure: configFailure, loading: configLoading, reload: reloadConfig } = useAppConfig();
   const [probing, setProbing] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [purging, setPurging] = useState(false);
@@ -103,6 +110,7 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
   const beginEdit = () => setEditing(true);
   const cancelEdit = () => {
     setEditing(false);
+    // v0.5.18（F7）：config 缺失时整页已早退，这里只是防御。
     if (!config) return;
     const m = config.mutable;
     setRegistryUrlDraft(m.registryUrl ?? '');
@@ -119,6 +127,7 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
 
   /** 一次性 PATCH 所有变更字段 — 复用 v0.5.9 之前的 handleSaveBulk diff 逻辑。 */
   const handleSaveAll = async () => {
+    // v0.5.18（F7）：config 缺失时整页已早退，这里只是防御。
     if (!config) return;
     const m = config.mutable;
     const patch: Record<string, string> = {};
@@ -222,6 +231,7 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
 
   // 规则与预览素材各取一次。热度不可用时服务端会回空结构，不用单独降级。
   useEffect(() => {
+    // v0.5.18（F7）：config 缺失时整页已早退，这里只是防御。
     if (!config) return;
     const m = config.mutable;
     setRegistryUrlDraft(m.registryUrl);
@@ -344,36 +354,69 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
     }
   };
 
+  /**
+   * v0.5.18（F7）：页头与提示条提前算好，供早退分支与主分支共用。
+   * 两个按钮（测试连接 / 重新扫描）不依赖 config，所以早退分支里也保留。
+   */
+  const header = (
+    <div className="page-header">
+      <div>
+        <h2 className="page-title">设置</h2>
+        <p className="page-subtitle">当前管理的镜像仓库、连接状态与清单缓存。</p>
+      </div>
+      <div className="page-actions">
+        <Button icon={<ApiOutlined />} loading={probing} onClick={() => void handleProbe()}>
+          测试连接
+        </Button>
+        <Button type="primary" icon={<ReloadOutlined />} loading={refreshing} onClick={() => void handleRefresh()}>
+          重新扫描
+        </Button>
+      </div>
+    </div>
+  );
+
+  /*
+    只在有文案时渲染。成功路径的 message 是空串（扫描结果由顶部 toast 和下方
+    「清单状态」展示），无条件渲染会得到一个没有内容的空绿框。
+  */
+  const noticeAlert = notice?.message ? (
+    <Alert
+      type={notice.success ? 'success' : 'warning'}
+      showIcon
+      closable
+      onClose={() => setNotice(null)}
+      message={notice.message}
+    />
+  ) : null;
+
+  // v0.5.18（F7）：配置没到手就整页只给「加载中 / 加载失败」，
+  // 不再让几十个字段各自读 config?.mutable.* 落成半残界面。
+  if (!config) {
+    return (
+      <div className="page">
+        {header}
+        {noticeAlert}
+        {configFailure ? (
+          <LoadError
+            title="服务配置加载失败，设置项无法显示"
+            failure={configFailure}
+            retrying={configLoading}
+            onRetry={() => void reloadConfig()}
+          />
+        ) : (
+          <div className="panel" style={{ padding: 16 }}>
+            <Empty description="正在读取服务配置…" />
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="page">
-      <div className="page-header">
-        <div>
-          <h2 className="page-title">设置</h2>
-          <p className="page-subtitle">当前管理的镜像仓库、连接状态与清单缓存。</p>
-        </div>
-        <div className="page-actions">
-          <Button icon={<ApiOutlined />} loading={probing} onClick={() => void handleProbe()}>
-            测试连接
-          </Button>
-          <Button type="primary" icon={<ReloadOutlined />} loading={refreshing} onClick={() => void handleRefresh()}>
-            重新扫描
-          </Button>
-        </div>
-      </div>
+      {header}
 
-      {/*
-        只在有文案时渲染。成功路径的 message 是空串（扫描结果由顶部 toast 和下方
-        「清单状态」展示），无条件渲染会得到一个没有内容的空绿框。
-      */}
-      {notice?.message ? (
-        <Alert
-          type={notice.success ? 'success' : 'warning'}
-          showIcon
-          closable
-          onClose={() => setNotice(null)}
-          message={notice.message}
-        />
-      ) : null}
+      {noticeAlert}
 
       <div className="panel" style={{ padding: 16 }}>
         {/* 全局操作条（v0.5.14 起是唯一编辑入口）。点「编辑」-> 整页进入编辑模式(所有字段切换为 input),点「保存所有修改」一次性 PATCH 所有变更,「取消」还原 draft + 退出编辑态。 */}
@@ -390,7 +433,7 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
             </>
           ) : (
             <>
-              <Button type="primary" icon={<EditOutlined />} onClick={beginEdit} disabled={!config}>
+              <Button type="primary" icon={<EditOutlined />} onClick={beginEdit}>
                 编辑
               </Button>
               <span style={{ color: 'var(--color-text-3)', fontSize: 12 }}>

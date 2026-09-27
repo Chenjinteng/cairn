@@ -4,6 +4,7 @@ import {
   App as AntdApp,
   Button,
   Descriptions,
+  Empty,
   Form,
   Input,
   Modal,
@@ -27,7 +28,6 @@ import type { ColumnsType } from 'antd/es/table';
 import {
   createProxy,
   deleteProxy,
-  fetchConfig,
   listProxies,
   probeAllProxies,
   probeProxy,
@@ -36,8 +36,8 @@ import {
   updateProxy,
 } from '../api';
 import LoadError from '../components/load-error';
+import { useAppConfig } from '../config-store';
 import type {
-  ApiFailureInfo,
   ApiResult,
   AppConfig,
   ProxyEntry,
@@ -104,9 +104,8 @@ function ProxyTestAlert({ result }: { result: ProxyTestResult }) {
   );
 }
 
-export default function ProxiesPage({ config: initialConfig }: Props) {
+export default function ProxiesPage({ config }: Props) {
   const { message, modal } = AntdApp.useApp();
-  const [config, setConfig] = useState<AppConfig | null>(initialConfig);
   const [proxies, setProxies] = useState<ProxyEntry[]>([]);
   // v0.5.9: per-row spinner for the '立即探测' button.
   const [probingIds, setProbingIds] = useState<Record<string, boolean>>({});
@@ -118,13 +117,12 @@ export default function ProxiesPage({ config: initialConfig }: Props) {
   const [modalOpen, setModalOpen] = useState(false);
   const [error, setError] = useState<ApiResult<unknown> | null>(null);
   /**
-   * v0.5.18（F2）：配置读不到 ≠ 代理库为空。
+   * v0.5.18（F6）：配置从模块级 store 取，不再自己拉。
    *
    * 「allowProxies=false」是正常态（这一页本来就不该管代理），请求失败则是
    * 故障态 —— 过去两者都只画一张空表，用户看不出该去改开关还是该重试。
    */
-  const [configError, setConfigError] = useState<ApiFailureInfo | null>(null);
-  const [configLoading, setConfigLoading] = useState(false);
+  const { failure: configFailure, loading: configLoading, reload: reloadConfig } = useAppConfig();
 
   /** 连通性测试弹窗状态。 */
   const [testing, setTesting] = useState<ProxyEntry | null>(null);
@@ -142,18 +140,6 @@ export default function ProxiesPage({ config: initialConfig }: Props) {
    */
   const [saving, setSaving] = useState(false);
 
-  const loadConfig = useCallback(async () => {
-    setConfigLoading(true);
-    const result = await fetchConfig();
-    setConfigLoading(false);
-    if (result.success && result.data) {
-      setConfig(result.data);
-      setConfigError(null);
-    } else {
-      setConfigError(result);
-    }
-  }, []);
-
   const refresh = useCallback(async () => {
     if (!config?.allowProxies) {
       return;
@@ -166,12 +152,6 @@ export default function ProxiesPage({ config: initialConfig }: Props) {
       setError(result);
     }
   }, [config?.allowProxies]);
-
-  useEffect(() => {
-    if (!config) {
-      void loadConfig();
-    }
-  }, [config, loadConfig]);
 
   useEffect(() => {
     void refresh();
@@ -633,14 +613,21 @@ export default function ProxiesPage({ config: initialConfig }: Props) {
         </div>
       </div>
 
-      {configError ? (
+      {!config ? (
         /* 配置读不到：「是否允许管代理」都无从判断，空表会把故障伪装成"还没添加"。 */
-        <LoadError
-          title="服务配置加载失败，代理列表无法确认"
-          failure={configError}
-          retrying={configLoading}
-          onRetry={() => void loadConfig()}
-        />
+        configFailure ? (
+          <LoadError
+            title="服务配置加载失败，代理列表无法确认"
+            failure={configFailure}
+            retrying={configLoading}
+            onRetry={() => void reloadConfig()}
+          />
+        ) : (
+          /* 还没拿到结果（首屏在途）：比空表诚实，也不与「本部署禁止管代理」混淆。 */
+          <div className="panel" style={{ padding: 16 }}>
+            <Empty description="正在读取服务配置…" />
+          </div>
+        )
       ) : (
         <>
           {error?.message ? (
