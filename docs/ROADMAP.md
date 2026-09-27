@@ -15,14 +15,14 @@
 | 0.5.15 | 代理可达性：探测改为 ip:端口连通性 + 延迟；「测试连接」搬进编辑弹窗 | 优化（小版本） | **已发布**（2026-09-26） |
 | 0.5.16 | 拉取任务崩溃修复：`platformAllow` 读实时配置 · 队列 panic 兜底 | 缺陷修复 | **已发布**（2026-09-27） |
 | 0.5.17 | 拉取预检误报修复：前端消费探测结论 · 后端校验源镜像存在性 | 缺陷修复 | **已发布**（2026-09-27） |
-| 0.5.18 | 韧性轮：前端不再假死 · 后端不再阻塞 | 缺陷修复 / 优化 | 待开工 |
+| 0.5.18 | 韧性轮 + 遗留收口：前端不再假死 · 后端不再阻塞 · 拉取历史闭环 · 4 项既有缺陷 | 缺陷修复 / 优化（含 1 项新能力，见下） | 待开工 |
 | 0.5.19 | 工程化：最小 CI · `-race` 守门 | 工程化 | 待开工 |
 | 0.6.0 | TLS 证书管理 | 新模块（中版本） | 号位已定，待开工 |
 
 > **号位是预留，不是承诺。** 中途插入更高优先级的 hotfix 时，它占用顺位号位，本表自上而下整体顺延；
 > `0.6.0` 由人指定，不随顺延改号。
 
-## 0.5.18 · 韧性轮
+## 0.5.18 · 韧性轮 + 遗留收口
 
 ### 背景
 
@@ -85,6 +85,31 @@ F3 / F4 / F7 / F8 是同一模式的四个变体：**等一个可能永不完成
 3. `go test -race ./...` 稳定全绿；B5 相关测试连续 20 次运行无 FAIL（B7 已于 0.5.11 收口）。
 4. `DeleteRepository` / `GC` 收到的 ctx 生效（可取消、可被请求超时打断），`lockRepo` 具备超时或排队语义。
 5. 6 条主链路手工回归无退化：镜像列表 · tag 详情 · 复制 `docker pull` · 按 digest 删除 · 拉取任务 · 代理探测与热度统计。
+
+### 并入本轮的历史遗留（2026-09-27 排定）
+
+v0.5.17 交付时记录的「已知遗留」共 5 条，经逐条取证后全部并入本轮，不另开号位。
+表中「现状」均为实测结论（文件行号取自 `0.5.18` 开工前的代码）。
+
+| # | 位置 | 现状（已实测） | 目标 |
+| --- | --- | --- | --- |
+| L1 | `internal/db/db.go:129`（表）/ `:142`（索引）/ `:184` `PullJobRecord`（唯一 INSERT，仅被 `internal/pull/executor.go:319` 调用） | **只写不读**：`internal/db` 全文无任何 `SELECT`；`GET /api/pull/jobs`（`internal/api/handlers_extra.go:286` `ListPullJobs`）只读内存 `Executor.List()`；`Executor` 结构体（`internal/pull/queue.go:180-188`）不含 DB 句柄；`Executor.Delete`（`queue.go:313-331`）只删内存；保留期配置 `PullHistoryRetention`（`executor.go:101` 声明 · `internal/server/server.go:143` 赋值 · `internal/config/config.go:255` 访问器 · 键 `pull.history.retention.days` 默认 90 见 `config.go:78`）**零读取**；前端 `fromHistory`（`web/src/types.ts:196` · `pull-page.tsx:1280-1281`）后端零产出。`queue.go:11-12` 注释仍写着已删除的 env `REGISTRY_PULL_HISTORY_RETENTION_DAYS` | 拉取历史闭环：写进去的能读出来（进程重启后仍在）、能从历史中移除、到期自动清理且留日志；注释里的废弃 env 一并清掉 |
+| L2 | `internal/registry/client.go:347-374` | `IsRetryable`（`:352` 定义）**全仓零调用点**（导出但无人用）；唯一解链它的 `asErr`（`:374`）解链后从不写 `target`，**无条件 `return false`**；真正的重试判定退化成字符串匹配 `:362-368`（`connection refused` / `EOF` / `no such host` / `i/o timeout`） | 二选一并定稿：让 `asErr` 具备真正的 `errors.As` 语义、`IsRetryable` 成为唯一判据；或连同 `IsRetryable` 一起删除死代码。无论选哪条，判定必须有单测覆盖（当前 15 分钟超时下的失败重试完全依赖字符串） |
+| L3 | `internal/api/handlers_extra.go:974-1003` `UpdateProxy` | `:995-997` 无条件覆盖 `Username` / `Password` / `Note`，`:996` 注释自认「empty = clear (anonymous proxy)」；而同类 `UpdateCredential`（`:764`）`:786` 写作 **`if in.Password != ""` 才写**（empty = 保持）。**两个 Update 语义相反**。`toProxyView`（`:883-898`）不回传密码只给 `HasAuth`，故前端 `proxies-page.tsx:244-245` 空密码不发字段（线上不会误清），但 UI 也**无法显式清空**代理密码 | 统一语义：用指针字段区分「未提供 = 保持」与「显式清空 = 清空」，并明确它与 `UpdateCredential` 谁向谁对齐 |
+| L4 | 预检 `handlers_extra.go:381` `Timeout: 5 * time.Second` ↔ 拉取 `internal/pull/executor.go:68` `Timeout: 15 * time.Minute` | 两处超时相差 **180 倍**：预检 5s 绿灯只证明「5s 内可达」，慢源仍会在入队后长时间停在「拉取中」（158 现场实测一次 `library/alpine:3.15` 61.7s 后 `manifest failed` → `cancelled`） | 二选一并落地：入队后的早期失败更快浮出（不再干等到 15 分钟）；或在 UI 明示「慢源可能等待数分钟」的预期 |
+| L5 | `web/src/pages/settings-page.tsx` | 5 处 `TS6133`（未使用声明）：`:6,3 Descriptions` · `:31,1 formatDateTime` · `:64,64 inventory` · `:77,10 savingRegistryUrl` · `:77,29 setSavingRegistryUrl` | 清零，且不新增任何 TS 错误（与 `tsc --noEmit` 基线逐字比对） |
+
+**号位说明（L1 含 1 项新能力）**
+
+L1（拉取历史闭环）按 `AGENTS.md` 属**用户可感知的新能力** → 严格按规则应进中版本；而 `0.6.0` 已由人指定给 TLS 证书管理、不随顺延改号。
+故按人指定把 L1~L5 并入 `0.5.18` 这一交付批次；**发版时需再确认号位**（若坚持按性质判定，L1 应拆到 `0.6.x`，其余 4 条留在 `0.5.18`）。
+
+**追加验收（随 L1~L5）**
+
+1. L1：进程重启后 `GET /api/pull/jobs` 仍能列出历史记录，且条目带 `fromHistory` 标记；「从历史中移除」后 SQLite 中对应行同步消失。
+2. L1：保留期到期清理可查（`pull.history.retention.days`，默认 90），执行时有日志。
+3. L2：`asErr` / `IsRetryable` 的判定有单测覆盖，或对应死代码已删除（二选一，实现时定稿）。
+4. L5：`web/` 下 5 处 `TS6133` 清零，且不新增任何 TS 错误（与基线逐字比对）。
 
 ## 0.5.19 · 工程化
 
