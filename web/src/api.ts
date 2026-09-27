@@ -126,6 +126,14 @@ export const probePullSource = (input: {
   destTag?: string;
 }) =>
   request<{
+    /**
+     * 服务端预检的真结论。false = 别入队，这一单必然拉不下来：源 registry
+     * 不可达，或源 registry 可达但没有这个源镜像 / 源镜像探测失败。
+     * 必须与信封上的 success 区分——success 只代表这次 HTTP 调用成功。
+     */
+    ok: boolean;
+    /** ok=false 的原因，可直接展示给用户。 */
+    error?: string;
     apiVersion: string;
     host: string;
     sourceUrl: string;
@@ -136,7 +144,18 @@ export const probePullSource = (input: {
     tokenRealm?: string;
     /** 令牌申请失败的原因（此时仍算"可达"，只是拿不到 token）。 */
     tokenError?: string;
+    /**
+     * 源镜像的真实路径与结论。服务端按拉取任务同一套限定规则解析
+     * （Docker Hub 上裸 nginx → library/nginx），所以传了 sourceRef 时
+     * 这里就是任务实际会去拉的引用。
+     */
+    sourceRepo?: string;
+    sourceTag?: string;
+    sourceExists?: boolean;
+    sourceDigest?: string;
     dest?: DestStatus;
+    /** 目标 tag 现状探测失败的原因（源可达性不受影响）。 */
+    destError?: string;
   }>('/api/pull/probe', { method: 'POST', body: JSON.stringify(input) });
 
 export const listCredentials = () => request<Credential[]>('/api/credentials');
