@@ -13,7 +13,6 @@ import type { ColumnsType } from 'antd/es/table';
 
 import {
   deleteRepository,
-  fetchConfig,
   fetchInventory,
   fetchRepositoryStats,
   refreshInventory,
@@ -21,8 +20,8 @@ import {
 } from '../api';
 import ImageDetailDrawer from '../components/image-detail-drawer';
 import MetricCard from '../components/metric-card';
+import { useAppConfig } from '../config-store';
 import type {
-  ApiFailureInfo,
   ApiResult,
   AppConfig,
   DeleteTagPayload,
@@ -35,7 +34,6 @@ import { formatBytes, formatDateTime } from '../utils';
 
 interface Props {
   config: AppConfig | null;
-  onConfigChange: (config: AppConfig) => void;
   inventory: Inventory | null;
   onInventoryChange: (inventory: Inventory) => void;
   onGoSettings: () => void;
@@ -50,18 +48,22 @@ const STATS_WINDOW_OPTIONS: { label: string; value: StatsWindow }[] = [
 
 export default function ImagesPage({
   config,
-  onConfigChange,
   inventory,
   onInventoryChange,
   onGoSettings,
 }: Props) {
+  /**
+   * v0.5.18（F8）：loading 语义统一为「本轮清单请求在途」。首屏用 !inventory 做初值
+   * 只为避免配置到手前先闪一帧空表；之后一律由 load() 自己开关，不再掺 inventory 条件。
+   */
   const [loading, setLoading] = useState(!inventory);
   const [error, setError] = useState<ApiResult<unknown> | null>(null);
   /**
-   * v0.5.18（F2）：config 拿不到不影响镜像清单（清单来自 /api/inventory），
+   * v0.5.18（F2/F6）：config 拿不到不影响镜像清单（清单来自 /api/inventory），
    * 但会让「运行 GC」「删除」这些按钮的可用性判断失真，所以单独提示一条。
+   * 读取/缓存/单飞都在 config-store，这里只取失败态与重试入口。
    */
-  const [configError, setConfigError] = useState<ApiFailureInfo | null>(null);
+  const { failure: configFailure, loading: configLoading, reload: reloadConfig } = useAppConfig();
   /**
    * 表格的滚动容器。页面用 .page--fill 撑满视口，滚动只发生在这里 ——
    * 所以搜索框、时间窗、KPI 往下翻表格时不会被顶走。
@@ -91,13 +93,6 @@ export default function ImagesPage({
     async (force: boolean) => {
       setLoading(true);
       setError(null);
-      const configResult = await fetchConfig();
-      if (configResult.success && configResult.data) {
-        onConfigChange(configResult.data);
-        setConfigError(null);
-      } else {
-        setConfigError(configResult);
-      }
       const result = force ? await refreshInventory() : await fetchInventory();
       if (result.success && result.data) {
         onInventoryChange(result.data);
@@ -108,7 +103,7 @@ export default function ImagesPage({
     },
     // api 函数是模块级常量，不需要进依赖。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [onConfigChange, onInventoryChange]
+    [onInventoryChange]
   );
 
   useEffect(() => {
@@ -294,7 +289,7 @@ export default function ImagesPage({
                 void loadHeat(statsDays);
               }
             }}
-            loading={loading && Boolean(inventory)}
+            loading={loading}
           >
             刷新
           </Button>
@@ -351,7 +346,7 @@ export default function ImagesPage({
         />
       ) : null}
 
-      {configError && !config ? (
+      {configFailure && !config ? (
         /* 清单还能用，只有按钮可用性失真 —— 给一条提示 + 重试，不做整页错误态。 */
         <Alert
           type="warning"
@@ -359,14 +354,14 @@ export default function ImagesPage({
           message="服务配置读取失败"
           description={
             <div>
-              <div>{configError.message}</div>
+              <div>{configFailure.message}</div>
               <div style={{ marginTop: 4, color: 'var(--color-text-3)' }}>
-                {`错误分类：${configError.code}`}；忽略规则的开关状态可能显示不准。
+                {`错误分类：${configFailure.code}`}；忽略规则的开关状态可能显示不准。
               </div>
             </div>
           }
           action={
-            <Button size="small" loading={loading} onClick={() => void load(false)}>
+            <Button size="small" loading={configLoading} onClick={() => void reloadConfig()}>
               重试
             </Button>
           }

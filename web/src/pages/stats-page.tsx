@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Alert,
   Button,
@@ -23,8 +23,9 @@ import type { ColumnsType } from 'antd/es/table';
 import IgnoreRuleModal from '../components/ignore-rule-modal';
 import LoadError from '../components/load-error';
 
+import { useAppConfig } from '../config-store';
+
 import {
-  fetchConfig,
   fetchStatsClients,
   fetchStatsEvents,
   fetchStatsSeries,
@@ -34,7 +35,6 @@ import {
 import MetricCard from '../components/metric-card';
 import ContributionHeatmap from '../components/contribution-heatmap';
 import type {
-  ApiFailureInfo,
   ApiResult,
   AppConfig,
   IgnoreRules,
@@ -108,26 +108,14 @@ export default function StatsPage({ config, onConfigChange }: Props) {
   const [error, setError] = useState<ApiResult<unknown> | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   /**
-   * v0.5.18（F2 / F3）：配置读不到时，这一页过去会永远停在「正在读取服务配置…」
-   * —— 既不是加载中，也没有任何出口。现在失败落到 configError，由下面的
+   * v0.5.18（F2 / F3 / F6）：配置读不到时，这一页过去会永远停在「正在读取服务配置…」
+   * —— 既不是加载中，也没有任何出口。现在失败落到 configFailure，由下面的
    * LoadError 呈现并给重试入口。
+   *
+   * 取配置这件事本身挪进了 config-store（F6）：五个页面共用一份缓存与单飞，
+   * 失败不清空已经拿到的配置；自动加载只在 store 里做一次，失败后不自动重试。
    */
-  const [configError, setConfigError] = useState<ApiFailureInfo | null>(null);
-  const [configLoading, setConfigLoading] = useState(false);
-  /** 首屏只自动试一次；失败后不自动重试（重试是用户的动作，见 load-error.tsx）。 */
-  const configAttemptedRef = useRef(false);
-
-  const loadConfig = useCallback(async () => {
-    setConfigLoading(true);
-    const result = await fetchConfig();
-    setConfigLoading(false);
-    if (result.success && result.data) {
-      onConfigChange(result.data);
-      setConfigError(null);
-    } else {
-      setConfigError(result);
-    }
-  }, [onConfigChange]);
+  const { failure: configFailure, loading: configLoading, reload: reloadConfig } = useAppConfig();
   /**
    * 「忽略这个客户端」的弹框。入口在「最近事件」每一行的「客户端」格子上 ——
    * 你要排掉某个客户端时，人正看着那条 UA，不该被赶到设置页去手动粘一遍。
@@ -166,27 +154,18 @@ export default function StatsPage({ config, onConfigChange }: Props) {
     setReloadKey((key) => key + 1);
   };
 
-  // 配置由镜像列表页首屏拉取；直接进热度页（或刷新后停在热度页）时这里补一次。
-  // v0.5.18（F2）：失败不再静默丢进虚空，而是记进 configError 交给 LoadError。
-  // 自动尝试只做一次（ref 兜住）：失败后如果没有这道闸，configError 每次
-  // 都是新对象 → 重渲染 → 再打一次接口，会变成无声的无限重试。
-  useEffect(() => {
-    if (config || configAttemptedRef.current) {
-      return;
-    }
-    configAttemptedRef.current = true;
-    void loadConfig();
-  }, [config, loadConfig]);
-
   useEffect(() => {
     if (!statsEnabled) {
+      // v0.5.18（F4）：未启用也要把 loading 落下来。上一轮（启用中）跑出去的
+      // setLoading(true) 在 cleanup 之后没人收口，页面会永远停在「加载中」。
+      setLoading(false);
       return;
     }
     let cancelled = false;
     setLoading(true);
     setError(null);
     void (async () => {
-      // 四路并发：任何一路失败都不影响其它块渲染，缺哪块提示哪块。
+      // 五路并发：任何一路失败都不影响其它块渲染，缺哪块提示哪块。
       const [summaryResult, topResult, seriesResult, eventsResult, clientsResult] =
         await Promise.all([
           fetchStatsSummary(days),
@@ -221,8 +200,12 @@ export default function StatsPage({ config, onConfigChange }: Props) {
       if (failure) {
         setError(failure);
       }
-      setLoading(false);
-    })();
+    })().finally(() => {
+      // v0.5.18（F4）：收口放 finally；cancelled 早退的旧轮不得关掉新轮的 loading。
+      if (!cancelled) {
+        setLoading(false);
+      }
+    });
     return () => {
       cancelled = true;
     };
@@ -533,13 +516,13 @@ export default function StatsPage({ config, onConfigChange }: Props) {
     return (
       <div className="page">
         {header}
-        {configError ? (
+        {configFailure ? (
           /* v0.5.18（F2）：读配置失败原本会永远停在这一屏，没有任何出口。 */
           <LoadError
             title="服务配置加载失败，热度统计不可用"
-            failure={configError}
+            failure={configFailure}
             retrying={configLoading}
-            onRetry={() => void loadConfig()}
+            onRetry={() => void reloadConfig()}
           />
         ) : (
           <div className="panel" style={{ padding: 16 }}>

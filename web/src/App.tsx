@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { App as AntdApp, Button, Segmented, Tag, Tooltip } from 'antd';
 import {
   ApiOutlined,
@@ -11,13 +11,15 @@ import {
   SunOutlined,
 } from '@ant-design/icons';
 
+import { ensureConfigLoaded, publishConfig, useAppConfig } from './config-store';
+
 import ImagesPage from './pages/images-page';
 import PullPage from './pages/pull-page';
 import CredentialsPage from './pages/credentials-page';
 import ProxiesPage from './pages/proxies-page';
 import SettingsPage from './pages/settings-page';
 import StatsPage from './pages/stats-page';
-import type { AppConfig, Inventory } from './types';
+import type { Inventory } from './types';
 
 type PageKey = 'images' | 'stats' | 'pull' | 'credentials' | 'proxies' | 'settings';
 
@@ -47,8 +49,23 @@ export default function App({
 }) {
   // 两个页面共享同一份清单：切换页面不该重新抓取 registry。
   const [page, setPage] = useState<PageKey>('images');
-  const [config, setConfig] = useState<AppConfig | null>(null);
   const [inventory, setInventory] = useState<Inventory | null>(null);
+  /**
+   * v0.5.18（F6）：服务配置收在模块级 store 里（/api/config 单一入口，带缓存 +
+   * 单飞）。过去 5 个页面各自拉一遍，除了重复请求，还各存一份失败态。
+   *
+   * 这里只负责把它启动起来；页面通过 useAppConfig() 自取所需。
+   */
+  const {
+    config,
+    failure: configFailure,
+    loading: configLoading,
+    reload: reloadConfig,
+  } = useAppConfig();
+
+  useEffect(() => {
+    void ensureConfigLoaded();
+  }, []);
 
   const segmentedOptions = NAV_ITEMS.map((item) => ({
     value: item.key,
@@ -78,9 +95,24 @@ export default function App({
             {/* v0.5.9: 经代理 Tag removed — per-credential proxy in proxy library */}
             {config && !config.allowDelete ? <Tag color="green">只读模式</Tag> : null}
             {config && !config.allowPull ? <Tag color="default">禁止拉取</Tag> : null}
-            <span className="ellipsis mono" title={config?.url}>
-              {config ? config.url : '加载中…'}
-            </span>
+            {config ? (
+              <span className="ellipsis mono" title={config.url}>
+                {config.url}
+              </span>
+            ) : configFailure ? (
+              /* v0.5.18（F6）：顶栏也要有出口 —— 否则读配置失败时各页各报各的，
+                 最上面却一直写「加载中…」，看起来像整站卡住。 */
+              <Button
+                type="link"
+                size="small"
+                loading={configLoading}
+                onClick={() => void reloadConfig()}
+              >
+                配置读取失败，点此重试
+              </Button>
+            ) : (
+              <span className="ellipsis mono">加载中…</span>
+            )}
             {/* 图标显示的是"点了会变成什么"，所以深色下显示太阳。 */}
             <Tooltip title={mode === 'dark' ? '切换到浅色主题' : '切换到深色主题'}>
               <Button
@@ -107,13 +139,12 @@ export default function App({
             {page === 'images' ? (
               <ImagesPage
                 config={config}
-                onConfigChange={setConfig}
                 inventory={inventory}
                 onInventoryChange={setInventory}
                 onGoSettings={() => setPage('settings')}
               />
             ) : page === 'stats' ? (
-              <StatsPage config={config} onConfigChange={setConfig} />
+              <StatsPage config={config} onConfigChange={publishConfig} />
             ) : page === 'pull' ? (
               <PullPage config={config} />
             ) : page === 'credentials' ? (
@@ -123,7 +154,7 @@ export default function App({
             ) : (
               <SettingsPage
                 config={config}
-                onConfigChange={setConfig}
+                onConfigChange={publishConfig}
                 inventory={inventory}
                 onInventoryChange={setInventory}
               />

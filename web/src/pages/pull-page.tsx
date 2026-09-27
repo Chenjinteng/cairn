@@ -33,15 +33,14 @@ import type { ColumnsType } from 'antd/es/table';
 import {
   cancelPullJob,
   createPullJob,
-  fetchConfig,
   listCredentials,
   listProxies,
   listPullJobs,
   probePullSource,
   removePullJob,
 } from '../api';
+import { useAppConfig } from '../config-store';
 import type {
-  ApiFailureInfo,
   ApiResult,
   AppConfig,
   Credential,
@@ -182,18 +181,21 @@ export default function PullPage({ config }: Props) {
   const [error, setError] = useState<ApiResult<unknown> | null>(null);
   const [submitting, setSubmitting] = useState(false);
   /**
-   * v0.5.18（F2）：配置读不到时这一页的**表单与历史任务仍然可用**（只是拿不到
+   * v0.5.18（F2/F6）：配置读不到时这一页的**表单与历史任务仍然可用**（只是拿不到
    * allowPull / host 这些约束），所以不做整页错误态，只加一条提示 + 重试，
-   * 不把还能干的事一起遮掉。
+   * 不把还能干的事一起遮掉。配置本身从模块级 store 取，不再自己拉。
    */
-  const [configError, setConfigError] = useState<ApiFailureInfo | null>(null);
-  const [configLoading, setConfigLoading] = useState(false);
+  const { failure: configFailure, loading: configLoading, reload: reloadConfig } = useAppConfig();
   /** 创建前的预览：表单点击"加入队列"后打开 Modal 确认 + 源预检。 */
   const [pendingInput, setPendingInput] = useState<PullJobInput | null>(null);
   const [credentials, setCredentials] = useState<Credential[]>([]);
   const [proxies, setProxies] = useState<ProxyEntry[]>([]);
-  const liveConfigRef = useRef<AppConfig | null>(config);
-  liveConfigRef.current = config;
+  /**
+   * v0.5.18（F5）：轮询每一跳都新起一个请求，慢的时候会叠起来（registry 侧一慢，
+   * 1.5s 一跳就攒成一串）—— 加一个在途守卫，上一跳没回来就跳过这一跳。
+   * **只守轮询**：手动刷新该等就等，不进这个闸。
+   */
+  const pollingRef = useRef(false);
   /** 本仓库的 host[:port]；作为固定前缀展示，不可编辑。 */
   const host = config?.host ?? '';
   /** 用户是否手动改过「目标镜像名」——改过就不再跟随源镜像，免得把人的输入冲掉。 */
@@ -265,8 +267,10 @@ export default function PullPage({ config }: Props) {
   };
 
   // 凭据库可用时拉一次；不可用不请求（listCredentials 仍能调，但服务端会返 CREDENTIAL_KEY_MISSING）。
+  // v0.5.18（F6）：直接读 prop 并把开关写进 deps —— 配置晚到时 effect 会重跑，
+  // 不再需要那种"绕开 deps 的隐式新鲜度"。
   const refreshCredentials = useCallback(async () => {
-    if (!liveConfigRef.current?.allowCredentials) {
+    if (!config?.allowCredentials) {
       setCredentials([]);
       return;
     }
@@ -276,7 +280,7 @@ export default function PullPage({ config }: Props) {
     } else {
       setCredentials([]);
     }
-  }, []);
+  }, [config?.allowCredentials]);
 
   useEffect(() => {
     void refreshCredentials();
@@ -284,29 +288,17 @@ export default function PullPage({ config }: Props) {
 
   /** 代理库与凭据库同源，可用性一起判断。 */
   const refreshProxies = useCallback(async () => {
-    if (!liveConfigRef.current?.allowProxies) {
+    if (!config?.allowProxies) {
       setProxies([]);
       return;
     }
     const result = await listProxies();
     setProxies(result.success && result.data ? result.data : []);
-  }, []);
+  }, [config?.allowProxies]);
 
   useEffect(() => {
     void refreshProxies();
   }, [refreshProxies]);
-
-  const loadConfig = useCallback(async () => {
-    setConfigLoading(true);
-    const result = await fetchConfig();
-    setConfigLoading(false);
-    if (result.success && result.data) {
-      liveConfigRef.current = result.data;
-      setConfigError(null);
-    } else {
-      setConfigError(result);
-    }
-  }, []);
 
   const refresh = useCallback(async () => {
     const result = await listPullJobs();
@@ -325,17 +317,26 @@ export default function PullPage({ config }: Props) {
   );
   useEffect(() => {
     void refresh();
-    if (!config) {
-      void loadConfig();
-    }
-  }, [refresh, config, loadConfig]);
+  }, [refresh]);
 
   useEffect(() => {
     if (!hasActive) {
       return undefined;
     }
-    const timer = setInterval(() => void refresh(), POLL_INTERVAL_MS);
-    return () => clearInterval(timer);
+    const timer = setInterval(() => {
+      // v0.5.18（F5）：上一跳还没回来就跳过这一跳（守卫见上面的 pollingRef）。
+      if (pollingRef.current) {
+        return;
+      }
+      pollingRef.current = true;
+      void refresh().finally(() => {
+        pollingRef.current = false;
+      });
+    }, POLL_INTERVAL_MS);
+    return () => {
+      clearInterval(timer);
+      pollingRef.current = false;
+    };
   }, [hasActive, refresh]);
 
   const runningJob = useMemo(() => jobs.find((job) => job.status === 'running'), [jobs]);
@@ -576,21 +577,21 @@ export default function PullPage({ config }: Props) {
         />
       ) : null}
 
-      {configError ? (
+      {configFailure ? (
         <Alert
           type="warning"
           showIcon
           message="服务配置读取失败，拉取表单可能不完整"
           description={
             <div>
-              <div>{configError.message}</div>
+              <div>{configFailure.message}</div>
               <div style={{ marginTop: 4, color: 'var(--color-text-3)' }}>
-                {`错误分类：${configError.code}`}
+                {`错误分类：${configFailure.code}`}
               </div>
             </div>
           }
           action={
-            <Button size="small" loading={configLoading} onClick={() => void loadConfig()}>
+            <Button size="small" loading={configLoading} onClick={() => void reloadConfig()}>
               重试
             </Button>
           }
