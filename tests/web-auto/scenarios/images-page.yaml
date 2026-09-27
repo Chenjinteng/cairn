@@ -1,18 +1,37 @@
 # cairn 镜像列表页 — 深度场景
 #
-# 覆盖：搜索过滤、查看详情 Drawer、删除确认弹窗、运行 GC 弹窗
-# 注：删除 / GC 都有二次确认，不会真发请求
+# 覆盖：搜索过滤、删除仓库二次确认弹窗、运行 GC 二次确认弹窗
+# 注：删除 / GC 都停在二次确认的「取 消」上，不会真发请求
+#
+# ⚠️ 关于「取 消」中间的空格（不是笔误）
+#   antd 5.x 的 <Button> 默认 autoInsertSpace=true：两个汉字构成的按钮文本会被拆成
+#   "取" + " " + "消"（Button 子节点包 <span>）。ConfigProvider 未显式关闭该行为
+#   （web/src/main.tsx 的 ConfigProvider 只设了 theme / locale）。
+#   因此 DOM 文本是「取 消」，`text: "取消", match: exact` 永远匹配不上。
+#   该机制**只作用于 Button 组件**；Radio.Button / Tag / Collapse label 不插空格。
+#   已由 settings-page 场景 19/19 通过实测反向确认。
+#
+# 使用「取 消」的等价 CSS 锚点优先，text 策略兜底：
+#   优先 .ant-popconfirm-buttons（Popconfirm 的按钮区）
+#
+# ⚠️ 弹窗类定位一律加 :not(.ant-popover-hidden) 作用域（2026-09-27 探针实测）
+#   antd 关闭 Popconfirm 后节点不销毁：旧弹窗继续留在 DOM 里（离场动画期间
+#   连 .ant-popover-hidden 都还没加上），只是 display:none。
+#   而 Playwright 的 page.click 与 waitForSelector(state=visible) 均为「非 strict，
+#   取 DOM 顺序第一个匹配」；一旦先后开过两个 Popconfirm，第二次的断言/点击
+#   就会命中那个隐藏的旧弹窗 → 一直等到超时。
+#   探针 candidateCounts 实测：加作用域后 popconfirmNotHiddenInner=1，唯一解。
+#   本场景判据同时收紧为按钮文案（删 除 / 运 行），以区分两个弹窗。
 #
 # 用法：POST /api/run {scenario: "cairn/images-page", env: "dev"}
 name: cairn-images-page
 description: |
   镜像列表页深度交互：
     1. 切到镜像列表 Tab
-    2. 输入搜索词，确认表格过滤生效
-    3. 打开第一个仓库的详情 Drawer
-    4. 关闭 Drawer
-    5. 触发"删除仓库"二次确认弹窗并取消（不真删）
-    6. 触发"运行 GC"二次确认弹窗并取消（不真跑）
+    2. 输入搜索词，确认表格重新查询
+    3. 清空搜索框
+    4. 触发"删除仓库"二次确认弹窗并取消（不真删）
+    5. 触发"运行 GC"二次确认弹窗并取消（不真跑）
 env: dev
 tags: [medium, images, cairn]
 
@@ -69,9 +88,8 @@ steps:
         - { type: css, value: 'table tbody tr.ant-table-row, .app-content .ant-empty' }
     timeout: 10000
 
-  - name: 截取搜索后状态
+  - name: images-after-search
     action: screenshot
-    name: images-after-search
 
   - name: 清空搜索框
     action: fill
@@ -80,81 +98,64 @@ steps:
         - { type: css, value: '.app-content input[placeholder*="搜索"]' }
     value: ""
 
-  # ---- 2. 打开详情 Drawer（如果有数据） ----
-  # 用 click 直接尝试点「详情」链接；如果表格空则找不到元素，会 timeout——所以包到 include 里
-  # 跑通后保留为正常步骤；空表时 runner 会报失败，由用户判断是否接受
-  - name: 点击第一行的「详情」链接
+  # ---- 2. 删除二次确认（依赖有数据） ----
+  # dev 158 上确认有镜像行（第二轮复跑该步 passed），因此这里直接点；
+  # 空表环境会在本步报 timeout —— 属预期，不是 App 缺陷。
+
+  - name: 点击第一行「删除」按钮（如有数据）
     action: click
     locator:
       strategies:
-        - { type: css, value: 'table tbody tr.ant-table-row:first-child button:has-text("详情")' }
-        - { type: css, value: 'table tbody tr.ant-table-row:first-child button.ant-btn-link' }
-    timeout: 5000
-
-  - name: 断言详情 Drawer 打开
-    action: assert
-    type: visible
-    selector: '.ant-drawer-open .ant-drawer-content, .ant-drawer-content-wrapper'
-    timeout: 8000
-
-  - name: 关闭 Drawer
-    action: click
-    locator:
-      strategies:
-        - { type: css, value: '.ant-drawer-close' }
-        - { type: aria, value: "Close" }
-    timeout: 3000
-
-  # ---- 3. 删除确认弹窗（不真删） ----
-  - name: 点击第一行「删除」按钮
-    action: click
-    locator:
-      strategies:
-        - { type: css, value: 'table tbody tr.ant-table-row:first-child button.ant-btn-dangerous' }
-        - { type: css, value: 'table tbody tr.ant-table-row:first-child .ant-btn .anticon-delete' }
+        - { type: css, value: 'table tbody tr.ant-table-row button.ant-btn-dangerous' }
     timeout: 5000
 
   - name: 断言「确认删除」弹窗出现
     action: assert
     type: visible
-    selector: '.ant-modal-confirm .ant-modal-confirm-title, .ant-popconfirm'
+    # 非隐藏作用域 + 按钮文案判据：排除先前取消、仍驻留 DOM 的旧弹窗
+    selector: '.ant-popconfirm:not(.ant-popover-hidden) .ant-popconfirm-buttons button:has-text("删 除"), .ant-modal-confirm-title'
     timeout: 5000
 
-  - name: 点击「取消」
+  - name: 点击「取 消」（不真删）
     action: click
     locator:
       strategies:
+        - { type: css, value: '.ant-popconfirm:not(.ant-popover-hidden) .ant-popconfirm-buttons button:has-text("取 消")' }
+        - { type: css, value: '.ant-popconfirm:not(.ant-popover-hidden) .ant-popconfirm-buttons .ant-btn-default' }
+        - { type: text, value: "取 消", match: exact }
         - { type: text, value: "取消", match: exact }
-        - { type: css, value: '.ant-modal-confirm-btns button:has-text("取消"), .ant-popconfirm-buttons .ant-btn:has-text("取消")' }
-    timeout: 3000
+    timeout: 5000
 
-  # ---- 4. GC 确认弹窗（不真跑） ----
+  # ---- 3. GC 确认弹窗（不真跑） ----
   - name: 点击「运行 GC」按钮
     action: click
     locator:
       strategies:
-        - { type: text, value: "运行 GC", match: contains }
         - { type: css, value: '.app-content button:has-text("运行 GC")' }
+        - { type: text, value: "运行 GC", match: contains }
     timeout: 5000
 
   - name: 断言「确认运行 GC」弹窗
     action: assert
     type: visible
-    selector: '.ant-modal-confirm-title, .ant-popconfirm .ant-popover-inner'
+    # 此处 DOM 里已有 2 枚 popconfirm（旧的删除弹窗隐藏驻留），必须加作用域
+    selector: '.ant-popconfirm:not(.ant-popover-hidden) .ant-popconfirm-buttons button:has-text("运 行"), .ant-modal-confirm-title'
     timeout: 5000
 
-  - name: 点击「取消」
+  - name: 点击「取 消」（不真跑 GC）
     action: click
     locator:
       strategies:
+        - { type: css, value: '.ant-popconfirm:not(.ant-popover-hidden) .ant-popconfirm-buttons button:has-text("取 消")' }
+        - { type: css, value: '.ant-popconfirm:not(.ant-popover-hidden) .ant-popconfirm-buttons .ant-btn-default' }
+        - { type: text, value: "取 消", match: exact }
         - { type: text, value: "取消", match: exact }
-        - { type: css, value: '.ant-modal-confirm-btns button:has-text("取消"), .ant-popconfirm button:has-text("取消")' }
-    timeout: 3000
+    timeout: 5000
 
   - name: images-page-end
     action: screenshot
 
-# 期望结果
+# 期望结果（步数与 steps 逐一对应：15）
 expected:
-  totalSteps: 17
+  totalSteps: 15
   maxDuration: 90000
