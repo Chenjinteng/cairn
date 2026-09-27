@@ -60,9 +60,22 @@ error:"registry: GET /v2/: Get \"https://registry-1.docker.io/v2/\": context dea
   - E. `sourceRef:"library/alpine"`(不带 tag)→ `ok:true` 且不带源侧字段;经查前端表单校验(`pull-page.tsx`)强制要求 tag,**该输入在 UI 上不可达**,故后端不加 tag 兜底。
 - **门禁**:`gofmt -l internal/ cmd/` 无输出;`go vet ./internal/...` 退出码 0;`go build ./...` 退出码 0;`go build -tags webui -o /tmp/cairn-gate2 ./cmd/server` 退出码 0;`go test -count=1 ./internal/...` 全部 `ok`;前端 `tsc --noEmit -p web/tsconfig.json` 与 `c2a1319` 基线**逐条 diff 一致(10 条 → 10 条,零新增)**,其中 5 条在 `settings-page.tsx`、3 条在 `api.ts`(行号 :86/:93/:100,均为未改动的既有 `TS2304`)、2 条在 `images-page.tsx`,本轮改动的 `api.ts` / `pull-page.tsx` 新增行零错误。
 
+### 升级后复测(158 生产)
+
+- **复测环境**:生产机 `registry.example.com`,容器 `cairn:0.5.17`,镜像 ID `a7804a9ee3e3`(≠ 0.5.16 的 `0d3278b8ff77`),`/api/config` 返回 `"version":"0.5.17"`、`allowPull:true`。以下每条都是**升级后**真实请求的返回:
+- A. **无代理 + `library/alpine:3.16`**(用户报障场景)→ `ok:false`、`elapsedMs:5001`、`context deadline exceeded`——与升级前一致:源不可达就必须拦下,不再放行入队。
+- B. **走代理 + 真实 tag `library/alpine:3.16`** → `ok:true`、`sourceExists:true`、`sourceDigest:sha256:452e7292acee…`、`elapsedMs:2944`(升级前同一请求只回 `ok`/`apiVersion`/`host`/`elapsedMs`,**没有任何存在性/digest 信息**)。
+- C. **走代理 + 不存在的 tag `library/alpine:9.99-nope`** → **`ok:false`**、`sourceExists:false`、文案「源 registry 可达,但源镜像 library/alpine:9.99-nope 不存在——请检查镜像名与 tag 拼写」——**升级前同一请求返回 `ok:true`**,即本轮修复的直接目标在生产上已被翻转。
+- D. **目标仓库不存在该 tag**(`destTag=3.16`)→ `dest` 段真实注入 `sourceRepo`/`sourceTag`/`sourceExists`/`sourceDigest`,并给出 `exists:false`、`willReplace:false`——升级前这些字段在响应里**根本不存在**(前端 `DestStatus` 声明了却永远收不到)。
+- E. **目标仓库已有该 tag**(`destTag=3.19`)→ `exists:true`、`existingDigest:sha256:6baf43584bcb…`、`identical:false`、`willReplace:true`。
+- F. **前端产物已换新**:`/assets/index-DFhQ-Nyq.js`(1202788 字节,md5 `e760eff581aab7e1537e0009e9f02f09`)取代升级前的 `/assets/index-ZcXUjQDW.js`(1202498 字节,md5 `a9167c8273719b506d5b6089ae5afc71`);新文案 `源端预检未通过`、`正在校验源镜像是否可拉取` 在新 bundle 中各命中 **1 处**(旧 bundle 命中 0 处)。
+- G. **端到端正向**:走代理 `POST /api/pull/jobs`(`library/alpine:3.16`,dest 写回同仓库同 tag)→ 任务 **succeeded**,19.5s、2 个 blob / 2809308 字节,`finalDigest:sha256:452e7292acee…` 与预检返回的 `sourceDigest` **完全一致**——预检说能拉,真拉下来就是同一个 digest。
+- **上线三道闸**:① 源码闸 `HEAD=a16c667` 且 `internal/version/version.go` 为 `0.5.17`;② 镜像闸新 tag 镜像 ID `a7804a9ee3e3` ≠ 上一版 `0d3278b8ff77`(排除「缓存假构建」);③ 内容闸 `docker run --network none` 启动日志 `"msg":"config loaded","version":"0.5.17"`(scratch 镜像无 shell,只能靠启动日志验版本)。
+- **回滚路径**:升级前 `.env` 已备份为 `.env.bak.pre0517`(内容即 0.5.16 的 `IMAGE=cairn:0.5.16`),回滚即 `cp -a .env.bak.pre0517 .env && docker compose up -d`。
+
 ### 兼容性
 
-- **API 的 `ok` 字段语义未变**,只是**终于被让消费**;响应新增 `sourceRepo`/`sourceTag`/`sourceExists`/`sourceDigest` 与更丰富的 `dest`(均为新增字段,旧客户端忽略即可)。
+- **API 的 `ok` 字段语义未变**,只是**终于被前端真正消费**;响应新增 `sourceRepo`/`sourceTag`/`sourceExists`/`sourceDigest` 与更丰富的 `dest`(均为新增字段,旧客户端忽略即可)。
 - **磁盘格式与配置未变**:纯请求处理路径的改动,无迁移、无配置项增减。
 - ⚠️ **升级后首次预检变慢属正常**:源镜像级校验比裸 `/v2/` 多一次 manifest 往返(本地实测总计约 2.1~2.7s,受网络影响);`elapsedMs` 已覆盖全程。
 - ⚠️ **升级后「预检通过」的门槛实质变高**:以前「源 registry 通」就算过,现在要「这个镜像取得回来」才算过。若某条链路此前一直靠假绿通过,升级后会被挡住——这是本轮的目标行为。
