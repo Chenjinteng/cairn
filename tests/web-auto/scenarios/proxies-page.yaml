@@ -1,14 +1,18 @@
 # cairn 代理管理页 — 深度场景
-# 覆盖：列表渲染、批量探测按钮、新增 Modal、表单字段填写、单独探测（如有代理）
+#
+# 覆盖：列表渲染、新增 Modal、表单字段填写、批量探测
+# 批量探测会真发探测请求（仅 probe，不改数据）
+#
+# 用法：POST /api/run {scenario: "cairn/proxies-page", env: "dev"}
 name: cairn-proxies-page
 description: |
   代理管理页深度交互：
-   1. 切到代理管理 Tab
-   2. 打开「新增代理」Modal
-   3. 在 Modal 填写表单验证可输入
-   4. 关闭 Modal
-   5. 点击「批量探测」（触发 batch probe — 会真发请求，但 Go 后端会失败并展示失败态，不改数据）
-env: "*"
+    1. 切到代理管理 Tab
+    2. 打开「新增代理」Modal
+    3. 在 Modal 填写表单验证可输入
+    4. 关闭 Modal
+    5. 点击「批量探测」（如有代理行）
+env: dev
 tags: [medium, proxies, cairn]
 
 target:
@@ -17,6 +21,8 @@ target:
 artifacts:
   screenshot: on-failure
   trace: on-failure
+  video: never
+  har: never
 
 steps:
   - name: 打开首页
@@ -28,29 +34,21 @@ steps:
     action: waitFor
     locator:
       strategies:
-        - type: css
-          value: ".app-shell"
+        - { type: css, value: ".app-shell" }
     timeout: 15000
 
-  - name: 点击「代理管理」
+  - name: 点击「代理管理」Tab
     action: click
     locator:
       strategies:
-        - type: text
-          value: "代理管理"
-          match: exact
-        - type: css
-          value: '.app-nav .ant-segmented-item:has-text("代理管理")'
+        - { type: text, value: "代理管理", match: exact }
+        - { type: css, value: '.app-nav .ant-segmented-item:has-text("代理管理")' }
+    timeout: 8000
 
   - name: 等待代理列表渲染
     action: assert
     type: visible
-    locator:
-      strategies:
-        - type: css
-          value: '.app-content button:has-text("新增")'
-        - type: css
-          value: '.app-content .ant-table, .app-content .ant-empty'
+    selector: '.app-content button:has-text("新增"), .app-content .ant-table, .app-content .ant-empty'
     timeout: 15000
 
   # ---- 1. 新增 Modal ----
@@ -58,29 +56,24 @@ steps:
     action: click
     locator:
       strategies:
-        - type: text
-          value: "新增代理"
-          match: exact
-        - type: css
-          value: '.app-content button:has-text("新增代理"), .app-content button:has-text("新增")'
+        - { type: text, value: "新增代理", match: exact }
+        - { type: css, value: '.app-content button:has-text("新增代理")' }
+        - { type: css, value: '.app-content button:has-text("新增")' }
     timeout: 5000
 
   - name: 断言新增 Modal 标题
     action: assert
     type: text
-    locator:
-      strategies:
-        - type: css
-          value: '.ant-modal-title'
-    equals: "新增代理"
+    selector: '.ant-modal-title'
+    value: "新增代理"
+    match: exact
     timeout: 5000
 
   - name: 填写「名称」字段
     action: fill
     locator:
       strategies:
-        - type: css
-          value: '.ant-modal-body .ant-form-item:has-text("名称") input'
+        - { type: css, value: '.ant-modal-body .ant-form-item:has-text("名称") input' }
     value: "smoke-test-proxy"
     timeout: 3000
 
@@ -88,63 +81,49 @@ steps:
     action: fill
     locator:
       strategies:
-        - type: css
-          value: '.ant-modal-body .ant-form-item:has-text("代理地址") input'
-        - type: css
-          value: '.ant-modal-body .ant-form-item:has-text("地址") input'
+        - { type: css, value: '.ant-modal-body .ant-form-item:has-text("代理地址") input' }
+        - { type: css, value: '.ant-modal-body .ant-form-item:has-text("地址") input' }
     value: "http://proxy.example.com:8080"
     timeout: 3000
+
+  - name: 截取 Modal 已填
+    action: screenshot
+    name: proxies-modal-filled
 
   - name: 关闭 Modal
     action: click
     locator:
       strategies:
-        - type: css
-          value: '.ant-modal-footer button:has-text("取消"), .ant-modal-close'
-        - type: text
-          value: "取消"
-          match: exact
+        - { type: css, value: '.ant-modal-footer button:has-text("取消")' }
+        - { type: text, value: "取消", match: exact }
     timeout: 3000
 
   - name: 断言 Modal 关闭
     action: assert
     type: hidden
-    locator:
-      strategies:
-        - type: css
-          value: '.ant-modal-content'
+    selector: '.ant-modal-content'
     timeout: 5000
 
-  # ---- 2. 批量探测（可选） ----
-  - name: 点击「批量探测」（如有代理行）
+  # ---- 2. 批量探测 ----
+  - name: 点击「批量探测」
     action: click
     locator:
       strategies:
-        - type: text
-          value: "批量探测"
-          match: exact
-        - type: css
-          value: '.app-content button:has-text("批量探测")'
+        - { type: text, value: "批量探测", match: exact }
+        - { type: css, value: '.app-content button:has-text("批量探测")' }
     timeout: 5000
-    optional: true
 
   - name: 等探测结果反馈
     action: waitFor
     locator:
       strategies:
-        - type: css
-          value: '.ant-message, .ant-notification, .app-content .ant-tag'
+        - { type: css, value: '.ant-message, .ant-notification, .app-content .ant-tag' }
     timeout: 15000
-    optional: true
 
-  - name: 截取最终状态
+  - name: proxies-page-end
     action: screenshot
-    name: proxies-page-end
 
-cleanup:
-  - action: screenshot
-    name: proxies-page-cleanup
-
+# 期望结果
 expected:
-  totalSteps: 14
+  totalSteps: 13
   maxDuration: 90000

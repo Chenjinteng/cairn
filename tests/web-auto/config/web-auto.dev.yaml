@@ -1,17 +1,30 @@
 # web-auto dev 环境配置
-# dev 跑在 developer 本机/容器，cairn 通常监听 :80 或 :8088
+#
+# 拓扑说明：
+#   runner @ proxy.example.com:8080（容器 web-auto-runner:0.1.0）
+#   runner 内部能直连 registry.example.com:80 上的 cairn（已实测 ~3ms）
+#   Mac → 158:80 不通，所以 baseUrl 必须从 runner 视角填 158
+#
+# 已被 runner 容器 bind mount 到 /config/web-auto.dev.yaml（ro）
 env: dev
 
-baseUrl: "http://localhost:80"      # docker-compose 起容器默认 :80
+baseUrl: "http://registry.example.com:80"
 
-# 凭据占位——cairn **没有登录**，这里仅作 schema 占位
-# runner 会忽略未使用的 users 字段
-users: {}
+# cairn **没有登录鉴权**—— users 字段仅为兼容 schema 保留
+users:
+  admin:
+    username: admin
+    password: admin
+  readonly:
+    username: readonly
+    password: readonly
 
 timeouts:
-  default: 30000
-  navigation: 15000
-  locator: 8000
+  default: 60000
+  navigation: 30000
+  locator: 10000
+  # /api/inventory 第一次慢操作（最大 120s），smoke 场景要拉满
+  inventory: 120000
 
 artifacts:
   defaultPolicy:
@@ -21,4 +34,4 @@ artifacts:
     har: never
   retention:
     keepLast: 20
-    archiveToGitLfs: false          # dev 不入 LFS，省事
+    archiveToGitLfs: true

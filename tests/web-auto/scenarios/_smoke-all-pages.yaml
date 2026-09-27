@@ -1,16 +1,24 @@
 # cairn 全 6 Tab 顺序冒烟
-# 覆盖：打开首页 → 切到 6 个 Tab → 每个 Tab 渲染成功 → 留底截图
-# 用途：每次发版后第一轮 smoke；耗时 ~30~60s
+#
+# 覆盖：打开根路径 → 顺序切到 6 个 Tab → 每个 Tab 渲染验证 → 留底截图
+# 用途：每次发版后第一轮冒烟；预计 ~30~60s
+#
+# 拓扑说明：
+#   runner @ proxy.example.com:8080 (Mac 直连 OK)
+#   runner 内部 → registry.example.com:80 (cairn 当前 dev 部署点)
+#   Mac → 158:80 不通，但 runner → 158:80 通（3ms），所以 baseUrl 用 158 是对的
+#
+# 用法：curl POST proxy.example.com:8080/api/run {scenario: "cairn/_smoke-all-pages", env: "dev"}
 name: cairn-smoke-all-pages
 description: |
   顺序点击 cairn 顶部 Segmented 导航的 6 个 Tab：
   镜像列表 / 镜像热度 / 镜像拉取 / 凭据管理 / 代理管理 / 设置。
   每个 Tab 验证：
-   1. 切换后 .app-content 出现非空内容（不是白屏 / "加载中…" 残留）
-   2. 没有 antd Alert.error 出现
-   3. 没有 unhandled error
+    1. 切换后 .app-content 出现非空内容（不是白屏 / "加载中…" 残留）
+    2. 没有 antd Alert.error 出现
+    3. 没有 unhandled error
   无副作用，不写任何状态。
-env: "*"
+env: dev
 tags: [smoke, regression, cairn]
 
 target:
@@ -29,210 +37,126 @@ steps:
     url: "{{baseUrl}}/"
     timeout: 30000
 
-  - name: 等待主框架
+  - name: 等待主框架（app-shell 挂载）
     action: waitFor
     locator:
       strategies:
-        - type: css
-          value: ".app-shell .app-header"
-        - type: css
-          value: ".app-shell"
+        - { type: css, value: ".app-shell" }
     timeout: 15000
 
   # ---- 1. 镜像列表 ----
-  - name: 点击「镜像列表」
+  - name: 点击「镜像列表」Tab
     action: click
     locator:
       strategies:
-        - type: text
-          value: "镜像列表"
-          match: exact
-        - type: aria
-          value: "镜像列表"
-        - type: css
-          value: '.app-nav .ant-segmented-item:has-text("镜像列表")'
+        - { type: text, value: "镜像列表", match: exact }
+        - { type: css, value: '.app-nav .ant-segmented-item:has-text("镜像列表")' }
     timeout: 8000
 
   - name: 断言镜像列表页渲染
     action: assert
     type: visible
-    locator:
-      strategies:
-        - type: css
-          value: '.app-content input[placeholder*="搜索"]'
-        - type: css
-          value: '.app-content button:has-text("刷新")'
-        - type: css
-          value: '.app-content .ant-table, .app-content .ant-empty'
+    selector: '.app-content input[placeholder*="搜索"], .app-content .ant-table, .app-content .ant-empty'
     timeout: 10000
 
-  - name: 截取镜像列表
+  - name: smoke-01-images
     action: screenshot
-    name: smoke-01-images
 
   # ---- 2. 镜像热度 ----
-  - name: 点击「镜像热度」
+  - name: 点击「镜像热度」Tab
     action: click
     locator:
       strategies:
-        - type: text
-          value: "镜像热度"
-          match: exact
-        - type: aria
-          value: "镜像热度"
-        - type: css
-          value: '.app-nav .ant-segmented-item:has-text("镜像热度")'
+        - { type: text, value: "镜像热度", match: exact }
+        - { type: css, value: '.app-nav .ant-segmented-item:has-text("镜像热度")' }
 
-  - name: 断言热度页渲染
+  - name: 断言热度页渲染（子 Tab / heatmap / 卡片）
     action: assert
     type: visible
-    locator:
-      strategies:
-        - type: css
-          value: '.app-content .ant-segmented'                    # 子 Tab
-        - type: css
-          value: '.app-content canvas, .app-content svg'           # heatmap 渲染
-        - type: css
-          value: '.app-content .ant-card, .app-content .ant-empty'
+    selector: '.app-content .ant-segmented, .app-content svg, .app-content canvas, .app-content .ant-card, .app-content .ant-empty'
     timeout: 10000
 
-  - name: 截取镜像热度
+  - name: smoke-02-stats
     action: screenshot
-    name: smoke-02-stats
 
   # ---- 3. 镜像拉取 ----
-  - name: 点击「镜像拉取」
+  - name: 点击「镜像拉取」Tab
     action: click
     locator:
       strategies:
-        - type: text
-          value: "镜像拉取"
-          match: exact
-        - type: aria
-          value: "镜像拉取"
-        - type: css
-          value: '.app-nav .ant-segmented-item:has-text("镜像拉取")'
+        - { type: text, value: "镜像拉取", match: exact }
+        - { type: css, value: '.app-nav .ant-segmented-item:has-text("镜像拉取")' }
 
-  - name: 断言拉取页渲染
+  - name: 断言拉取页渲染（表单 / 输入框 / 按钮）
     action: assert
     type: visible
-    locator:
-      strategies:
-        - type: css
-          value: '.app-content input[placeholder*="源"], .app-content input[placeholder*="镜像"]'
-        - type: css
-          value: '.app-content button:has-text("提交"), .app-content button:has-text("拉取")'
-        - type: css
-          value: '.app-content .ant-form'
+    selector: '.app-content .ant-form, .app-content input[placeholder*="源"], .app-content input[placeholder*="镜像"], .app-content button:has-text("提交"), .app-content button:has-text("拉取")'
     timeout: 10000
 
-  - name: 截取镜像拉取
+  - name: smoke-03-pull
     action: screenshot
-    name: smoke-03-pull
 
   # ---- 4. 凭据管理 ----
-  - name: 点击「凭据管理」
+  - name: 点击「凭据管理」Tab
     action: click
     locator:
       strategies:
-        - type: text
-          value: "凭据管理"
-          match: exact
-        - type: aria
-          value: "凭据管理"
-        - type: css
-          value: '.app-nav .ant-segmented-item:has-text("凭据管理")'
+        - { type: text, value: "凭据管理", match: exact }
+        - { type: css, value: '.app-nav .ant-segmented-item:has-text("凭据管理")' }
 
-  - name: 断言凭据页渲染
+  - name: 断言凭据页渲染（新增按钮 / 表格 / 空态）
     action: assert
     type: visible
-    locator:
-      strategies:
-        - type: css
-          value: '.app-content button:has-text("新增")'
-        - type: css
-          value: '.app-content .ant-table, .app-content .ant-empty'
+    selector: '.app-content button:has-text("新增"), .app-content .ant-table, .app-content .ant-empty'
     timeout: 10000
 
-  - name: 截取凭据管理
+  - name: smoke-04-credentials
     action: screenshot
-    name: smoke-04-credentials
 
   # ---- 5. 代理管理 ----
-  - name: 点击「代理管理」
+  - name: 点击「代理管理」Tab
     action: click
     locator:
       strategies:
-        - type: text
-          value: "代理管理"
-          match: exact
-        - type: aria
-          value: "代理管理"
-        - type: css
-          value: '.app-nav .ant-segmented-item:has-text("代理管理")'
+        - { type: text, value: "代理管理", match: exact }
+        - { type: css, value: '.app-nav .ant-segmented-item:has-text("代理管理")' }
 
-  - name: 断言代理页渲染
+  - name: 断言代理页渲染（新增 / 批量探测 / 表格 / 空态）
     action: assert
     type: visible
-    locator:
-      strategies:
-        - type: css
-          value: '.app-content button:has-text("新增")'
-        - type: css
-          value: '.app-content button:has-text("批量探测"), .app-content button:has-text("探测")'
-        - type: css
-          value: '.app-content .ant-table, .app-content .ant-empty'
+    selector: '.app-content button:has-text("新增"), .app-content button:has-text("批量探测"), .app-content .ant-table, .app-content .ant-empty'
     timeout: 10000
 
-  - name: 截取代理管理
+  - name: smoke-05-proxies
     action: screenshot
-    name: smoke-05-proxies
 
   # ---- 6. 设置 ----
-  - name: 点击「设置」
+  - name: 点击「设置」Tab
     action: click
     locator:
       strategies:
-        - type: text
-          value: "设置"
-          match: exact
-        - type: aria
-          value: "设置"
-        - type: css
-          value: '.app-nav .ant-segmented-item:has-text("设置")'
+        - { type: text, value: "设置", match: exact }
+        - { type: css, value: '.app-nav .ant-segmented-item:has-text("设置")' }
 
-  - name: 断言设置页渲染
+  - name: 断言设置页渲染（表单 / 卡片）
     action: assert
     type: visible
-    locator:
-      strategies:
-        - type: css
-          value: '.app-content button:has-text("刷新")'
-        - type: css
-          value: '.app-content button:has-text("探测")'
-        - type: css
-          value: '.app-content .ant-form, .app-content .ant-card'
+    selector: '.app-content .ant-form, .app-content .ant-card, .app-content button:has-text("刷新"), .app-content button:has-text("探测")'
     timeout: 10000
 
-  - name: 断言版本号徽章可见
+  - name: 断言版本号徽章可见（v0.5.X）
     action: assert
     type: visible
-    locator:
-      strategies:
-        - type: css
-          value: '.app-brand .app-brand-version'
-        - type: css
-          value: 'span[title^="当前运行版本"]'
+    selector: '.app-brand .app-brand-version, span[title^="当前运行版本"]'
     timeout: 5000
 
-  - name: 截取设置
+  - name: smoke-06-settings
     action: screenshot
-    name: smoke-06-settings
 
-cleanup:
-  - action: screenshot
-    name: smoke-end
+  - name: smoke-end
+    action: screenshot
 
+# 期望结果（用于诊断对照）
 expected:
-  totalSteps: 20
+  totalSteps: 22
   maxDuration: 90000

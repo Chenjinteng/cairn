@@ -1,8 +1,30 @@
 # web-auto 测试场景（cairn）
 
-本目录是 [web-auto](https://内部) agent 的测试定义，与 cairn 主二进制同 repo 维护。
+本目录是 [`web-auto`](../../../../../.minimax/agents/web-auto/agent.md) agent 的测试定义，与 cairn 主二进制同 repo 维护。
 **触发方**：[`web-auto`](../../../../../.minimax/agents/web-auto/agent.md) agent 通过 `web-auto:run-test` skill
-调用独立部署的 test-runner（默认 `http://10.11.27.159:8080`，**MVP 阶段主机未到位**——见末尾"前置条件"）。
+调用独立部署的 test-runner。
+
+## 拓扑（2026-09-27 更新）
+
+```
+Mac (开发机)                              UAT 内网
+   │                                          │
+   │ curl POST /api/run                       │
+   ▼                                          │
+┌─────────────────────┐    内网    ┌──────────────────────┐
+│ test-runner         │───────────▶│ cairn               │
+│ proxy.example.com:8080    │  ~3ms     │ registry.example.com:80      │
+│ 容器 web-auto-runner│            │ 版本 v0.5.17         │
+│ :0.1.0              │            │                      │
+└─────────────────────┘            └──────────────────────┘
+```
+
+- **Mac → 158:80 不通**（防火墙限制），所以浏览器测试必须在 53 上的 runner 里跑
+- **runner → 158:80 通**（3ms 实测），baseUrl 直接写 `http://registry.example.com:80`
+- runner 容器 mount：
+  - `/opt/web-auto-runner/web-auto/tests` → `/scenarios` (ro)
+  - `/opt/web-auto-runner/web-auto/config` → `/config` (ro)
+  - `/opt/web-auto-runner/web-auto/test-runner/artifacts` → `/artifacts` (rw)
 
 ## 文件结构
 
@@ -10,92 +32,119 @@
 tests/web-auto/
 ├── README.md                       ← 你正在看
 ├── config/
-│   ├── web-auto.dev.yaml           ← dev 环境 baseUrl + 凭据占位
-│   └── web-auto.uat.yaml           ← UAT 环境 baseUrl + 凭据占位
+│   ├── web-auto.dev.yaml           ← dev env 配置（已 mount 进 runner）
+│   └── web-auto.uat.yaml           ← UAT env 配置
 └── scenarios/
-    ├── _smoke-all-pages.yaml       ← 6 个 Tab 全部点一遍，无副作用
-    ├── images-page.yaml            ← 镜像列表：搜索 + 详情 Drawer + 删除确认
-    ├── stats-page.yaml             ← 镜像热度：heatmap + 卡片 + 忽略规则
-    ├── pull-page.yaml              ← 镜像拉取：表单填写 + 取消任务
-    ├── credentials-page.yaml       ← 凭据管理：列表 + 新增/编辑/删除/测试
-    ├── proxies-page.yaml           ← 代理管理：列表 + 新增/编辑/探测/测试
-    └── settings-page.yaml          ← 设置：刷新 + 探测 + 编辑 + 保存
+    ├── _smoke-all-pages.yaml       ← 6 Tab 顺序点一遍，无副作用
+    ├── images-page.yaml            ← 镜像列表：搜索 + 详情 Drawer + 删除/GC 确认
+    ├── stats-page.yaml             ← 镜像热度：heatmap + 子 Tab + 忽略规则
+    ├── pull-page.yaml              ← 镜像拉取：表单 + 平台下拉 + 任务列表
+    ├── credentials-page.yaml       ← 凭据管理：列表 + 新增 Modal + 测试连接
+    ├── proxies-page.yaml           ← 代理管理：列表 + 新增 Modal + 批量探测
+    └── settings-page.yaml          ← 设置：版本徽章 + 探测/刷新 + 编辑态 + 忽略规则
 ```
 
-## cairn 6 个 Tab（必须真实存在的导航项）
+## cairn 6 个 Tab
 
-| 顺序 | key        | 中文标签     | 主要组件 / 入口                                |
-|----|------------|----------|------------------------------------------|
-| 1  | `images`     | 镜像列表   | 搜索框、表格、详情 Drawer、删除、GC                |
+| 顺序 | key          | 中文标签     | 主要组件 / 入口                              |
+|----|--------------|----------|----------------------------------------|
+| 1  | `images`     | 镜像列表   | 搜索框、表格、详情 Drawer、删除、GC          |
 | 2  | `stats`      | 镜像热度   | 贡献图、Summary、Top、事件 ring、忽略规则 Modal |
-| 3  | `pull`       | 镜像拉取   | 拉取表单（源/目标/平台/凭据/代理）、任务列表、取消按钮      |
-| 4  | `credentials`| 凭据管理   | 凭据列表、测试连接、新增/编辑/删除 Modal                |
-| 5  | `proxies`    | 代理管理   | 代理列表、批量探测、新增/编辑/单独探测 Modal              |
-| 6  | `settings`   | 设置      | 视图切换、保存全部、忽略规则编辑、版本号 + 探测/刷新按钮   |
+| 3  | `pull`       | 镜像拉取   | 拉取表单（源/目标/平台/凭据/代理）、任务列表       |
+| 4  | `credentials`| 凭据管理   | 凭据列表、测试连接、新增/编辑/删除 Modal          |
+| 5  | `proxies`    | 代理管理   | 代理列表、批量探测、新增/编辑/探测 Modal          |
+| 6  | `settings`   | 设置      | 版本号、刷新/探测、编辑/保存、忽略规则 Modal     |
 
 > cairn **没有登录页、没有多实例、没有 RBAC**——所有 Tab 默认直接可达。
 
-## 在 UAT 端跑起来
+## 在 Mac 跑场景（推荐路径）
 
-### 0. 前置：test-runner 必须先起来
-
-> ⚠️ **MVP 阶段 10.11.27.159 这台 test-runner 主机还没部署。**
-> 在它跑起来之前，`web-auto:run-test` 会一直 `status: errored`，错误信息是 "runner unreachable"。
-> 这不是 YAML 的问题，是基础设施问题。部署指引见 `test-runner/README.md` §3。
-
-确认 runner 在跑：
+### 1. 直跑 runner API
 
 ```bash
-ssh user@10.11.27.159 'curl -sS http://localhost:8080/api/health'
-# 期望返回 {"status":"ok",...}；或者通过 web-auto skill 的 health.sh
-bash /Users/snow/.minimax/agents/web-auto/skills/run-test/scripts/health.sh
+# 冒烟（6 Tab）
+curl -sS -X POST -H 'Content-Type: application/json' \
+  -d '{"scenario":"cairn/_smoke-all-pages","env":"dev","timeout":120000,"artifacts":{"screenshot":"always","trace":"on-failure","video":"never","har":"never"}}' \
+  http://proxy.example.com:8080/api/run | python3 -m json.tool
 ```
 
-### 1. UAT 端拉代码
+### 2. 通过 web-auto skill
 
 ```bash
-ssh root@registry.example.com
-cd /root/cairn   # 或 cairn 实际部署目录
-git fetch origin main
-git reset --hard origin/main      # 必须有——否则会拿到旧版 web-auto YAML
-# 验证：grep -rn '镜像列表' tests/web-auto/scenarios/ | head -3
-```
-
-### 2. 跑单 Tab 场景
-
-通过 web-auto agent（推荐——它会汇总报告 + 诊断失败）：
-
-```
-"用 web-auto agent 跑一下 cairn 的 credentials-page，env=uat"
-```
-
-或直接调 runner：
-
-```bash
-WEB_AUTO_RUNNER_URL=http://10.11.27.159:8080 \
+WEB_AUTO_RUNNER_URL=http://proxy.example.com:8080 \
 bash /Users/snow/.minimax/agents/web-auto/skills/run-test/scripts/run.sh \
-  cairn/credentials-page uat 90000
+  cairn/_smoke-all-pages dev 120000
 ```
 
-### 3. 跑全量冒烟（先打头阵）
+### 3. 通过 web-auto agent
+
+在 chat 里说"用 web-auto agent 跑一下 cairn 的 credentials-page，env=dev"。
+
+## 在 Mac 同步新场景到 runner 容器
+
+`/opt/web-auto-runner/web-auto/tests` 是 bind mount 的源目录，**ro** 没法往容器内写；要更新场景：
 
 ```bash
-# 全 6 Tab 顺序点一遍，~30~60 秒
-WEB_AUTO_RUNNER_URL=http://10.11.27.159:8080 \
-bash /Users/snow/.minimax/agents/web-auto/skills/run-test/scripts/run.sh \
-  cairn/_smoke-all-pages uat 120000
+# 53 上没 SSH，文件传输走 dufs（53:80 的 nginx 反代到 10002 dufs 容器）
+# Mac 端上传新场景
+curl -X PUT --data-binary @tests/web-auto/scenarios/_smoke-all-pages.yaml \
+  http://proxy.example.com:80/data/dufsStorage/web-auto/scenarios/_smoke-all-pages.yaml
+
+# 53 上 tar 展开到 bind mount 源目录
+ssh root@proxy.example.com 'cd /data/dufsStorage/web-auto && tar czf - scenarios/ | tar xzf - -C /opt/web-auto-runner/web-auto/'
+
+# 验证：runner API 重新列场景
+curl -sS http://proxy.example.com:8080/api/scenarios | python3 -m json.tool
 ```
+
+> ⚠️ runner 是以非 root UID 501:games 跑（按 mount 属主推断），文件落到
+> `/opt/web-auto-runner/web-auto/tests/cairn/` 后注意权限保持 0644。
 
 ## 编写约定
 
-- **locator 必须给 ≥2 个 strategy**——失败时 web-auto 会按顺序尝试，找到第一个能命中的并提示"把成功策略提到第一位"。
-- **断言用 `type: text` + 中文文案**——cairn 是中文 UI，断言英文容易误报。
-- **不写副作用测试**——删除凭据、运行 GC、删除 manifest 这种"会改状态的"用 `scenario: xxx` 单独拆场景，由用户在 UAT 主动触发。
-- **超时上限 300000ms**——超过会被 runner 截断；本仓库场景统一 90s ~ 120s。
-- **截图策略默认 `on-failure`**——只有冒烟场景开 `always`（要留底）。
+按 2026-09-27 实测跑通的 5 个老场景（`cairn/login` / `cairn/registries-list` + `_adhoc/*`）的风格：
+
+- **`assert` 用 flat 语法**：
+  ```yaml
+  - name: 断言 H1
+    action: assert
+    type: text              # text | visible | hidden | value
+    selector: 'h1'
+    value: "镜像列表"
+    match: contains         # exact | contains（仅 text 类型生效）
+  ```
+- **`click` / `fill` / `waitFor` 用 strategies 列表**：
+  ```yaml
+  - name: 点击「镜像列表」
+    action: click
+    locator:
+      strategies:
+        - { type: text, value: "镜像列表", match: exact }
+        - { type: css, value: '.app-nav .ant-segmented-item:has-text("镜像列表")' }
+    timeout: 8000
+  ```
+- **表格行必须 `table tbody tr.ant-table-row`**——antd 内部有 `<tr class="ant-table-measure-row" aria-hidden>` 测量行干扰
+- **`include` 复用其他场景**：`{ action: include, scenario: <相对路径>, until: <step-name> }`
+- **副作用一律二次确认 + 取消**：删除、GC、拉取提交都包 confirm 弹窗 → 取消
+- **超时上限 300000ms**（runner 上限）；本仓库场景统一 90s ~ 120s
 
 ## 已知坑
 
-- cairn 启动时 `app-header` 会先显示「加载中…」直到 `/api/config` 返回，scenario 的 `waitFor app-shell` 必须给 15s 预算。
-- 反代后部署时 `/api/inventory` 第一次会带慢操作（120s 超时），scenario 默认 timeout = 120000ms。
-- v0.5.17 之前 settings 页可能没有"保存全部"按钮，本目录 scenario 是按当前 main 分支写的；UI 大改后请同步。
+- cairn 启动时 `app-header` 会先显示「加载中…」直到 `/api/config` 返回；`waitFor .app-shell` 给 15s 预算
+- `/api/inventory` 第一次是慢操作（120s 超时），smoke 场景 timeout 设 120000ms
+- **H1 / 中文文案断言**：当前 App.tsx 顶部没有真 `<h1>`，H1 在 .app-content 各页面里也可能不存；老场景 `cairn/login.yaml` 的兜底是 `'h1, .page-title, [data-testid="page-title"]'`。如果断言 H1 失败，去掉或改 selector
+- antd `Segmented` 内部文案是 span（`.ant-segmented-item-label`），`text: "镜像列表"` 能命中；`text: "镜像列表"` + `match: exact` 更稳
+- runner 当前是 MVP，`optional:` 字段、`press_key` 等 action **未实现**——场景里不要用
+- 版本 v0.5.17 dev 没有登录鉴权，所以 **不要**写登录用例——直接打开 `/` 就是 dashboard
+
+## 实测状态（2026-09-27）
+
+| 场景 | 用时 | 状态 |
+|------|-----|------|
+| `cairn/login`           | 3.1s | ✅ passed |
+| `cairn/registries-list` | 4.0s | ✅ passed |
+| `_adhoc/screenshot`      | 2.6s | ✅ passed |
+| `_adhoc/click`           | —    | 已加载待实测 |
+| `_adhoc/fill`            | —    | 已加载待实测 |
+
+本目录的 7 个新场景刚按真实 runner 语法重写完成，待 Mac → 53 → 158 链路跑通后实测。

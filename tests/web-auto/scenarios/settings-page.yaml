@@ -1,17 +1,20 @@
 # cairn 设置页 — 深度场景
-# 覆盖：版本号徽章、探测按钮、刷新按钮、进入编辑态、取消编辑、保存全部
-# 覆盖：忽略规则 Modal 触发与关闭
+#
+# 覆盖：版本号徽章、探测按钮、刷新按钮、编辑态、忽略规则 Modal
+# 探测 / 刷新会真发 /api/probe 和 /api/refresh（仅 GET 类操作）
+#
+# 用法：POST /api/run {scenario: "cairn/settings-page", env: "dev"}
 name: cairn-settings-page
 description: |
   设置页深度交互：
-   1. 切到设置 Tab
-   2. 验证顶部版本号徽章可见（v0.5.X）
-   3. 点击「探测」按钮（验证 /api/probe 请求）
-   4. 点击「刷新」按钮（验证 /api/refresh 请求）
-   5. 进入编辑态，确认表单字段可改
-   6. 取消编辑（不改任何值）
-   7. 打开「忽略规则」Modal
-env: "*"
+    1. 切到设置 Tab
+    2. 验证顶部版本号徽章可见（v0.5.X）
+    3. 点击「探测」按钮（验证 /api/probe 请求）
+    4. 点击「刷新」按钮（验证 /api/refresh 请求）
+    5. 进入编辑态，确认表单字段可改
+    6. 取消编辑（不改任何值）
+    7. 打开「忽略规则」Modal
+env: dev
 tags: [medium, settings, cairn]
 
 target:
@@ -20,6 +23,8 @@ target:
 artifacts:
   screenshot: on-failure
   trace: on-failure
+  video: never
+  har: never
 
 steps:
   - name: 打开首页
@@ -31,39 +36,28 @@ steps:
     action: waitFor
     locator:
       strategies:
-        - type: css
-          value: ".app-shell"
+        - { type: css, value: ".app-shell" }
     timeout: 15000
 
-  - name: 点击「设置」
+  - name: 点击「设置」Tab
     action: click
     locator:
       strategies:
-        - type: text
-          value: "设置"
-          match: exact
-        - type: css
-          value: '.app-nav .ant-segmented-item:has-text("设置")'
+        - { type: text, value: "设置", match: exact }
+        - { type: css, value: '.app-nav .ant-segmented-item:has-text("设置")' }
+    timeout: 8000
 
   - name: 等待设置页渲染
     action: assert
     type: visible
-    locator:
-      strategies:
-        - type: css
-          value: '.app-content .ant-form, .app-content .ant-card'
+    selector: '.app-content .ant-form, .app-content .ant-card, .app-content button:has-text("刷新")'
     timeout: 15000
 
   # ---- 1. 顶部版本号徽章 ----
-  - name: 断言版本号徽章「v」前缀可见
+  - name: 断言版本号徽章可见（v 前缀）
     action: assert
     type: visible
-    locator:
-      strategies:
-        - type: css
-          value: '.app-brand .app-brand-version'
-        - type: css
-          value: 'span[title^="当前运行版本"]'
+    selector: '.app-brand .app-brand-version, span[title^="当前运行版本"]'
     timeout: 5000
 
   # ---- 2. 探测按钮 ----
@@ -71,19 +65,15 @@ steps:
     action: click
     locator:
       strategies:
-        - type: text
-          value: "探测"
-          match: exact
-        - type: css
-          value: '.app-content button:has-text("探测")'
+        - { type: text, value: "探测", match: exact }
+        - { type: css, value: '.app-content button:has-text("探测")' }
     timeout: 5000
 
-  - name: 等探测响应（message notification）
+  - name: 等探测响应（message notification 或 alert）
     action: waitFor
     locator:
       strategies:
-        - type: css
-          value: '.ant-message, .ant-notification, .app-content .ant-alert'
+        - { type: css, value: '.ant-message, .ant-notification, .app-content .ant-alert' }
     timeout: 15000
 
   # ---- 3. 刷新按钮 ----
@@ -91,19 +81,15 @@ steps:
     action: click
     locator:
       strategies:
-        - type: text
-          value: "刷新"
-          match: exact
-        - type: css
-          value: '.app-content button:has-text("刷新")'
+        - { type: text, value: "刷新", match: exact }
+        - { type: css, value: '.app-content button:has-text("刷新")' }
     timeout: 5000
 
   - name: 等刷新完成（loading 结束）
     action: waitFor
     locator:
       strategies:
-        - type: css
-          value: '.app-content button:has-text("刷新"):not(.ant-btn-loading)'
+        - { type: css, value: '.app-content button:has-text("刷新"):not(.ant-btn-loading)' }
     timeout: 60000
 
   # ---- 4. 进入编辑态 ----
@@ -111,82 +97,51 @@ steps:
     action: click
     locator:
       strategies:
-        - type: text
-          value: "编辑"
-          match: exact
-        - type: css
-          value: '.app-content button:has-text("编辑")'
+        - { type: text, value: "编辑", match: exact }
+        - { type: css, value: '.app-content button:has-text("编辑")' }
     timeout: 5000
-    optional: true
 
   - name: 断言保存/取消按钮出现
     action: assert
     type: visible
-    locator:
-      strategies:
-        - type: css
-          value: '.app-content button:has-text("保存"), .app-content button:has-text("保存全部")'
-        - type: css
-          value: '.app-content button:has-text("取消")'
+    selector: '.app-content button:has-text("保存"), .app-content button:has-text("保存全部"), .app-content button:has-text("取消")'
     timeout: 5000
-    optional: true
 
   - name: 取消编辑
     action: click
     locator:
       strategies:
-        - type: css
-          value: '.app-content button:has-text("取消")'
-        - type: text
-          value: "取消"
-          match: exact
+        - { type: css, value: '.app-content button:has-text("取消")' }
+        - { type: text, value: "取消", match: exact }
     timeout: 3000
-    optional: true
 
   # ---- 5. 忽略规则 Modal ----
   - name: 点击「忽略规则」入口
     action: click
     locator:
       strategies:
-        - type: text
-          value: "忽略规则"
-          match: contains
-        - type: css
-          value: '.app-content button:has-text("忽略规则")'
+        - { type: text, value: "忽略规则", match: contains }
+        - { type: css, value: '.app-content button:has-text("忽略规则")' }
     timeout: 5000
-    optional: true
 
   - name: 断言忽略规则 Modal 出现
     action: assert
     type: visible
-    locator:
-      strategies:
-        - type: css
-          value: '.ant-modal-content'
-        - type: css
-          value: '.ant-modal-title:has-text("忽略")'
+    selector: '.ant-modal-content, .ant-modal-title:has-text("忽略")'
     timeout: 5000
-    optional: true
 
   - name: 关闭 Modal
     action: click
     locator:
       strategies:
-        - type: css
-          value: '.ant-modal-close'
-        - type: aria
-          value: "Close"
+        - { type: css, value: '.ant-modal-close' }
+        - { type: aria, value: "Close" }
     timeout: 3000
-    optional: true
 
-  - name: 截取最终状态
+  - name: settings-page-end
     action: screenshot
-    name: settings-page-end
 
-cleanup:
-  - action: screenshot
-    name: settings-page-cleanup
-
+# 期望结果
 expected:
-  totalSteps: 18
+  totalSteps: 17
   maxDuration: 120000
