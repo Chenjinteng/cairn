@@ -20,7 +20,7 @@
 3. **库式后端**：HTTP handler 通过 `cmd/server` 装配，业务逻辑在 `internal/` 下，方便后续挂到别人的服务里
 4. **可观测性**：自带 `/healthz` `/readyz`
 
-## 当前状态:v0.5.17(2026-09-27) —— **拉取预检不再假绿:源镜像取不回来就不放行入队**
+## 当前状态:v0.5.18(2026-09-28) —— **修复 GC 成功提示的 `undefined / NaN`,并补上 GC 含义的 ? 提示**
 
 ✅ 已实现（v0.1 – v0.4）：
 
@@ -72,7 +72,7 @@
 4. `README.md` 里所有 `docker build/tag/push` 示例
 5. `CHANGELOG.md` 新增一节
 
-当前版本：`0.5.17`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
+当前版本：`0.5.18`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
 
 ## 项目结构
 

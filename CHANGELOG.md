@@ -6,6 +6,41 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.18] - 2026-09-28
+
+本轮主题：**修掉「GC 成功提示显示 `undefined` / `NaN`」并补 GC 含义入口**。`gc-real` 验收场景在 0.5.17 验收报告里以 **P2**（中）记录：toast 出现 ≠ toast 内容正确，断言形状才暴露该解码缺陷。
+
+### 修复
+
+- **`web/src/pages/images-page.tsx` 的 `runGC` 调用解码层**：旧代码直接读 `r.removedBlobs` / `r.freedBytes`，但 `runGC()` 真实返回类型是 `Promise<ApiResult<GCResult>>`（见 `web/src/api.ts:238-239` 与 `web/src/types.ts:170-174`），`r` 是信封 `{ success, code, message, data: { removedBlobs, freedBytes } }`。前端没解 `data`，于是 `r.removedBlobs === undefined`、`undefined / 1024 / 1024 === NaN`，toast 显示成「清理 undefined 个孤儿 blob，回收 NaN MiB」——这是 0.5.17 报告里 **P2** 的根因链。后端契约是对的（`internal/api/handlers_extra.go:653-668` 经 `writeJSON` 信封正确写出 `{ removedBlobs, freedBytes }`），属纯前端解码层缺陷。
+- **同一回调里补 `r.success` 分支**：`runGC()` 在 API 失败时**不抛异常**（返回 `{ success: false, ... }`），旧代码 `try/catch` 永远落 `message.success` 分支，失败也被报成「清理 undefined 个」。现改为先 `if (!r.success) message.error(...); return;`，再读 `r.data`，再判空态。
+
+### 新增
+
+- **「运行 GC」按钮右侧加 `?` 提示图标**（`QuestionCircleOutlined` + `Tooltip`）。Tooltip 文案：`GC = Garbage Collection。扫描并清理孤儿 blob（被废弃的上传会话、被解除引用的层），释放磁盘空间。注意：删除 manifest 只是解除引用，真正的磁盘空间要 GC 才回收。` —— 直答用户的「运行 GC 是什么意思」，并把 README/AGENTS.md 里那条「删 manifest 只解除引用、要 GC 才回收磁盘空间」的协议事实前置到点击之前。
+- **空态分支文案**：GC 跑完若 `removedBlobs === 0`，toast 显示 `GC 完成：没有需要清理的孤儿 blob`，替代旧分支里的「清理 0 个孤儿 blob」（也是合理显示，但 GC 语义下「没有需要清理」更直观，且便于 UI 区分「没东西可清」与「清掉了 0 个但仍跑了一次」）。
+
+### 影响范围（升级须知）
+
+- **受影响版本为 v0.5.0 ~ v0.5.17**：`runGC` 声明于 v0.5.0（`web/src/api.ts` 的同源注释）；自那以后该解码一直有缺陷，但因为 0.5.17 之前的 `gc-real` 场景只断言 toast 出现（不断言内容形状），QA 层面表现为**假绿**。**升级到 0.5.18 后这条出口才真正可用**，用户才能看到 GC 到底清掉了几 MB / 几个 blob。
+- **空态分支的语义变化**：升级前 GC 跑空也会出现「清理 0 个孤儿 blob，回收 0.00 MiB」，字面是真但读起来像「白跑了一次」；升级后空态显示「没有需要清理的孤儿 blob」，跑空 ≠ 跑失败。
+- **API 契约未变**：后端响应字段 `removedBlobs` / `freedBytes` 不变；只是前端终于正确解码。磁盘格式、配置项、`/api/gc` 路由与权限均未触动。
+- **未触动项（明确划线）**：
+  - **`POST /api/gc` 未纳入 `allowDelete` 门控**（0.5.17 报告的 R-open-2）：本轮只修前端解码 + UX，安全门控是另一条独立修复路径，留待后续。
+  - **GC 的可视进度**仍是「loading toast + 一次性结果 toast」，没有中间进度。
+
+### 验证
+
+- **类型层**：`web/tsconfig.json` 下 `tsc --noEmit` 仍为 **8 条错误**，全部为基线既有（`api.ts` 三处未 import 类型 `DeleteRepositoryPayload` / `DeleteManifestPayload` / `GCResult`；`settings-page.tsx` 五处未使用声明），本轮 `images-page.tsx` 改动相关行**零新增**。
+- **场景断言回归**：`tests/web-auto/scenarios/gc-real.yaml` v2（断言 toast **内容形状**为 `GC 完成：清理 [0-9]+ 个孤儿 blob，回收 [0-9]+\.[0-9]{2} MiB`）将在 0.5.18 上由红转绿；v1（仅断言 toast 出现）保持绿。空态分支需新场景覆盖（`removedBlobs === 0`），本轮未补，留待后继。
+- **生产现场复测待办**：158 容器 `cairn:0.5.17` 升级到 `cairn:0.5.18` 后，跑 `POST /api/gc` → toast 文本不再含 `undefined` / `NaN`；当注册表已无孤儿 blob 时，toast 显式显示「没有需要清理的孤儿 blob」。
+
+### 轮次与号位
+
+- 本轮占 **0.5.18**：缺陷修复 + 既有功能优化（`?` 提示 + 空态文案均属既有 UI 的补强），按 `AGENTS.md` 判定为**小版本（第 3 位）+1**。按 `docs/ROADMAP.md` 的号位顺延规则，整表自 0.5.18 之后顺延一格（0.5.19 / 0.5.20 / ...）；`0.6.0`（TLS 证书管理）由人指定，不随顺延改号。
+
+---
+
 ## [0.5.17] - 2026-09-27
 
 本轮主题:**修掉「没配代理也显示源可达、入队后却卡在拉取中」**。用户报的现象是「增加队列时检测没过关,结果加进去又一直卡着」,但**后端一直是如实报告的**——把同一份探测请求直接打到 158 上,它回的清清楚楚是失败:
