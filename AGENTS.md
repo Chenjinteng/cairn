@@ -136,3 +136,39 @@ cairn 刻意**不做**：
 2. 如果是 boot 期读取,为什么改 UI 不够?(必须重启才生效的 vs. 不重启可以热生效的)
 
 走不通这两个问题的不接受。
+
+## 暂未启动的工作(讨论过但等触发需求才做)
+
+避免下次重复讨论同样的事,这里集中记录「讨论过、明确决定**暂不**实现」的项。
+
+### HTTPS / TLS 证书管理 → 标记为 v0.6.0
+
+**决策时间**:2026-09-28。
+**决策内容**:**暂不启动**,等触发需求再做。触发条件(任一):
+- 用户明确要求「外网必须 https」「合规要求 TLS」「Let's Encrypt 自动续期」等
+- 现有 http 部署遇到安全问题必须加密
+- 团队里有人想用 https + 自签 CA 配 docker daemon(`/etc/docker/certs.d/` 信任)走非 insecure-registry 路径
+
+**为什么不做**(前置讨论):
+
+1. **跟「监听端口」是同一架构问题**(v0.5.34 走过一遍):
+   - 容器内 cairn listener 协议(`cfg.HTTPSCert` + `tls.Config`):cairn 进程层 —— 能改
+   - **客户端 URL scheme**(浏览器 / docker daemon 用 http 还是 https):客户端视角 —— **cairn 管不到**
+   - 即使 UI 加「https toggle」让用户切协议,改的是 cairn 进程层(用什么 listener);浏览器 / docker daemon 怎么访问是客户端的事,cairn 不动它就跟没改一样(「能保存但不生效」反模式)
+
+2. **证书管理是独立子系统**:
+   - 证书来源:自签?CA 签?Let's Encrypt?
+   - 证书存放:容器内路径 / 宿主机 bind mount / secret store
+   - 过期轮转:cairn 需不需要 SIGHUP 热 reload?还是改证书必须重建容器?
+   - 客户端信任链:docker daemon 怎么信任自签 CA?(`/etc/docker/certs.d/<host>:<port>/ca.crt` 是精细做法,`daemon.json` 的 `tlscacert` 是全局做法)
+
+3. **自签证书可以让 docker daemon 不走 insecure-registry**:
+   - 路径 A(推荐,精细):`mkdir -p /etc/docker/certs.d/<host>:<port> && cp ca.crt /etc/docker/certs.d/<host>:<port>/ca.crt && systemctl reload docker`
+   - 路径 B(全局):`daemon.json` 加 `"tlscacert": "/etc/docker/ca.crt"` + `"tlsverify": true` + restart docker
+   - 两种都**不需要** `insecure-registries`
+
+**v0.6.0 启动时要重新评估的事项**:
+- 是否引入 nginx / traefik 反代层(简化证书管理)?跟「单进程单二进制」原则冲突,需要权衡
+- 是否支持 ACME(自动签发 / 续期)?增加依赖,需要权衡
+- 证书格式(PEM / PKCS12 / JKS)?cairn 倾向 PEM(Go 标准库原生)
+- 自签 CA 工具链(cairn 自带生成工具?还是依赖 openssl)?
