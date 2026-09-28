@@ -28,7 +28,7 @@
 3. **库式后端**：HTTP handler 通过 `cmd/server` 装配，业务逻辑在 `internal/` 下，方便后续挂到别人的服务里
 4. **可观测性**：自带 `/healthz` `/readyz`
 
-## 当前状态:v0.5.22(2026-09-28) —— **整体配色与 Cairn Logo 对齐:主色换 Teal 600,info 同色**
+## 当前状态:v0.5.23(2026-09-28) —— **部署命名对齐 Cairn:env 变量 `GO_HUB_ENV` → `CAIRN_ENV`,image/container/service 一律 cairn**
 
 ✅ 已实现（v0.1 – v0.4）：
 
@@ -75,12 +75,12 @@
 版本号 5 处同步（漏一处就漂移）：
 
 1. `internal/version/version.go` 的 `Version` 常量
-2. `docker-compose.yml` 的 `image: ${IMAGE:-cairn:X.Y.Z}`
+2. `docker-compose.yml` 的 `image: ${IMAGE:-cairn:X.Y.Z}`（v0.5.23 起;`cairn:` 是历史前辍）
 3. `.env.example` 的 `IMAGE=`
 4. `README.md` 里所有 `docker build/tag/push` 示例
 5. `CHANGELOG.md` 新增一节
 
-当前版本：`0.5.22`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
+当前版本：`0.5.23`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
 
 ## 项目结构
 
@@ -197,8 +197,8 @@ docker compose up -d --build
 | `REGISTRY_CREDENTIAL_KEY` | `.env` | **必填**。凭据库 AES-256-GCM 主密钥，**丢失则已存凭据永久不可恢复** |
 | `HOST_DATA_DIR` | `.env` | 宿主机数据目录，默认 `/data/cairn` |
 | `HOST_PORT` | `.env` | 宿主机映射端口，默认 8787 |
-| `GO_HUB_ENV` | `.env` | `prod`（默认）/ `dev`，只影响日志详细度 |
-| `IMAGE` | `.env` | 运行镜像 tag |
+| `CAIRN_ENV` | `.env` | `prod`（默认）/ `dev`，只影响日志详细度。v0.5.23 起;曾用名 `GO_HUB_ENV` |
+| `IMAGE` | `.env` | 运行镜像 tag,默认 `cairn:0.5.23`(v0.5.23 起) |
 | `NODE_IMAGE` / `NPM_REGISTRY` / `GOPROXY` / `BUILD_HTTP_PROXY` / `BUILD_HTTPS_PROXY` / `BUILD_NO_PROXY` | `.env` | 只在 `docker compose build` 时生效，运行时不读 |
 | registry 地址 / 代理 / 认证 / 展示名 | 设置页 | 落 SQLite，热生效 |
 | 能力开关（`allow.delete` / `allow.pull` / `allow.registry_events`） | 设置页 | 落 SQLite，热生效 |

@@ -121,7 +121,8 @@ func slogLogger(cfg *config.Config) func(http.Handler) http.Handler {
 	}
 }
 
-// corsDev is the relaxed CORS policy used only when GO_HUB_ENV=dev.
+// corsDev is the relaxed CORS policy used only when CAIRN_ENV=dev.
+// (v0.5.23: GO_HUB_ENV → CAIRN_ENV)
 // Production deploys are expected to terminate CORS at a reverse proxy.
 func corsDev(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

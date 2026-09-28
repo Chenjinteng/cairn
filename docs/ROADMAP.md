@@ -123,6 +123,7 @@ L1（拉取历史闭环）按 `AGENTS.md` 属**用户可感知的新能力** →
 2. **`.env` 里大部分变量早就不生效**：v0.5.9 起业务配置单源于 SQLite（`settings` 表，设置页写），
    `internal/config.Load()` 只读 `PORT` / `REGISTRY_CREDENTIAL_KEY` / `GO_HUB_ENV`；而 compose 仍把 14 个业务
    `REGISTRY_*` 注进容器。`.env.example` 与 158 线上 `.env` 因此长期分叉，运维改了半天以为生效、其实以页面为准。
+   (v0.5.23 把 `GO_HUB_ENV` 改名为 `CAIRN_ENV`,compose `environment` 仍是 **2 项**,只是 env 名字变了。)
 3. **数据用两个 named volume**（`cairn-data` → `/app/data`、`cairn-registry` → `/app/registry`），
    数据藏在 docker 卷目录里，备份 / 迁盘要绕 `docker info` 的 `DockerRootDir` 内部路径。
 
@@ -133,7 +134,7 @@ L1（拉取历史闭环）按 `AGENTS.md` 属**用户可感知的新能力** →
 | 容器内数据目录 | env `REGISTRY_CREDENTIALS_DIR`（默认 `/app/data`） | 常量 `config.DataDirPath` = `/app/data` |
 | 容器内 registry 内容 | env `REGISTRY_STORAGE_DIR`（compose 默认 `/app/registry`） | 常量 `config.StorageDirPath` = `/app/data/registry` |
 | 宿主机数据目录 | 无（named volume） | `HOST_DATA_DIR`（默认 `/data/cairn`），单条 bind mount |
-| compose `environment` | 16 项（14 个业务 `REGISTRY_*` + 密钥 + 两个目录） | **2 项**（`REGISTRY_CREDENTIAL_KEY` + `GO_HUB_ENV`） |
+| compose `environment` | 16 项（14 个业务 `REGISTRY_*` + 密钥 + 两个目录） | **2 项**（`REGISTRY_CREDENTIAL_KEY` + `CAIRN_ENV`；曾用名 `GO_HUB_ENV`，v0.5.23 改名） |
 | 顶层 `volumes:` | `cairn-data` / `cairn-registry` | **删除**（全部 bind mount） |
 | `.env` 生效项 | 与 158 线上分叉 | 运行时 5 项 + 构建期 6 项（见 `.env.example`） |
 
