@@ -288,6 +288,15 @@ func (h *Handler) manifestHead(w http.ResponseWriter, r *http.Request) {
 		h.Events.IngestLocal(*ev)
 	}
 	w.WriteHeader(http.StatusOK)
+	// v0.5.32: 显式 flush,避免 HEAD 在 keep-alive 下僵持。OCI spec 要求 HEAD
+	// manifest 响应里有 Content-Length(让 client 知道真实大小),Go net/http 看到
+	// 有 Content-Length 就会等那么多字节的 body 才 finish response —— 我们
+	// 没 body 要写,server 不主动 flush 就一直等,client 看到 Content-Length:2620
+	// 也等 2620 bytes,双方僵持到 client 超时 → docker daemon 报 "unauthorized"
+	// (它把所有类型的失败都简化成 unauthorized)。Flush 强制 server 标记响应结束。
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 func (h *Handler) manifestPut(w http.ResponseWriter, r *http.Request) {
@@ -376,6 +385,10 @@ func (h *Handler) blobHead(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", size))
 	w.Header().Set("Docker-Content-Digest", digest)
 	w.WriteHeader(http.StatusOK)
+	// v0.5.32: 跟 manifestHead 同样的 keep-alive 僵持问题,见 manifestHead 注释。
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 // --- upload flow -----------------------------------------------------------
