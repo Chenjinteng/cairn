@@ -28,7 +28,7 @@
 3. **库式后端**：HTTP handler 通过 `cmd/server` 装配，业务逻辑在 `internal/` 下，方便后续挂到别人的服务里
 4. **可观测性**：自带 `/healthz` `/readyz`
 
-## 当前状态:v0.5.31(2026-09-28) —— **回退 v0.5.28 加的 `http://` 前缀补全 —— docker pull 不接受 URL 形式,daemon 配 insecure-registry 会自动从 https 回退到 http,补前缀反而 broke 复制粘贴**
+## 当前状态:v0.5.32(2026-09-28) —— **修 HEAD manifest / HEAD blob 在 keep-alive 下僵持 → docker pull 报 unauthorized**(实际是客户端超时,被 docker 简化成 unauthorized)
 
 ✅ 已实现（v0.1 – v0.4）：
 
@@ -80,7 +80,7 @@
 4. `README.md` 里所有 `docker build/tag/push` 示例
 5. `CHANGELOG.md` 新增一节
 
-当前版本：`0.5.31`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
+当前版本：`0.5.32`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
 
 ## 项目结构
 

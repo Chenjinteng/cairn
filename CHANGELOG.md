@@ -6,6 +6,49 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.32] - 2026-09-28
+
+本轮主题:**修复配置 Registry 认证后 `docker pull` 报 `unauthorized` 的根因 —— HEAD handler 在 keep-alive 下僵持,客户端超时被 docker 简化成 `unauthorized`**。
+
+### 修复
+
+- **`manifestHead` / `blobHead` 显式 Flush**(`internal/registryd/routes.go:289-296` 和 `:380-384`):
+
+  ```diff
+  + // v0.5.32: 显式 flush,避免 HEAD 在 keep-alive 下僵持。
+  + if f, ok := w.(http.Flusher); ok {
+  +   f.Flush()
+  + }
+  ```
+
+### 根因(用户实测 + 服务端日志)
+
+| 测试 | 结果 |
+| --- | --- |
+| `curl GET /v2/` 无凭证 | `200 OK` ✓ |
+| `curl -u admin:password GET /v2/` | `200 OK` ✓ |
+| `curl -u admin:password GET /v2/_catalog` | `200 OK` ✓ |
+| `curl -u admin:password HEAD /v2/registry-manager/manifests/0.5.0` | **headers 200 OK 但 body 不发,timeout 60s** ✗ |
+| 同样的 HEAD 加 `-H "Connection: close"` | **351ms 返回** ✓ |
+| 服务端日志 `dur_ms` | 44~349ms(handler 已 return,只是 socket 不关) |
+
+### 链路解读
+
+1. **认证**:`requireBasicAuth` 完全正常 —— 带正确 credentials 的 `_catalog` / GET manifest 全部 200 OK。
+2. **HEAD 路径**:OCI spec 要求 HEAD manifest 响应里有 `Content-Length` header(让 client 知道 manifest 真实大小)。
+3. **Go net/http 的 keep-alive 行为**:ResponseWriter 看到 `Content-Length: 2620` 就等 2620 个字节的 Write 才 finish response。HEAD 请求 handler 没 body 要写,但 **server 不主动 flush**。
+4. **僵持**:server 想复用 TCP 连接复用下一个请求,所以等下一个 Write;client(curl / docker daemon)看到 Content-Length: 2620 就等 2620 bytes —— **两边都不动**。
+5. **docker 简化错误**:docker daemon 多次重试都 timeout 后,把所有超时类失败简化报成 `unauthorized`(因为 docker login 时 `/v2/` 是 OK 的,逻辑上「token 还在怎么会 unauth」就被忽略了)。
+6. **用户感知**:「docker login 成功,但 docker pull 报 unauthorized」 —— 看起来像 credentials 问题,实际上从未涉及认证。
+
+### 影响范围(升级须知)
+
+- **行为变化**:升级后 `HEAD /v2/<repo>/manifests/<ref>` 和 `HEAD /v2/<repo>/blobs/<digest>` 在 keep-alive 下立即返回,**docker pull 走通**(前提还是 daemon 配了 `--insecure-registry=registry.example.com` 或 `daemon.json` 的 `insecure-registries`)。
+- **API 契约无变化**:`/v2/` 响应字节完全一致,只是 HEAD 不再 hang。
+- **无回归测试变动**:本轮是延迟多年的 keep-alive 兼容 bug,没有 HEAD handler 单测覆盖。
+
+---
+
 ## [0.5.31] - 2026-09-28
 
 本轮主题:**回退 v0.5.28 加的「`buildPullCommand` 内部补 `http://` 前缀」—— 当时判断错了,补前缀反而 broke 复制粘贴**。
