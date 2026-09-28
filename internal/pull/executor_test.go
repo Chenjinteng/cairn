@@ -271,3 +271,103 @@ func TestPlatformAllowReadsLiveConfig(t *testing.T) {
 		t.Fatalf("cleared allow-list: got %v, want nil", got)
 	}
 }
+
+// --- synthesizeFilteredIndex --------------------------------------------------
+//
+// v0.5.25: when a platform filter matches multiple children, the tag must
+// point at a *new* index that contains only the filtered children, not the
+// upstream one. These tests pin that synthesis.
+
+func TestSynthesizeFilteredIndexKeepsOnlyFiltered(t *testing.T) {
+	idxRaw := []byte(`{
+		"schemaVersion": 2,
+		"mediaType": "application/vnd.oci.image.index.v1+json",
+		"manifests": [
+			{"digest":"sha256:aaa","mediaType":"application/vnd.oci.image.manifest.v1+json","size":1022,"platform":{"architecture":"amd64","os":"linux"}},
+			{"digest":"sha256:bbb","mediaType":"application/vnd.oci.image.manifest.v1+json","size":1023,"platform":{"architecture":"arm64","os":"linux"}},
+			{"digest":"sha256:ccc","mediaType":"application/vnd.oci.image.manifest.v1+json","size":1024,"platform":{"architecture":"ppc64le","os":"linux"}}
+		]
+	}`)
+	keep := []plannedManifest{
+		{Ref: "sha256:aaa"},
+		{Ref: "sha256:ccc"},
+	}
+	out, err := synthesizeFilteredIndex(idxRaw, keep)
+	if err != nil {
+		t.Fatalf("synthesizeFilteredIndex: %v", err)
+	}
+	var got struct {
+		SchemaVersion int              `json:"schemaVersion"`
+		MediaType     string           `json:"mediaType"`
+		Manifests     []map[string]any `json:"manifests"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("decode synthesised index: %v", err)
+	}
+	if got.MediaType != "application/vnd.oci.image.index.v1+json" {
+		t.Fatalf("mediaType lost in round-trip: got %q", got.MediaType)
+	}
+	if got.SchemaVersion != 2 {
+		t.Fatalf("schemaVersion lost: got %d", got.SchemaVersion)
+	}
+	if len(got.Manifests) != 2 {
+		t.Fatalf("len(manifests) = %d, want 2 (the two filtered)", len(got.Manifests))
+	}
+	digests := []string{}
+	for _, m := range got.Manifests {
+		digests = append(digests, m["digest"].(string))
+	}
+	want := []string{"sha256:aaa", "sha256:ccc"}
+	for i, w := range want {
+		if digests[i] != w {
+			t.Fatalf("manifest[%d].digest = %q, want %q", i, digests[i], w)
+		}
+	}
+}
+
+// TestSynthesizeFilteredIndexPreservesAnnotations covers the case the
+// field exists for a reason: Docker's attestation manifests are linked
+// to their subjects via the `vnd.docker.reference.digest` annotation.
+// Dropping it on the filtered re-emit would break the standard lookup
+// path for SBOM/signature manifests, so the round-trip must be lossless.
+func TestSynthesizeFilteredIndexPreservesAnnotations(t *testing.T) {
+	idxRaw := []byte(`{
+		"schemaVersion": 2,
+		"mediaType": "application/vnd.oci.image.index.v1+json",
+		"manifests": [
+			{"digest":"sha256:attest","mediaType":"application/vnd.oci.image.manifest.v1+json","size":838,
+			 "annotations":{"vnd.docker.reference.digest":"sha256:subject","vnd.docker.reference.type":"attestation-manifest"},
+			 "platform":{"architecture":"unknown","os":"unknown"}},
+			{"digest":"sha256:subject","mediaType":"application/vnd.oci.image.manifest.v1+json","size":1022,
+			 "platform":{"architecture":"amd64","os":"linux"}}
+		]
+	}`)
+	// Filter to "linux/amd64" — we want to keep the SUBJECT only, drop
+	// the attestation. But the function takes a digest list, so test
+	// both directions.
+	for _, keepDigest := range []string{"sha256:subject", "sha256:attest"} {
+		out, err := synthesizeFilteredIndex(idxRaw, []plannedManifest{{Ref: keepDigest}})
+		if err != nil {
+			t.Fatalf("synthesizeFilteredIndex: %v", err)
+		}
+		var got struct {
+			Manifests []map[string]any `json:"manifests"`
+		}
+		if err := json.Unmarshal(out, &got); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if len(got.Manifests) != 1 {
+			t.Fatalf("keep=%s: len(manifests) = %d, want 1", keepDigest, len(got.Manifests))
+		}
+		m := got.Manifests[0]
+		if d, _ := m["digest"].(string); d != keepDigest {
+			t.Fatalf("kept wrong digest: got %q, want %q", d, keepDigest)
+		}
+		if keepDigest == "sha256:attest" {
+			ann, _ := m["annotations"].(map[string]any)
+			if ann == nil || ann["vnd.docker.reference.digest"] != "sha256:subject" {
+				t.Fatalf("attest: %v / vnd.docker.reference.digest lost or wrong", ann)
+			}
+		}
+	}
+}

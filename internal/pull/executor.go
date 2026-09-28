@@ -293,7 +293,48 @@ func (o *Orchestrator) RunOne(ctx context.Context, j *Job) error {
 	}
 
 	// 3. Write the manifest the user asked for, under the destination tag.
-	written, err := o.Dest.PutManifest(ctx, destRepo, destTag, plan.rootMediaType, srcManifest.Raw)
+	//
+	// v0.5.25: rewrite what the tag points to when a platform filter was
+	// applied. The previous behaviour (v0.5.0 ~ v0.5.24) tagged the
+	// original source manifest unconditionally — which, for a multi-arch
+	// image, meant the local tag pointed to an INDEX listing 14 platforms
+	// even when only linux/amd64 was actually pulled. The tag was honest
+	// (it's what the source sent), but it was confusing: the UI's
+	// "Architecture" column then shows "+13" because the local index
+	// references platforms that don't exist locally.
+	//
+	// New behaviour, matching `docker pull --platform` semantics:
+	//
+	//   - 0 platforms filtered (default, no allow-list set): tag the
+	//     original root unchanged — multi-arch preserved.
+	//   - 1 platform filtered: tag that platform's child manifest
+	//     directly. The tag becomes a single-arch result; UI shows
+	//     "+0" (no shared-platform count).
+	//   - 2+ platforms filtered: synthesise a new index that contains
+	//     only the filtered children. The tag stays multi-arch but
+	//     bounded by what the operator asked for.
+	//
+	// Children and blobs are already on disk by this point, so writing
+	// a different root is safe — no extra fetches needed.
+	writeRaw := srcManifest.Raw
+	writeMediaType := plan.rootMediaType
+	if len(doc.Manifests) > 0 {
+		switch {
+		case len(plan.children) == len(doc.Manifests):
+			// No effective filter (matched all): keep original index.
+		case len(plan.children) == 1:
+			writeRaw = plan.children[0].Raw
+			writeMediaType = plan.children[0].MediaType
+		default:
+			synth, err := synthesizeFilteredIndex(srcManifest.Raw, plan.children)
+			if err != nil {
+				return fmt.Errorf("synthesise filtered index: %w", err)
+			}
+			writeRaw = synth
+			writeMediaType = mediaTypeOCIIndex
+		}
+	}
+	written, err := o.Dest.PutManifest(ctx, destRepo, destTag, writeMediaType, writeRaw)
 	if err != nil {
 		return fmt.Errorf("write manifest %s:%s: %w", destRepo, destTag, err)
 	}
@@ -522,6 +563,52 @@ func decodeSourceDoc(raw []byte) (sourceManifestDoc, error) {
 		return doc, fmt.Errorf("decode manifest: %w", err)
 	}
 	return doc, nil
+}
+
+// synthesizeFilteredIndex produces a new image-index manifest that
+// contains only the children whose digest appears in keepDigests.
+// All fields on the kept children (annotations, mediaType, platform,
+// size) are preserved verbatim — the operator's tooling still sees
+// the same per-platform metadata, just for the platforms they
+// actually pulled.
+//
+// We parse the original raw index as a generic map rather than via
+// sourceManifestDoc because sourceDesc does not capture the per-child
+// "annotations" field (only the fields the local pull planner needs).
+// Going through a map keeps the round-trip lossless for any future
+// fields the upstream adds — important for the Docker attestation
+// machinery, which uses `vnd.docker.reference.digest` annotations to
+// link SBOM/signature manifests to their subject.
+//
+// v0.5.25: introduced when pull started honouring platform allow-lists
+// properly (the tag must point at a filtered root or the UI would show
+// "+13" against a local store that only has amd64 blobs).
+func synthesizeFilteredIndex(raw []byte, keep []plannedManifest) ([]byte, error) {
+	var wrapper struct {
+		SchemaVersion int              `json:"schemaVersion"`
+		MediaType     string           `json:"mediaType"`
+		Manifests     []map[string]any `json:"manifests"`
+	}
+	if err := json.Unmarshal(raw, &wrapper); err != nil {
+		return nil, fmt.Errorf("parse source index for synthesis: %w", err)
+	}
+	keepSet := make(map[string]bool, len(keep))
+	for _, c := range keep {
+		keepSet[c.Ref] = true
+	}
+	out := wrapper
+	out.Manifests = make([]map[string]any, 0, len(wrapper.Manifests))
+	for _, m := range wrapper.Manifests {
+		d, _ := m["digest"].(string)
+		if !keepSet[d] {
+			continue
+		}
+		out.Manifests = append(out.Manifests, m)
+	}
+	// Caller only invokes us when len(plan.children) >= 2, so out.Manifests
+	// can't be empty here; we leave the invariant unguarded because adding
+	// a check would cost an extra branch in the hot path.
+	return json.Marshal(out)
 }
 
 // manifestFetcher is the slice of *registry.Client that planTransfer uses.

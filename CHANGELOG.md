@@ -6,6 +6,71 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.25] - 2026-09-28
+
+本轮主题:**修「拉取平台过滤不生效」的 UX bug —— 后端其实过滤对了,但 tag 仍指向原始 multi-arch INDEX,UI 因此显示"+13"**。
+
+### 修复
+
+- **tag 指向过滤后的 root**(`internal/pull/executor.go:296` 的 `PutManifest`):
+
+  旧实现 (v0.5.0 ~ v0.5.24) 始终把**原始 source manifest**(`srcManifest.Raw`)写成 destTag:
+  ```go
+  written, err := o.Dest.PutManifest(ctx, destRepo, destTag, plan.rootMediaType, srcManifest.Raw)
+  ```
+
+  对 multi-arch 镜像,这意味着 `tags/3.19` 指向的仍是上游 index(14 个 child 引用)—— 即使本地**只拉了 amd64 的 child + layer**。158 现场复现:磁盘上 `manifests/sha256/<amd64-child>` 与 `blobs/` 都只有 amd64 的字节,但 UI 架构列显示 `linux/amd64 +13`,误导操作员以为过滤没生效。
+
+  新实现按过滤结果分支:
+
+  | 过滤匹配数 | tag 写入 |
+  | --- | --- |
+  | 0(没配过滤) | 原 INDEX 不变 —— multi-arch 保留 |
+  | 1(`linux/amd64`) | 该平台的 child manifest —— single-arch,UI `+0` |
+  | ≥2(`linux/amd64,linux/arm64`) | **合成的 filtered index**(只含被选的 child)—— multi-arch 但限定到操作员选的平台 |
+
+  三种 case 都匹配 Docker CLI `docker pull --platform` 的行为语义。
+
+- **`synthesizeFilteredIndex` helper**(`internal/pull/executor.go`):
+  - 解析原始 INDEX 为 generic map,**保留所有字段**(annotations / mediaType / platform / size)→ Docker attestation 通过 `vnd.docker.reference.digest` annotation 链 SBOM/signature,**必须保留**否则断链
+  - 按 keep 列表过滤 child 条目
+  - 重新 marshal,得到 SHA256 不同的新 INDEX;此 digest 作为 destTag 的目标
+  - 现有 GC 不会把它当孤儿,因为 tag 还指向它
+
+### 影响范围(升级须知)
+
+⚠️ **已存在的 tag 不会自动修复**:
+  - 0.5.24 及之前拉的镜像,`tags/<X>` 指向的还是原始 INDEX digest。**重新 pull 一次**才会被新逻辑覆盖。删除重建也行:`DELETE /api/repositories/<repo>` 再 `POST /api/pull/jobs`。
+  - 或者保留旧 tag,但要知道 UI 上看到的 `+N` 是源 INDEX 的 multi-arch 计数,**不是本地实际拉的内容**。
+
+- **对 storage 层零影响**:Pass 1/2/3/4 GC 都没动;blob manifest 的引用关系也没动。
+- **API 契约无变化**:`POST /api/pull/jobs` 的 body / 响应字节完全一致。
+- **回归测试**:本轮新增 2 个单测:
+  - `TestSynthesizeFilteredIndexKeepsOnlyFiltered` —— 验证只保留过滤后的 child,且 mediaType / schemaVersion 不丢
+  - `TestSynthesizeFilteredIndexPreservesAnnotations` —— 验证 attestation 的 `vnd.docker.reference.digest` annotation 在合成 INDEX 里仍存在(Docker 的 SBOM/signature 链路依赖)
+  - 既有 `TestPlanTransferIndexFiltering` / `TestPlanTransferEmptyAllowListMatchesAll` / `TestPlanTransferNoMatchErrors` / `TestPlanTransferSingleArchManifestUnaffected` 全部通过 —— 本轮没改 planTransfer 的过滤逻辑
+
+### 验证
+
+- **类型层**:`web/tsconfig.json` 下 `tsc --noEmit` 仍为 **8 条错误**(本轮**改动文件零新增**,前端无变化)
+- **Go 侧门禁**:`gofmt -l internal/` 无输出;`go vet ./internal/... ./cmd/...` 退出码 0;`go build ./internal/... ./cmd/...` 退出码 0;`go test ./internal/... -count=1` 全 pass(includes 2 new tests)
+
+### 生产现场复测(在 158 跑)
+
+| 检查点 | 步骤 | 预期 |
+| --- | --- | --- |
+| **A. 之前已拉的多 arch** | 镜像列表点开 `library/alpine:3.19`(0.5.24 拉的) | 「架构」列仍是 `linux/amd64 +13`(旧 tag 指向原始 INDEX,新逻辑没重写已有 tag) |
+| **B. 新拉的 amd64** | 「镜像拉取」重新 pull `library/alpine:3.19` → 等完成 | 「架构」列变 `linux/amd64`(无 `+N`,single-arch) |
+| **C. 多平台过滤** | 设置里把拉取平台改为 `linux/amd64,linux/arm64` → 重新 pull `library/alpine:3.19` | 「架构」列显示 `linux/amd64 +1`(合成的 filtered INDEX,只有 2 个 child) |
+| **D. 字节数** | pull 前后对比 `du -sb /data/cairn/registry` | B 比 0.5.24 拉的同一镜像**小** —— 因为不再有 attests 引用源的 14 个 child manifests,只保留过滤后的子集 |
+| **E. attestation 链路** | `docker pull alpine:3.19` 看 SBOM/signature 是否仍可拉到 | 仍可拉(`vnd.docker.reference.digest` annotation 在合成 INDEX 里没丢) |
+
+### 轮次与号位
+
+- 本轮占 **0.5.25**:**defect fix**(UI 与磁盘不一致),按 `AGENTS.md` 判定为**小版本(第 3 位)+1**(既有 pull 流程的语义补正,不引入新功能模块)。按 `docs/ROADMAP.md`「号位是预留」的规则,整表自 0.5.25 之后顺延一格;`0.6.0`(TLS 证书管理)由人指定,不随顺延改号。
+
+---
+
 ## [0.5.24] - 2026-09-28
 
 本轮主题:**Critical bug:勾选 GC「也清理 0 tag 仓库」会**递归删除整条命名空间** —— 凡是命名空间目录下挂着子仓库的,子仓库无论有无 tag 都会被一并清掉**。**已现场确认一次事故:158 上 4 个仓库(其中 2 个有 tag)被一次 GC 清零**,磁盘上 `repos/` 直接空了。**这是上线以来最严重的数据丢失 bug**。
