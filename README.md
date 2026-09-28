@@ -166,33 +166,84 @@ docker compose build --no-cache
 ## 部署
 
 ```bash
+mkdir -p /data/cairn      # 宿主机数据目录(bind mount 的目标,可改)
 cp .env.example .env       # 必填: REGISTRY_CREDENTIAL_KEY(随机 32 字节)
+                           # 数据目录:改 HOST_DATA_DIR(默认 /data/cairn)
+                           # 访问端口:改 HOST_PORT(示例 80 = http://<宿主机>:80;不设回退 8787)
                            # 受限网络:把 GOPROXY 改成 https://goproxy.cn,direct
                            # 内网代理:把 BUILD_HTTP_PROXY/HTTPS_PROXY 设成 http://proxy.example.com:7890
                            # 前端依赖镜像:NPM_REGISTRY=https://registry.npmmirror.com(受限网络)
-                           # 访问端口:改 HOST_PORT(示例 80 = http://<宿主机>:80;不设回退 8787)
-                           # 自定义 registry 内容路径:改 REGISTRY_STORAGE_DIR
 docker compose up -d --build
 ```
 
 启动后浏览器访问 `http://<宿主机>:<HOST_PORT>`（容器内固定监听 8787，`HOST_PORT` 只决定宿主机侧的映射端口）。
 
-`.env` 字段含义与 registry-manager 保持一致，方便复用。
+`${HOST_DATA_DIR:-/data/cairn}` 会 bind mount 到容器内的 `/app/data` —— 凭据库、SQLite 库、registry 内容（blobs + manifests，在 `registry/` 子目录）全在里面。**必须落在持久盘上**，否则容器重建数据全丢（凭据永久不可恢复）。容器内的路径是编译期常量，不对外暴露：换个位置只需要改 `HOST_DATA_DIR` 或改 bind mount 左侧。
 
-## 与 registry-manager 的字段对照
+## 配置在哪配
 
-| registry-manager | cairn | 说明 |
+**基础设施走 `.env`，业务配置走设置页。** 两边不重叠，`docker inspect` 里看不到业务 env（本来就不读）。
+
+| 配置项 | 在哪配 | 说明 |
 |---|---|---|
-| `REGISTRY_URL` | ✅ | 要管理的 OCI registry 地址 |
-| `REGISTRY_USERNAME/PASSWORD` | ✅ | 本 registry 自身 basic auth |
-| `REGISTRY_NAME` | ✅ | 展示名称 |
-| `REGISTRY_CACHE_TTL_SECONDS` | ✅ | 清单缓存 TTL |
-| `REGISTRY_ALLOW_DELETE/PULL` | ✅ | 能力开关 |
-| `REGISTRY_NOTIFY_TOKEN` | ✅（v0.3） | webhook 共享密钥 |
-| `REGISTRY_CREDENTIAL_KEY` | ✅（v0.2） | 凭据库加密密钥 |
-| `REGISTRY_CREDENTIALS_DIR` | ✅ | 应用数据目录（凭据 / SQLite） |
-| `REGISTRY_STORAGE_DIR` | ✅（v0.5） | registry 内容目录（blobs / manifests） |
-| `REGISTRY_PROXY` | ✅ | 访问本 registry 的 HTTP 代理 |
+| `REGISTRY_CREDENTIAL_KEY` | `.env` | **必填**。凭据库 AES-256-GCM 主密钥，**丢失则已存凭据永久不可恢复** |
+| `HOST_DATA_DIR` | `.env` | 宿主机数据目录，默认 `/data/cairn` |
+| `HOST_PORT` | `.env` | 宿主机映射端口，默认 8787 |
+| `GO_HUB_ENV` | `.env` | `prod`（默认）/ `dev`，只影响日志详细度 |
+| `IMAGE` | `.env` | 运行镜像 tag |
+| `NODE_IMAGE` / `NPM_REGISTRY` / `GOPROXY` / `BUILD_HTTP_PROXY` / `BUILD_HTTPS_PROXY` / `BUILD_NO_PROXY` | `.env` | 只在 `docker compose build` 时生效，运行时不读 |
+| registry 地址 / 代理 / 认证 / 展示名 | 设置页 | 落 SQLite，热生效 |
+| 能力开关（`allow.delete` / `allow.pull` / `allow.registry_events`） | 设置页 | 落 SQLite，热生效 |
+| 通知 token / 各类保留天数 / 忽略 UA | 设置页 | 落 SQLite，热生效 |
+
+<details>
+<summary>和 registry-manager 的对照（已分叉）</summary>
+
+字段语义对齐到 v0.5.8 为止。**从 v0.5.9 起 cairn 不再读业务 env**：`REGISTRY_URL` / `REGISTRY_PROXY` / `REGISTRY_USERNAME` / `REGISTRY_PASSWORD` / `REGISTRY_NAME` / `REGISTRY_NOTIFY_TOKEN` / `REGISTRY_ALLOW_*` / `REGISTRY_CACHE_TTL_SECONDS` / `REGISTRY_CREDENTIALS_DIR` / `REGISTRY_STORAGE_DIR` / `REGISTRY_PULL_*` / `REGISTRY_STATS_*` 写进 `.env` 都**不会生效**，一切以设置页（SQLite）为准。
+
+这么改是为了让部署幂等：改 `.env` 不会悄悄改变行为，只改基础设施。registry-manager 的老 `.env` 可以直接搬过来 —— 里面的业务字段会被安静忽略，不会打架。
+
+</details>
+
+## 从命名卷迁移（旧版 compose 部署的）
+
+旧 compose 用两个 named volume：`cairn-data` → `/app/data`、`cairn-registry` → `/app/registry`（**默认**布局；如果把 `REGISTRY_STORAGE_DIR` 改成了 `/app/data/registry`，那第二个卷是空的，内容在第一个卷的 `registry/` 子目录里）。新 compose 只挂一条 bind mount，容器内 registry 内容的固定位置是 **`/app/data/registry`**。
+
+两个卷都要看一眼 —— 只搬第一个会漏掉默认布局的镜像内容：
+
+```bash
+cd <部署目录>
+docker compose down                       # 先停,避免边搬边写
+git pull                                  # 拉新 compose
+
+VOLS=$(docker info -f '{{.DockerRootDir}}/volumes')
+ls -d "$VOLS"/*cairn*                    # 确认卷名,通常是 <项目名>_cairn-data / _cairn-registry
+
+mkdir -p /data/cairn /data/cairn/registry
+cp -a "$VOLS/<项目名>_cairn-data/_data/."     /data/cairn/            # 凭据库 / SQLite / 代理库(含 registry/ 子目录,若有)
+cp -a "$VOLS/<项目名>_cairn-registry/_data/." /data/cairn/registry/    # 旧默认布局的镜像内容;卷是空的无副作用
+
+ls -la /data/cairn/                      # 应看到 credentials.json / cairn.db / proxies.json / registry/
+docker compose up -d
+```
+
+`cp -a 源/.` 里的 `/.` 表示"复制目录内容而不是目录本身"，两边都用它才不会多套一层。
+
+**验证**：日志里 `config loaded` 正常、设置页里 registry 地址/代理还在、镜像列表能看到原仓库与 tag、`docker exec <容器> ls /app/data/registry` 有内容。
+
+**旧卷先别删** —— 确认无误后再 `docker volume rm` 回收。
+
+> 顺序很重要：**先 `down`、再搬、最后 `up`**。反过来的话新容器会在空的 `/data/cairn` 里生成全新的凭据库和 SQLite（旧数据没丢，但页面看起来像空的）。
+
+## 让 registry 内容独占一块盘（可选）
+
+默认不拆。想让 blobs/manifests 落在大盘上，在 `docker-compose.yml` 的 `volumes:` 加第二条 bind（**不新增变量**）：
+
+```yaml
+volumes:
+  - ${HOST_DATA_DIR:-/data/cairn}:/app/data
+  - /data2/cairn-registry:/app/data/registry
+```
 
 ---
 

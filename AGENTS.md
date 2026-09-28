@@ -29,13 +29,18 @@ registry-manager 明确"一次管理一个 registry"，cairn 沿用。**单进�
 
 ### 数据目录约定
 
-`REGISTRY_CREDENTIALS_DIR`（默认 `/app/data`）下放：
+**容器内路径写死为 Go 常量**（`internal/config/config.go` 的 `DataDirPath` / `StorageDirPath`），**不提供 env**。容器里的文件放哪儿是实现细节；要换位置改 bind mount 的宿主机侧，不动容器内路径。
+
+`DataDirPath`（`/app/data`）下放：
 
 - 凭据库（v0.2 AES-256-GCM 加密 JSON）
 - 代理库（v0.2 明文 JSON）
 - SQLite 热度库（v0.3）
+- registry 内容（`StorageDirPath` = `/app/data/registry`）—— blobs / manifests / upload sessions
 
-**容器化必须挂卷**，否则容器重建数据全丢（凭据永久不可恢复）。
+**容器化必须挂卷**（`docker-compose.yml` 里 bind mount `${HOST_DATA_DIR:-/data/cairn}:/app/data`），否则容器重建数据全丢（凭据永久不可恢复）。
+
+**只暴露宿主机侧变量**：`HOST_DATA_DIR`（默认 `/data/cairn`）。不给 registry 内容单独开变量 —— 要让 blobs 独占大盘就加第二条 bind mount（见 README「让 registry 内容独占一块盘」）。
 
 ## 版本号规则
 
@@ -110,9 +115,19 @@ cairn 刻意**不做**：
 要加先问。
 
 
-## v0.5.9 起:env 只剩 5 个基础设施
+## v0.5.9 起:env 只剩基础设施
 
-业务配置(PORT / DATA_DIR / STORAGE_DIR / LOG_LEVEL / CREDENTIAL_KEY 之外的)全部走 UI → SQLite settings 表。`.env` 里的 `REGISTRY_URL` / `REGISTRY_PROXY` / `REGISTRY_USERNAME` / `REGISTRY_PASSWORD` / `REGISTRY_NAME` / `REGISTRY_NOTIFY_TOKEN` / `REGISTRY_ALLOW_*` / `REGISTRY_PULL_PLATFORMS` / `REGISTRY_PULL_HISTORY_RETENTION_DAYS` / `REGISTRY_STATS_RETENTION_DAYS` / `REGISTRY_STATS_IGNORE_USERAGENTS` 等设置后**不会再被读**(代码里 `os.Getenv("REGISTRY_*")` 全部删除)。设了等于没设,除非改的是基础设施那 5 个。
+业务配置(仓库地址 / 代理 / 认证 / 各开关 / 保留天数等)全部走 UI → SQLite settings 表。`.env` 里的 `REGISTRY_URL` / `REGISTRY_PROXY` / `REGISTRY_USERNAME` / `REGISTRY_PASSWORD` / `REGISTRY_NAME` / `REGISTRY_NOTIFY_TOKEN` / `REGISTRY_ALLOW_*` / `REGISTRY_PULL_PLATFORMS` / `REGISTRY_PULL_HISTORY_RETENTION_DAYS` / `REGISTRY_STATS_RETENTION_DAYS` / `REGISTRY_STATS_IGNORE_USERAGENTS` 等设置后**不会再被读**(代码里 `os.Getenv("REGISTRY_*")` 全部删除)。设了等于没设。
+
+**基础设施 env 只有这 3 个**(路径类的一律不进来,容器内路径见上「数据目录约定」):
+
+| env | 用途 |
+| --- | --- |
+| `PORT` | 容器内监听端口(默认 8787);对外端口走 compose 的 `HOST_PORT` |
+| `REGISTRY_CREDENTIAL_KEY` | 凭据库 AES-256-GCM 密钥 |
+| `GO_HUB_ENV` | `dev` / `prod` |
+
+要挪数据只改宿主机侧的 `HOST_DATA_DIR`(bind mount 左侧);`/app/data` 与 `/app/data/registry` 是编译期常量。
 
 **新增 env 的门槛**:以后任何 PR 想新加业务 env,需要在 PR description 里说明:
 1. 为什么不能走 UI?(例如 boot 期读取、容器编排约束等)
