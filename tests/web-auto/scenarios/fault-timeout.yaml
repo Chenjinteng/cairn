@@ -1,0 +1,322 @@
+# cairn 故障注入 — 后端 hang 住时前端是否在 ≤10s 给出错误态
+#
+# 手法：`docker pause cairn` 冻结容器 → 内核仍在 listen、TCP 仍能建连，但没有任何
+# HTTP 回应 ⇒ 正是「服务在、但不回应」这一档（应当被判成 TIMEOUT，而不是 NETWORK_ERROR）。
+#
+# 为什么不用 docker stop：stop 会让端口直接 RST/拒连，落到 NETWORK_ERROR 那档，
+# 测的就不是超时预算了。
+#
+# 注入点 = 「镜像拉取」Tab 的 mount effect：
+#   App.tsx:139-140 是**条件渲染**（page === 'pull' ? <PullPage/> : …），不是 antd Tabs 的
+#   保活面板 ⇒ 切走再切回会真的 unmount/remount；PullPage 的 useEffect
+#   （pull-page.tsx:318-320）在每次 mount 时无条件 `void refresh()`，
+#   而 refresh → listPullJobs() 走**快档** 10s 预算（api.ts:48 DEFAULT_TIMEOUT_MS=10_000）。
+#   ⇒ 切 Tab 的瞬间发起请求，若容器此刻被冻结，10s 后必须出现错误态。
+#
+# 为什么不能用镜像列表/热度页：那两者走 fetchInventory → **慢档 120s**
+# （api.ts:57 SLOW_TIMEOUT_MS=120_000），本场景要求的「≤10s」在它们身上不成立。
+#
+# —— 与 158 侧的同步（关键设计）——
+# cairn 的 slogLogger（api.go:54 挂在根 router 上，覆盖 SPA catch-all）对**每个**请求
+# 打一行 {"msg":"http","path":…}。于是：
+#   1. 158 上先起一个 relay（setsid）：
+#        if timeout 25 docker logs -f --tail 5 cairn | grep -q -m1 <TOKEN>;
+#          then docker pause cairn; sleep 20; docker unpause cairn; fi
+#   2. 本场景步 4 请求唯一路径 /<TOKEN> → 该行落进容器日志 → relay 立刻 pause。
+#   3. 步 5 用页内探针（/healthz + AbortSignal.timeout(400)）连续两次失败判定 = PAUSED；
+#      若 9s 内判不出来就把探针元素写成 ALIVE，步 6 断言随之失败（**不会假绿**）。
+#   TOKEN 必须与 relay 里的完全一致；重跑前改 TOKEN 或确认日志里没有同名历史行。
+#
+# 步数 × 时长口径：runner.js:274 `stepTimeoutMs = timeout / max(steps, 5)` →
+# 17 步时单步硬上限 17647ms，故所有显式 timeout ≤16000，页内轮询预算 ≤14000。
+#
+# 时序（t=0 为 relay 触发点）：pause ≈0 → PAUSED ≈1s → 切 Tab ≈1.5s
+#   → 快档超时 → 错误态 ≈11.5s（页内计时 ≈9.9s）→ unpause ≈20s
+#   → RECOVERED ≈20.3s → 点「重试」→ 错误态消失。
+name: cairn-fault-timeout
+description: |
+  故障注入（破坏性但不改数据；容器被 pause 20s）：
+    1. 打开首页 → 断言镜像列表已有行（基线：注入前后端确实是活的）
+    2. 请求唯一标记路径 → 158 侧 relay 从容器日志命中后 docker pause cairn
+    3. 页内探针确认已 PAUSED（连续 2 次 /healthz 在 400ms 内被 abort）
+    4. 切「镜像拉取」Tab → mount effect 发起 listPullJobs()（快档 10s 预算）
+    5. 断言错误态出现，且分类是 TIMEOUT（不是 NETWORK_ERROR），页内计时落在 8~11.5s
+    6. 等 relay unpause → 探针确认 RECOVERED
+    7. 点错误态里的「重试」→ 断言错误态消失（恢复能力验证）
+env: dev
+tags: [fault-injection, pull, cairn, resilience]
+target:
+  baseUrl: "{{env.baseUrl}}"
+
+artifacts:
+  screenshot: always
+  trace: on-failure
+  video: never
+  har: never
+
+steps:
+  - name: 打开首页
+    action: goto
+    url: "{{baseUrl}}/"
+    timeout: 15000
+
+  - name: 等待主框架
+    action: waitFor
+    locator:
+      strategies:
+        - { type: css, value: ".app-shell" }
+    timeout: 12000
+
+  # 基线：镜像列表已有行 ⇒ 注入前 /api/inventory 是通的（后端活着）。
+  - name: 基线断言镜像列表已有数据行
+    action: assert
+    type: visible
+    selector: '.app-content tr.ant-table-row'
+    timeout: 12000
+
+  # 同步点 + 探针元素落位。标记元素放在视口外，不干扰布局，也不影响 textContent 读取。
+  - name: 打故障注入标记（容器日志同步点）
+    action: evaluate
+    script: |
+      (async () => {
+        const T = '__fi_pause_probe_9f31a2';
+        ['__fi_state', '__fi_alert_text', '__fi_elapsed', '__fi_recover', '__fi_marker'].forEach((id) => {
+          const e = document.getElementById(id);
+          if (e) e.remove();
+        });
+        const put = (id, txt) => {
+          const d = document.createElement('div');
+          d.id = id;
+          d.textContent = txt;
+          d.setAttribute('style', 'position:absolute;left:-9999px;top:0;width:1px;height:1px;overflow:hidden');
+          document.body.appendChild(d);
+        };
+        put('__fi_state', 'INIT');
+        let markerStatus = 'none';
+        try {
+          const r = await fetch('/' + T + '?ts=' + Date.now(), { cache: 'no-store' });
+          markerStatus = String(r.status);
+        } catch (e) {
+          markerStatus = 'ERR:' + String((e && e.name) || e);
+        }
+        put('__fi_marker', 'MARKER:' + markerStatus);
+        return JSON.stringify({ step: 'marker', token: T, markerStatus: markerStatus });
+      })()
+
+  - name: 页内探针确认容器已 PAUSED
+    action: evaluate
+    script: |
+      (async () => {
+        const LIMIT = 9000;
+        const t0 = Date.now();
+        let fails = 0, oks = 0, probes = 0, state = 'ALIVE';
+        const probe = async () => {
+          probes++;
+          try {
+            const r = await fetch('/healthz?ts=' + Math.random(), {
+              signal: AbortSignal.timeout(400),
+              cache: 'no-store',
+            });
+            return r.ok;
+          } catch (e) {
+            return false;
+          }
+        };
+        while (Date.now() - t0 < LIMIT) {
+          const ok = await probe();
+          if (ok) { oks++; fails = 0; } else { fails++; oks = 0; }
+          if (fails >= 2) { state = 'PAUSED'; break; }
+          await new Promise((r) => setTimeout(r, 120));
+        }
+        const el = document.getElementById('__fi_state');
+        if (el) el.textContent = state;
+        return JSON.stringify({ step: 'pause-detect', state: state, probes: probes, elapsedMs: Date.now() - t0 });
+      })()
+    timeout: 14000
+
+  - name: 断言探针判定为 PAUSED
+    action: assert
+    type: text
+    selector: '#__fi_state'
+    value: 'PAUSED'
+    match: contains
+    timeout: 6000
+
+  # 切 Tab = PullPage 重新 mount → 无条件 refresh() → listPullJobs()（快档 10s）。
+  - name: 点击「镜像拉取」Tab（触发 mount 拉取）
+    action: click
+    locator:
+      strategies:
+        - { type: css, value: '.app-nav .ant-segmented-item:has-text("镜像拉取")' }
+        - { type: text, value: "镜像拉取", match: exact }
+    timeout: 8000
+
+  # 计时从本步开始：切 Tab 到 alert 出现。理想值 ≈10000ms 减去「click 结束→本步开始」的几十~几百 ms。
+  # WITHIN 门限取 8000~11500ms：下限排除「立刻失败」（那是 NETWORK_ERROR，不是超时），
+  # 上限排除「根本没走 10s 预算」。
+  - name: 页内轮询错误态出现并计时
+    action: evaluate
+    script: |
+      (async () => {
+        const LIMIT = 14000;
+        const t0 = Date.now();
+        let text = '', elapsed = -1;
+        const pick = () =>
+          Array.from(document.querySelectorAll('.ant-alert')).find(
+            (a) => (a.innerText || '').indexOf('错误分类：') >= 0
+          ) || null;
+        while (Date.now() - t0 < LIMIT) {
+          const a = pick();
+          if (a) {
+            text = (a.innerText || '').replace(/\s+/g, ' ').trim();
+            elapsed = Date.now() - t0;
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 120));
+        }
+        const put = (id, txt) => {
+          let d = document.getElementById(id);
+          if (!d) {
+            d = document.createElement('div');
+            d.id = id;
+            d.setAttribute('style', 'position:absolute;left:-9999px;top:0;width:1px;height:1px;overflow:hidden');
+            document.body.appendChild(d);
+          }
+          d.textContent = txt;
+        };
+        const within = elapsed >= 8000 && elapsed <= 11500;
+        put('__fi_elapsed', 'ELAPSED:' + elapsed + ' WITHIN:' + (within ? 'OK' : 'FAIL'));
+        put('__fi_alert_text', text || 'NOALERT');
+        return JSON.stringify({
+          step: 'alert-poll',
+          found: elapsed >= 0,
+          elapsedMs: elapsed,
+          within10s: within,
+          text: text,
+        });
+      })()
+    timeout: 16000
+
+  - name: 断言错误分类为 TIMEOUT
+    action: assert
+    type: text
+    selector: '#__fi_alert_text'
+    value: '错误分类：TIMEOUT'
+    match: contains
+    timeout: 6000
+
+  - name: 断言错误态落在 10s 预算内
+    action: assert
+    type: text
+    selector: '#__fi_elapsed'
+    value: 'WITHIN:OK'
+    match: contains
+    timeout: 6000
+
+  - name: 页内探针等待容器 RECOVERED
+    action: evaluate
+    script: |
+      (async () => {
+        const LIMIT = 14000;
+        const t0 = Date.now();
+        let oks = 0, probes = 0, state = 'STILL_PAUSED';
+        while (Date.now() - t0 < LIMIT) {
+          probes++;
+          let ok = false;
+          try {
+            const r = await fetch('/healthz?ts=' + Math.random(), {
+              signal: AbortSignal.timeout(600),
+              cache: 'no-store',
+            });
+            ok = r.ok;
+          } catch (e) {
+            ok = false;
+          }
+          if (ok) { oks++; } else { oks = 0; }
+          if (oks >= 2) { state = 'RECOVERED'; break; }
+          await new Promise((r) => setTimeout(r, 150));
+        }
+        const el = document.getElementById('__fi_state');
+        if (el) el.textContent = state;
+        return JSON.stringify({ step: 'recover-detect', state: state, probes: probes, elapsedMs: Date.now() - t0 });
+      })()
+    timeout: 16000
+
+  - name: 断言探针判定为 RECOVERED
+    action: assert
+    type: text
+    selector: '#__fi_state'
+    value: 'RECOVERED'
+    match: contains
+    timeout: 6000
+
+  - name: 点击错误态里的「重试」
+    action: click
+    locator:
+      # 纯结构定位，不依赖文本：antd 对「无 icon + 双汉字」按钮会插空格（渲染为「重 试」），
+      # 且本 runner 的 text 策略不预检、命中后走 getByText 默认 30s 超时会顶穿单步上限。
+      strategies:
+        - { type: css, value: '.ant-alert .ant-alert-action .ant-btn' }
+        - { type: css, value: '.ant-alert .ant-btn' }
+        - { type: css, value: '.ant-alert button:not(.ant-alert-close-icon)' }
+    timeout: 9000
+
+  # 先确认进入本步时错误态仍在（否则「消失」是平凡真，属假绿），再等它消失。
+  # refresh() 只在成功分支 setError(null)（pull-page.tsx:305-310）⇒ 错误态消失即代表请求成功。
+  - name: 页内轮询错误态消失
+    action: evaluate
+    script: |
+      (async () => {
+        const pick = () =>
+          Array.from(document.querySelectorAll('.ant-alert')).find(
+            (a) => (a.innerText || '').indexOf('错误分类：') >= 0
+          ) || null;
+        const put = (id, txt) => {
+          let d = document.getElementById(id);
+          if (!d) {
+            d = document.createElement('div');
+            d.id = id;
+            d.setAttribute('style', 'position:absolute;left:-9999px;top:0;width:1px;height:1px;overflow:hidden');
+            document.body.appendChild(d);
+          }
+          d.textContent = txt;
+        };
+        const pre = pick();
+        if (!pre) {
+          // 点「重试」后请求已成功返回 ⇒ refresh() 的 setError(null) 已清掉错误态。
+          // 步 9/10 已证明错误态确实出现过，故此分支同属「恢复成功」，不是平凡真。
+          put('__fi_recover', 'RECOVERED_FAST');
+          return JSON.stringify({ step: 'recover-verify', pre: 'MISSING', recovered: true, reason: 'cleared-before-poll' });
+        }
+        const LIMIT = 12000;
+        const t0 = Date.now();
+        let gone = 0, rows = 0;
+        while (Date.now() - t0 < LIMIT) {
+          rows = document.querySelectorAll('.app-content tr.ant-table-row').length;
+          if (!pick()) { gone++; } else { gone = 0; }
+          if (gone >= 2) break;
+          await new Promise((r) => setTimeout(r, 150));
+        }
+        put('__fi_recover', gone >= 2 ? 'RECOVERED' : 'STILL_BROKEN');
+        return JSON.stringify({ step: 'recover-verify', pre: 'PRESENT', recovered: gone >= 2, rows: rows, elapsedMs: Date.now() - t0 });
+      })()
+    timeout: 14000
+
+  - name: 断言重试后错误态已消失
+    action: assert
+    type: text
+    selector: '#__fi_recover'
+    value: 'RECOVERED'
+    match: contains
+    timeout: 6000
+
+  - name: fault-timeout-after-recovery
+    action: screenshot
+
+  - name: fault-timeout-end
+    action: screenshot
+
+# 期望结果（步数与 steps 逐一对应：17）
+expected:
+  totalSteps: 17
+  maxDuration: 300000
