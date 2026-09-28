@@ -99,14 +99,19 @@ export default function App({
             {/* v0.5.9: 经代理 Tag removed — per-credential proxy in proxy library */}
             {config && !config.allowDelete ? <Tag color="green">只读模式</Tag> : null}
             {config && !config.allowPull ? <Tag color="default">禁止拉取</Tag> : null}
-            {/* v0.5.28: 右上角主显示改「展示名称」(用户在设置里填的那个) —— 之前一直只画
-   config.url,展示名称填了没人看到,等于没填。host 退到副文本 + tooltip,
-   操作员要看 registry 入口时 hover 即可,不抢主行的视觉。 */}
+            {/* v0.5.28: 右上角主显示改「展示名称」,url 退到括号里的副文本。
+               v0.5.30: 之前两个独立 span 被 antd Tooltip 包成单一 inline-block,
+               父容器的 gap:8px 进不去 —— 「Carin Dev 环境」和「http://...」挤一坨
+               看着像少了空格。现在把 url 嵌进主 span 内,括号做天然分隔符。 */}
             {config ? (
               <Tooltip title={config.url}>
-                <span className="app-registry-name ellipsis">{config.name || '镜像仓库'}</span>
-                <span className="app-registry-url ellipsis mono" title={config.url}>
-                  {config.url}
+                <span className="app-registry-name ellipsis">
+                  {config.name || '镜像仓库'}
+                  {' ('}
+                  <span className="app-registry-url mono" title={config.url}>
+                    {config.url}
+                  </span>
+                  {')'}
                 </span>
               </Tooltip>
             ) : configFailure ? (

@@ -6,6 +6,51 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.30] - 2026-09-28
+
+本轮主题:**修复 v0.5.28 右上角展示名称和 url 挤成一坨的 UI bug —— antd Tooltip 把兄弟 span 视为单一 inline-block,父 flex gap 进不去**。
+
+### 修复
+
+- **右上角 `name` 和 `url` 改成括号拼接形式**(`web/src/App.tsx`):
+
+  旧 (v0.5.28):
+  ```tsx
+  <Tooltip title={config.url}>
+    <span className="app-registry-name ellipsis">{config.name || '镜像仓库'}</span>
+    <span className="app-registry-url ellipsis mono" title={config.url}>{config.url}</span>
+  </Tooltip>
+  ```
+  → 渲染成 `Carin Dev 环境http://registry.example.com`,两个 span 之间**没视觉分隔**。
+
+  **根因**:antd Tooltip 默认给包裹元素加 `display: inline-block`,把两个 span 视为单一 inline-block 整体;父容器 `.app-header-meta` 的 `gap: 8px` 是 flex gap,只在**直接子项**之间生效 —— 而 Tooltip 是直接子项,内部的两个 span 不是。所以 8px gap 在内部被吞掉。
+
+  新 (v0.5.30):
+  ```tsx
+  <Tooltip title={config.url}>
+    <span className="app-registry-name ellipsis">
+      {config.name || '镜像仓库'}
+      {' ('}
+      <span className="app-registry-url mono" title={config.url}>{config.url}</span>
+      {')'}
+    </span>
+  </Tooltip>
+  ```
+  → 渲染成 `Carin Dev 环境 (http://registry.example.com)`,括号天然分隔 + 主 span 整体 ellipsis 行为统一。
+
+- **`.app-registry-url` CSS 收紧**(`web/src/app.css`):
+  - `color: var(--color-text-4)` 比父 `.app-header-meta` 的 `text-3` 更弱(降一档)
+  - `font-size: 12px` 比父的 `13px` 小一档
+  - `font-weight: normal`(父级未设,默认就是 normal,这里显式写出来挡后续 antd 链改继承)
+
+### 影响范围(升级须知)
+
+- **行为变化**:升级后右上角从 `Carin Dev 环境http://registry.example.com` 变成 `Carin Dev 环境 (http://registry.example.com)`(括号 + 括号内 url 字号更小)。
+- **API 契约无变化**:纯展示层调整,`/api/config` 响应字节完全一致。
+- **无回归测试变动**:CSS 文件没动测试套件。
+
+---
+
 ## [0.5.29] - 2026-09-28
 
 本轮主题:**镜像列表的「删除仓库」入口去掉,改走「删 tag → GC」链路**。

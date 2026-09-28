@@ -73,6 +73,14 @@
   max-width: 340px;
 }
 
+/* v0.5.30: 右上角展示名称括号内的 url —— 视觉降一档,不抢主名,但仍然可读。
+   字号 -1 + color-text-4(比父 .app-header-meta 的 text-3 更弱)。 */
+.app-registry-url {
+  color: var(--color-text-4, var(--color-text-3));
+  font-size: 12px;
+  font-weight: normal;
+}
+
 /* 主题切换：图标按钮，颜色跟随顶栏的次级文字，不要 AntD 默认的实心色。 */
 .app-theme-toggle {
   flex: none;
