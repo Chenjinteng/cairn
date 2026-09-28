@@ -11,9 +11,20 @@
   /* 让原生滚动条、表单控件跟随主题，否则深色页面上会插着一根亮滚动条。 */
   color-scheme: light;
 
-  --color-primary: #155aef;
+  /*
+   * v0.5.22（Cairn 配色同步）：主色从蓝 #155aef 换成 Teal 600。
+   * 取自 Cairn mark 的塔身色 (#0d9488)，对应 Tailwind teal-600。
+   * 选中态底块从 #e1edfc 换成 teal-100 #ccfbf1；info 同时承担 —— 单色主品牌
+   * 比「蓝主色 + 蓝 info」更清晰，也避免 Harbor / Quay / Docker 那种
+   * 「整屏蓝」的同质化。
+   *
+   * 语义色 success/warning/fail 保留(绿/黄/红是已建立的视觉契约,
+   * 改色会让用户误判);文字色、边框、背景中性色不动 —— Cairn 的差异在
+   * 主品牌色,不在中性色板。
+   */
+  --color-primary: #0d9488;
   --color-primary-foreground: #ffffff;
-  --color-primary-bg-active: #e1edfc;
+  --color-primary-bg-active: #ccfbf1;
   --color-secondary: #f2f4f7;
 
   --color-text-1: #1e252e;
@@ -38,17 +49,17 @@
 
   --color-success: #27c274;
   --color-warning: #faad14;
-  --color-info: #1677ff;
+  --color-info: #0d9488;
   --color-fail: #f43b2c;
   /* 失败态的浅色底块（错误详情之类）。 */
   --color-fail-bg: #f43b2c14;
 
   --color-background-body: #f2f4f7;
   --color-side-nav-text: #475468;
-  --color-side-nav-text-active: #155aef;
+  --color-side-nav-text-active: #0d9488;
   --color-side-nav-bg: #ffffff;
   --color-side-nav-hover-bg: #f2f4f7;
-  --color-side-nav-active-bg: #155aef14;
+  --color-side-nav-active-bg: #0d948814;
 
   --radius-sm: 6px;
   --radius-md: 8px;
@@ -71,10 +82,15 @@
 [data-theme='dark'] {
   color-scheme: dark;
 
-  /* 原来的 #155aef 压在深色底上会发闷，提亮后链接与选中态才看得清。 */
-  --color-primary: #4c8dff;
-  --color-primary-foreground: #0b1220;
-  --color-primary-bg-active: #4c8dff26;
+  /*
+   * v0.5.22：深色下主色从提亮蓝 #4c8dff 换成 Teal 400 #2dd4bf。
+   * 与浅色版的 teal-600 同一色相但提亮两档(色阶感跟原「蓝 → 亮蓝」一致),
+   * 跟 cairn-mark.tsx dark variant 的 #5eead4 接近(teal-300,稍亮) —
+   * 一致感来自色族而非完全相同。
+   */
+  --color-primary: #2dd4bf;
+  --color-primary-foreground: #042f2e;
+  --color-primary-bg-active: #2dd4bf26;
   --color-secondary: #1f2430;
 
   --color-text-1: #e6eaf2;
@@ -99,16 +115,16 @@
 
   --color-success: #3ddc84;
   --color-warning: #ffc53d;
-  --color-info: #4096ff;
+  --color-info: #2dd4bf;
   --color-fail: #ff6b5e;
   --color-fail-bg: #ff6b5e1f;
 
   --color-background-body: #0f131a;
   --color-side-nav-text: #aab6c8;
-  --color-side-nav-text-active: #4c8dff;
+  --color-side-nav-text-active: #2dd4bf;
   --color-side-nav-bg: #171b24;
   --color-side-nav-hover-bg: #1f2530;
-  --color-side-nav-active-bg: #4c8dff1f;
+  --color-side-nav-active-bg: #2dd4bf1f;
 
   --shadow-inset: rgba(0, 0, 0, 0.4);
 }

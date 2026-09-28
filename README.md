@@ -13,6 +13,14 @@
 - ❌ **不是 fork** —— Go 是从零写的，不绑定上游 Node 实现
 - ❌ 不追版本号同步 —— cairn 自己有版本号规则
 
+## 品牌资产
+
+产品面对用户时称 **Cairn**(轻量级容器镜像基础设施平台);`cairn` 仍是项目代号 / module path / 二进制名,两者并存。
+
+- Logo 设计稿:[`docs/cairn-brand.html`](./docs/cairn-brand.html) —— 几何构成、调色板、多尺寸 mock、in-app preview
+- 项目内 Logo 组件:`web/src/components/cairn-mark.tsx`(内联 SVG,接受 `size` / `variant` props)
+- 配色 token:`web/src/theme.css` 的 `--color-primary` / `--color-info` 同步 Logo 的 Teal 600
+
 ## 设计目标
 
 1. **单进程单二进制**：编译后 ~10MB 静态二进制，运行时无外部依赖（SQLite 用 modernc 纯 Go 驱动，规划中）
@@ -20,7 +28,7 @@
 3. **库式后端**：HTTP handler 通过 `cmd/server` 装配，业务逻辑在 `internal/` 下，方便后续挂到别人的服务里
 4. **可观测性**：自带 `/healthz` `/readyz`
 
-## 当前状态:v0.5.21(2026-09-28) —— **品牌升级:产品名改名为 Cairn,新 Logo 替换顶部 brand**
+## 当前状态:v0.5.22(2026-09-28) —— **整体配色与 Cairn Logo 对齐:主色换 Teal 600,info 同色**
 
 ✅ 已实现（v0.1 – v0.4）：
 
@@ -72,7 +80,7 @@
 4. `README.md` 里所有 `docker build/tag/push` 示例
 5. `CHANGELOG.md` 新增一节
 
-当前版本：`0.5.21`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
+当前版本：`0.5.22`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
 
 ## 项目结构
 
