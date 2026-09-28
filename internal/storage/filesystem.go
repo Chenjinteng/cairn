@@ -57,6 +57,39 @@ func (f *Filesystem) Root() string { return f.root }
 // directory that holds a tags/ or manifests/ subdir as a repository. Parent and
 // child can both be repositories (a/b and a/b/c are independent names).
 func (f *Filesystem) Repositories(_ context.Context) ([]string, error) {
+	repos, err := f.discoverRepos()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(repos))
+	for _, r := range repos {
+		out = append(out, r.Name)
+	}
+	return out, nil
+}
+
+// repoEntry is one repository directory discovered under f.root/repos.
+// Name is slash-separated to match the on-disk layout (e.g. "library/alpine"
+// for repos/library/alpine/), Dir is the absolute path of that directory.
+type repoEntry struct {
+	Name string
+	Dir  string
+}
+
+// discoverRepos walks repos/ and returns every repository directory found,
+// using the same rule as the original Repositories(): a directory counts as
+// a repo if it directly contains a `tags/` or `manifests/` subdirectory.
+// Names that map to the same repo are deduplicated via a set.
+//
+// v0.5.24: extracted from Repositories() so GC's Pass 3 can reuse it. The
+// previous Pass 3 implementation called os.ReadDir(reposRoot) directly and
+// treated every top-level entry as a repo — under multi-segment repos like
+// `library/alpine` that meant checking `repos/library/tags/` (which never
+// exists), seeing ENOENT, concluding "no tags", and then os.RemoveAll-ing
+// `repos/library/` recursively, which silently nuked every repo nested
+// under any namespace directory. Critical data loss bug; see CHANGELOG
+// 0.5.24.
+func (f *Filesystem) discoverRepos() ([]repoEntry, error) {
 	reposDir := filepath.Join(f.root, "repos")
 	if _, err := os.Stat(reposDir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -87,11 +120,15 @@ func (f *Filesystem) Repositories(_ context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make([]string, 0, len(seen))
-	for r := range seen {
-		out = append(out, r)
+	names := make([]string, 0, len(seen))
+	for n := range seen {
+		names = append(names, n)
 	}
-	sort.Strings(out)
+	sort.Strings(names)
+	out := make([]repoEntry, 0, len(names))
+	for _, n := range names {
+		out = append(out, repoEntry{Name: n, Dir: filepath.Join(reposDir, n)})
+	}
 	return out, nil
 }
 
@@ -797,40 +834,49 @@ func (f *Filesystem) GC(_ context.Context, opts GCOption) (*GCResult, error) {
 	// The size of repos/<repo>/ is summed before deletion so the UI can
 	// credit those bytes to the user; the cost is one extra filepath.Walk
 	// per candidate repo, which is cheap relative to the existing sweeps.
+	// v0.5.24: fix Pass 3 namespace-confusion bug (CHANGELOG 0.5.24).
+	//
+	// The previous implementation used os.ReadDir(reposRoot) and treated
+	// every top-level entry as a repo — under multi-segment repos like
+	// library/alpine that meant checking repos/library/tags/ (which never
+	// exists), concluding ENOENT = "no tags", and then os.RemoveAll-ing
+	// repos/library/ recursively, which silently nuked every repo nested
+	// under any namespace directory.
+	//
+	// Now we use the same discovery rule as Repositories(): walk repos/
+	// looking for `tags/` or `manifests/` siblings. Each repo is the parent
+	// of those subdirectories — so a `library/alpine` repo is discovered
+	// as Name="library/alpine", Dir=repos/library/alpine, and the deletion
+	// targets the leaf, not the namespace.
 	reposRoot := filepath.Join(f.root, "repos")
-	repoEntries, err := os.ReadDir(reposRoot)
+	repos, err := f.discoverRepos()
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		// Surface the error so the caller knows the sweep was incomplete
 		// rather than silently reporting empty results.
 		return res, err
 	}
-	for _, entry := range repoEntries {
-		if !entry.IsDir() {
+	for _, r := range repos {
+		if err := cleanRepoName(r.Name); err != nil {
 			continue
 		}
-		repo := entry.Name()
-		if err := cleanRepoName(repo); err != nil {
+		if !repoHasNoTags(r.Dir) {
 			continue
 		}
-		repoDir := filepath.Join(reposRoot, repo)
-		if !repoHasNoTags(repoDir) {
-			continue
-		}
-		if f.repoHasActiveUpload(repo, cutoff) {
+		if f.repoHasActiveUpload(r.Name, cutoff) {
 			continue
 		}
 		// From here on we are committed to deleting the repo. Take the lock
 		// so a concurrent push can't add a tag mid-flight.
-		unlock := f.lockRepo(repo)
-		freed := dirSize(repoDir) + dirSize(filepath.Join(uploadsRoot, repo))
-		if err := os.RemoveAll(repoDir); err != nil {
+		unlock := f.lockRepo(r.Name)
+		freed := dirSize(r.Dir) + dirSize(filepath.Join(uploadsRoot, r.Name))
+		if err := os.RemoveAll(r.Dir); err != nil {
 			unlock()
 			return res, err
 		}
-		_ = os.RemoveAll(filepath.Join(uploadsRoot, repo))
-		pruneEmptyDirs(filepath.Dir(repoDir), reposRoot)
+		_ = os.RemoveAll(filepath.Join(uploadsRoot, r.Name))
+		pruneEmptyDirs(filepath.Dir(r.Dir), reposRoot)
 		unlock()
-		res.RemovedEmptyRepos = append(res.RemovedEmptyRepos, repo)
+		res.RemovedEmptyRepos = append(res.RemovedEmptyRepos, r.Name)
 		res.EmptyRepoFreedBytes += freed
 	}
 

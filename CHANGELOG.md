@@ -6,6 +6,76 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.24] - 2026-09-28
+
+本轮主题:**Critical bug:勾选 GC「也清理 0 tag 仓库」会**递归删除整条命名空间** —— 凡是命名空间目录下挂着子仓库的,子仓库无论有无 tag 都会被一并清掉**。**已现场确认一次事故:158 上 4 个仓库(其中 2 个有 tag)被一次 GC 清零**,磁盘上 `repos/` 直接空了。**这是上线以来最严重的数据丢失 bug**。
+
+### 修复(CRITICAL)
+
+- **GC Pass 3 命名空间遍历 bug**(`internal/storage/filesystem.go`):
+
+  旧实现:
+  ```go
+  repoEntries, _ := os.ReadDir(reposRoot)   // 取 repos/ 直接子项
+  for _, entry := range repoEntries {
+      repo := entry.Name()                  // "library", "webauto-push" ...
+      repoDir := filepath.Join(reposRoot, repo)
+      if !repoHasNoTags(repoDir) { ... }    // 检查 repos/library/tags/
+      os.RemoveAll(repoDir)                 // 删 repos/library/
+  }
+  ```
+
+  旧代码每一行都有问题:
+
+  | 行 | 错在哪 | 后果 |
+  | --- | --- | --- |
+  | `os.ReadDir(reposRoot)` | 只取顶层,**没有递归找真仓库** | `library` 当成 repo 名字 |
+  | `repo := entry.Name()` | 取的是命名空间段,不是仓库全名 | 缺 `/alpine` |
+  | `repoHasNoTags(repos/library)` | 检查的路径根本不存在 tags/ | ENOENT → 当成「无 tag」 |
+  | `os.RemoveAll(repos/library)` | 整条目录树递归删 | `library/alpine`(有 1 个 tag)一并清掉 |
+
+  新实现:抽出 `discoverRepos()` helper,与 `Repositories()` 共享同一套 walk 规则 —— 递归遍历 `repos/`,找 `tags/` 或 `manifests/` 的父目录作为仓库,名字带完整命名空间前缀(如 `library/alpine`)。Pass 3 沿用同一个 helper,**只有叶子仓库被删**,命名空间目录里其他有 tag 的仓库不受影响。
+
+- **根因 / 为什么这条 bug 走到生产**:
+  - 0.5.20 引入 Pass 3 时**没复用列表接口的发现逻辑**,自己写了一段独立的 `os.ReadDir`,把 namespace 当成 repo。
+  - 既有测试 / 场景只覆盖了 Pass 1 + Pass 2(`gc-real.yaml`),Pass 3 在 0.5.20 上线时**没有任何自动化场景**(CHANGELOG 0.5.20 明确写「未补 web-auto 场景,留待后续」)。
+  - 158 上恰好有 `library/alpine` / `library/busybox` 这种**多段仓库名**;测试仓里全是单段名(`busybox`、`alpine`),触发不了 bug。
+  - 类型层 / `gofmt` / `go vet` / `go build` / `tsc` 全过 —— bug 在逻辑层,静态检查拦不住。
+
+- **修复后的 hard gate**:Pass 3 现在跟 `Repositories()` 共享**同一份 walk 代码**,两边永远看到同一个仓库集合 —— 这条 bug 类不可能再分叉回归。
+
+### 变更
+
+- **GC tooltip UX**(`web/src/pages/images-page.tsx`):长 GC 解释从「? 图标的 Tooltip」(右侧、placement=top、文本被右边裁切)搬到「运行 GC 按钮的 Tooltip」(placement=bottomLeft,出现在按钮**下方偏左**,避开按钮所在页面右上角的右边缘);Popconfirm 的 description 只留可交互的 checkbox(破坏性开关);`?` 图标 + `QuestionCircleOutlined` 整个删除(冗余 affordance)。tooltip 文案不变。
+
+### 影响范围(升级须知)
+
+⚠️ **数据丢失警告**(如果你跑过 0.5.20 ~ 0.5.23 的「也清理 0 tag 仓库」):
+
+  - 0.5.20 ~ 0.5.23 任何一次该勾选都**可能误删**所有挂在命名空间下的仓库。如果你在线上跑过 0.5.20+ 的这个开关,**立刻拉 0.5.24 升级,但被删的镜像需要从上游 registry 重新拉回来才能恢复** —— 这是物理删除,没有回收站。
+  - 升级本身不会撤销已发生的删除。**不要在升级前再点 GC**,直接 pull + build + up,先把这个 bug 关掉。
+
+- **本轮 API 行为变化**:
+  - `POST /api/gc` 的 body / 响应**字节兼容** 0.5.23。
+  - 行为变化:Pass 3 现在**只删真仓库,不再误删命名空间目录**。空仓库检查的逻辑没动(仍是「tags/ 为空 + 无 24h 内 upload session」)。
+
+- **未触动项(明确划线)**:
+  - **零兼容策略,no deprecation period**:用户用 0.5.20~0.5.23 已经点了那个勾选就是数据丢失,**0.5.24 修了之后这条路径仍然是「破坏性」**(勾上 = 删 0 tag 仓库,不可恢复),这是设计,不是 bug。
+  - **Pass 1/2/4 逻辑未动**:仅 Pass 3 的「发现仓库」从「读顶层」改成「walk 全树」,隔离。
+  - **`web-auto` 场景仍缺**:CHANGELOG 0.5.20 标注「未补场景」、本轮仍是「未补场景」。强烈建议下一个 PR 起一个 `gc-empty-repos-real.yaml`,dev 上造一个 `library/<repo>` 形态的真仓库跑 Pass 3,断言**只删 0 tag 那个**,**有 tag 的兄弟仓库必须留下来**。这条场景写出来,这条 bug 类以后不会再有。
+
+### 验证
+
+- **类型层**:`web/tsconfig.json` 下 `tsc --noEmit` 仍为 **8 条错误**,全部为基线既有,本轮**改动文件零新增**。
+- **Go 侧门禁**:`gofmt -l internal/` 无输出;`go vet ./internal/... ./cmd/...` 退出码 0;`go build ./internal/... ./cmd/...` 退出码 0。
+- **逻辑一致性**:`Repositories()` 和 Pass 3 都通过 `discoverRepos()` 拿仓库列表 —— 同一份代码,不可能分叉。
+
+### 轮次与号位
+
+- 本轮占 **0.5.24**:**critical bug fix**(数据丢失),按 `AGENTS.md` 判定为**小版本(第 3 位)+1**。需要主版本(0.x → 1.x 切换)的场景是「API 路径大改 / 移除功能 / 数据格式不兼容」,这条 bug 只是修复了一个回归,不动主版本。按 `docs/ROADMAP.md`「号位是预留」的规则,整表自 0.5.24 之后顺延一格;`0.6.0`(TLS 证书管理)由人指定,不随顺延改号。
+
+---
+
 ## [0.5.23] - 2026-09-28
 
 本轮主题:**部署命名与产品名对齐 —— env 变量、image tag、container_name、service name 全部从 `cairn` 改成 `cairn`**。0.5.21 改了产品面对用户时的名字,但运维侧的命名(`.env` 里的 env 变量、`docker compose` 里的 image / container / service)还是旧名,运维脚本和脑内记忆仍要切换两套 —— 这一轮把部署命名也跟上,做到「产品名 = env 名 = image 名 = container 名」完全一致。
