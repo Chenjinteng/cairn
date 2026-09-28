@@ -5,7 +5,6 @@ import {
   DatabaseOutlined,
   DeleteOutlined,
   HddOutlined,
-  QuestionCircleOutlined,
   ReloadOutlined,
   SyncOutlined,
   TagsOutlined,
@@ -304,25 +303,36 @@ export default function ImagesPage({
             重新扫描
           </Button>
           {config?.allowDelete ? (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            // v0.5.24: 长 GC 解释从「? 图标的 Tooltip」搬到「运行 GC 按钮的 Tooltip」,
+            // 配 placement=bottomLeft 让 tooltip 出现在按钮下方偏左 —— 避开按钮
+            // 所在页面右上角的右边缘(原先 ? 图标 tooltip 用 placement=top 会往
+            // 上飘、长文本直接被浏览器裁切)。
+            //
+            // Popconfirm 的 description 只留可交互的 checkbox(破坏性开关);
+            // 长篇解释已迁到 Tooltip 里。
+            <Tooltip
+              title={
+                <div>
+                  GC = Garbage Collection。扫描并清理孤儿 blob（被废弃的上传会话、被解除引用的层），释放磁盘空间。
+                  <br />
+                  注意：删除 manifest 只是解除引用，真正的磁盘空间要 GC 才回收。
+                  <br />
+                  勾选弹窗里的「也清理 0 tag 仓库」会<strong>额外删除整个空仓库目录</strong>。
+                </div>
+              }
+              placement="bottomLeft"
+            >
               <Popconfirm
                 title="确认运行 GC？"
                 description={
-                  // v0.5.20: 弹窗里加「也清理 0 tag 的仓库」勾选框。整个仓库
-                  // 删除比删 blob 危险得多,所以默认 false、勾选后还要把
-                  // 「会删除整个仓库目录」字面写出来。
-                  <div style={{ maxWidth: 320 }}>
-                    <div>扫描并清理孤儿 blob（24h 以上的孤立上传会话）。</div>
-                    <Checkbox
-                      checked={cleanEmptyRepos}
-                      onChange={(e) => setCleanEmptyRepos(e.target.checked)}
-                      // 点击 checkbox 别冒泡到 Popconfirm 外层(否则会误关弹窗)
-                      onClick={(e) => e.stopPropagation()}
-                      style={{ marginTop: 8 }}
-                    >
-                      也清理 0 tag 的仓库（会删除整个仓库目录,不可恢复）
-                    </Checkbox>
-                  </div>
+                  <Checkbox
+                    checked={cleanEmptyRepos}
+                    onChange={(e) => setCleanEmptyRepos(e.target.checked)}
+                    // 点击 checkbox 别冒泡到 Popconfirm 外层(否则会误关弹窗)
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    也清理 0 tag 的仓库（会删除整个仓库目录,不可恢复）
+                  </Checkbox>
                 }
                 okText="运行"
                 cancelText="取消"
@@ -366,15 +376,7 @@ export default function ImagesPage({
               >
                 <Button icon={<DeleteOutlined />}>运行 GC</Button>
               </Popconfirm>
-              <Tooltip
-                title="GC = Garbage Collection。扫描并清理孤儿 blob（被废弃的上传会话、被解除引用的层），释放磁盘空间。注意：删除 manifest 只是解除引用，真正的磁盘空间要 GC 才回收。勾选弹窗里的「也清理 0 tag 仓库」会额外删除整个空仓库目录。"
-                placement="top"
-              >
-                <QuestionCircleOutlined
-                  style={{ color: 'var(--color-text-3)', cursor: 'help', marginInlineStart: -2 }}
-                />
-              </Tooltip>
-            </span>
+            </Tooltip>
           ) : null}
         </div>
       </div>
