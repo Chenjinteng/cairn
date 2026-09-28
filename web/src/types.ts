@@ -360,6 +360,12 @@ export interface ProxyTestResult {
   targetUrl: string;
   registryApiVersion?: string | null;
   error?: string;
+  /**
+   * v0.5.19: human-readable explanation when the upstream returned a non-2xx
+   * response (e.g. "目标要求认证（HTTP 401）；代理可达,目标在线"). `ok` is still
+   * true in that case — see `proxyTestThrough` for the rationale.
+   */
+  note?: string;
 }
 
 /**

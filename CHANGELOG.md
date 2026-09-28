@@ -6,6 +6,49 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.19] - 2026-09-28
+
+本轮主题：**修掉「代理测试把 Docker Hub 匿名 /v2/ 的标准 401 误报成连通失败」**。现象是编辑代理时点「测试连接」、目标填 `https://registry-1.docker.io/v2/`,弹窗直接红字「连通失败」——但同样这条代理在拉取任务里是能正常工作的。
+
+### 修复
+
+- **代理测试判定口径**（`internal/api/handlers_extra.go` 的 `proxyTestThrough`）：旧逻辑把任何 4xx/5xx 当成 `ok: false`，再叠加 `ok:false → 红色"连通失败"` 的 UI 分支（`web/src/pages/proxies-page.tsx` 的 `ProxyTestAlert`），于是 Docker Hub / ghcr.io / quay.io 对匿名 `GET /v2/` 的标准应答 **HTTP 401**（`WWW-Authenticate: Bearer ...` Bearer 挑战，按 Registry V2 协议就是这条路径的"正常应答"）被误判成代理不可用。判定口径改写为**「代理能不能把请求送到目标并拿回应答」**：任何 HTTP 响应（1xx/2xx/3xx/4xx/5xx）都证明代理 + TLS 转发链路是通的，只有 transport 层失败（`client.Do` 返回 err：超时、拒连、TLS 握手失败）才报 `ok: false`。状态码语义保留在 `status` / `statusText` 字段，并新增 `note` 字段给前端一句话解释：401 → 「目标要求认证（HTTP 401）；代理可达,目标在线」；403 → 「目标拒绝访问」；404 → 「目标路径不存在」；5xx → 「上游异常」；其他 4xx → 通用回退。
+- **`registryApiVersion: "2"` 不再被 401 吃掉**：原来仅当 `StatusCode < 400` 才标注 `registryApiVersion`，这导致对 `/v2/` 端点的 401 应答丢失「对面是 Registry V2」的事实信号。现对 `/v2/` 端点的 **401 单独也标 `registryApiVersion: "2"`**——Docker Registry V2 协议对匿名 `/v2/` 的 401 + `WWW-Authenticate: Bearer` 头是这套协议对"我在跑 registry"的明牌。
+
+### 变更
+
+- **前端 `ProxyTestAlert` 着色按状态码分档**（`web/src/pages/proxies-page.tsx`）：原来 `ok:true` 一律绿、`ok:false` 一律红；现在 2xx 绿、4xx **蓝**（代理可达,目标按业务规则拒绝）、5xx **黄**（代理可达,上游异常）、传输失败仍红。这样「代理能用,目标要认证 / 路径写错 / 上游挂了」三种状态在同一弹窗里能一眼分清，避免「明明能拉镜像却被红字吓到」的体验。
+- **`ProxyTestResult` 类型加 `note?: string`**（`web/src/types.ts`），前端把后端的解释原文展示在 description 区域。
+
+### 影响范围（升级须知）
+
+- **受影响版本为 v0.5.0 ~ v0.5.18**：`proxyTestThrough` 在 v0.5.0 引入（与 `TestProxy` 端点同期上线，见 `internal/api/handlers_extra.go:1018`），4xx → `ok:false` 的判定从那以后一直在。
+- **触发条件与观感**：任何「用代理拉公网 registry」的代理条目，编辑弹窗里点测试、目标填 `https://<公网 registry>/v2/` 都会撞红。所有「拉 Docker Hub 用」的代理——也就是日常最高频的那一类——100% 命中。
+- **升级后行为变化**：
+  - 之前红字「连通失败」、但代理其实能用 → 升级后**蓝字**「代理可达 · HTTP 401 · X ms」+ 描述行说明「目标要求认证」；
+  - 真失败的（拒连 / 超时 / TLS 错）依然红字「连通失败」+ 描述给出原始 error，行为不变；
+  - 上游 5xx（代理通了、目标挂）→ 升级后**黄字**「代理可达,上游异常 · HTTP 503」+ note，区别于「代理本身挂了」的红字。
+- **API 契约兼容**：`ok` 字段语义**实质变了**——原来「目标业务侧成功」,现在「代理把请求送到了」。任何仍依赖旧语义的代码 / 测试需要同步改（目前看 grep 没找到外部消费者，主要是 UI 自己用）。
+- **磁盘格式 / 配置 / 路由 / 权限**：均未触动。
+- **未触动项（明确划线）**：
+  - `POST /api/proxies/<id>/test` 与 `POST /api/proxies/test` 的端点形状不变（始终 200 + 信封），仅信封里的 `ok` 判定规则变了。
+  - `Probe`（v0.5.15 起的 TCP-only 探测）不受影响，那条链路只看「TCP 能不能连上 ip:port」,不读 HTTP 响应。
+  - 拉取任务的事前探测 (`ProbePullSource`) 是另一条独立路径,也不受这条改动影响。
+  - **未补 `web-auto` 自动化场景**：「测连接」在 dev 没有该走的端到端断言（需要先在 dev 起一个会按需返回 401/200/5xx 的 mock registry,场景覆盖成本高于本轮主题）。CHANGELOG 里明确记一笔,留给后续单独 PR。
+
+### 验证
+
+- **类型层**：`web/tsconfig.json` 下 `tsc --noEmit` 仍为 **8 条错误**,全部为基线既有,本轮 `proxies-page.tsx` / `types.ts` 改动相关行**零新增**。
+- **Go 侧门禁**：`gofmt -l internal/api/` 无输出；`go vet ./internal/api/...` 退出码 0；`go build ./internal/api/...` 退出码 0。
+- **协议事实**：`registry-1.docker.io/v2/` 对匿名 GET 的标准应答是 401 + `WWW-Authenticate: Bearer realm="registry-1.docker.io"`,这是 Docker Registry V2 协议规定的**正确应答**,与 AGENTS.md §V2 协议事实「`/v2/` 的挑战不带 scope,必须支持申请无 scope 的 token」对应。
+- **生产现场复测待办**：158 容器 `cairn:0.5.18` 升级到 `cairn:0.5.19` 后,编辑 `<proxy>` 代理 → 测试目标 `https://registry-1.docker.io/v2/` → 应弹蓝字「代理可达 · HTTP 401 · X ms」+ 描述「目标要求认证（HTTP 401）；代理可达,目标在线」;同条代理在拉取任务里行为不变,继续能拉。
+
+### 轮次与号位
+
+- 本轮占 **0.5.19**：纯缺陷修复,按 `AGENTS.md` 判定为小版本（第 3 位）+1。**两轮升级各管一件事**：0.5.18 = GC toast undefined/NaN（前端解码层）;0.5.19 = 代理测试 401 误报（后端判定口径 + 前端着色）。按 `docs/ROADMAP.md`「号位是预留」的规则,整表自 0.5.19 之后顺延一格；`0.6.0`（TLS 证书管理）由人指定,不随顺延改号。
+
+---
+
 ## [0.5.18] - 2026-09-28
 
 本轮主题：**修掉「GC 成功提示显示 `undefined` / `NaN`」并补 GC 含义入口**。`gc-real` 验收场景在 0.5.17 验收报告里以 **P2**（中）记录：toast 出现 ≠ toast 内容正确，断言形状才暴露该解码缺陷。

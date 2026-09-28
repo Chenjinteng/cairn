@@ -72,31 +72,58 @@ interface FormValues {
 }
 
 /**
- * v0.5.13: 测连结果提示。新增弹窗的「测试连接」与行内测试弹窗共用一份渲染，
+ * v0.5.13: 测连结果提示。新增弹窗的「测试连接」与行内测试弹窗共用一份渲染,
  * 免得两处文案/颜色各改各的漂移。
+ *
+ * v0.5.19: 着色按状态码分档 —— 2xx 绿色,4xx 蓝色(代理可达、目标按业务规则拒绝),
+ * 5xx 黄色(代理可达、上游异常),传输层失败仍是红色。原来是 ok:true 一律绿、
+ * ok:false 一律红,会把 Docker Hub / ghcr.io / quay.io 对匿名 /v2/ 的标准 401
+ * 应答误报成「连通失败」(v0.5.18 之前一直存在,0.5.19 修)。
  */
 function ProxyTestAlert({ result }: { result: ProxyTestResult }) {
+  const status = result.status;
+  let alertType: 'success' | 'info' | 'warning' | 'error' = 'success';
+  let headline: string;
+  if (!result.ok) {
+    alertType = 'error';
+    headline = '连通失败';
+  } else if (status === undefined) {
+    alertType = 'success';
+    headline = `连通正常 · ${result.elapsedMs} ms`;
+  } else if (status < 400) {
+    alertType = 'success';
+    headline = `连通正常 · HTTP ${status} · ${result.elapsedMs} ms`;
+  } else if (status < 500) {
+    alertType = 'info';
+    headline = `代理可达 · HTTP ${status} · ${result.elapsedMs} ms`;
+  } else {
+    alertType = 'warning';
+    headline = `代理可达,上游异常 · HTTP ${status} · ${result.elapsedMs} ms`;
+  }
   return (
     <Alert
-      type={result.ok ? 'success' : 'error'}
+      type={alertType}
       showIcon
-      message={
-        result.ok
-          ? `连通正常 · HTTP ${result.status} · ${result.elapsedMs} ms`
-          : '连通失败'
-      }
+      message={headline}
       description={
         <div>
           <div style={{ whiteSpace: 'pre-wrap' }}>
             {result.ok ? result.targetUrl : result.error}
           </div>
           {result.ok ? (
-            <div style={{ marginTop: 4, color: 'var(--color-text-3)' }}>
-              目标：<span className="mono">{result.targetUrl}</span>
-              {result.registryApiVersion
-                ? ` · registry API ${result.registryApiVersion}`
-                : ''}
-            </div>
+            <>
+              <div style={{ marginTop: 4, color: 'var(--color-text-3)' }}>
+                目标：<span className="mono">{result.targetUrl}</span>
+                {result.registryApiVersion
+                  ? ` · registry API ${result.registryApiVersion}`
+                  : ''}
+              </div>
+              {result.note ? (
+                <div style={{ marginTop: 4, color: 'var(--color-text-3)' }}>
+                  {result.note}
+                </div>
+              ) : null}
+            </>
           ) : null}
         </div>
       }

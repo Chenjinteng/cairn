@@ -1157,6 +1157,19 @@ func (e *ExtraHandlers) proxyTestTarget(r *http.Request, want string) string {
 // the answer this endpoint exists to produce, not a server error. Shared by
 // TestProxy (saved entry) and TestProxyDraft (unsaved form values) so both
 // report the identical shape.
+//
+// v0.5.19: the "ok" field now answers "did the proxy deliver the request and
+// bring back *any* HTTP response?", not "did the upstream accept the request".
+// The previous `< 400` rule misreported every working public-registry proxy:
+// Docker Hub / ghcr.io / quay.io all answer anonymous GET /v2/ with 401
+// (Bearer challenge), which is the standard Registry V2 protocol response,
+// not a connectivity failure. A 401 absolutely proves the proxy reached the
+// registry; only a transport-layer error (timeout, refused, TLS handshake
+// fail) means "the proxy did not deliver the request", and only that path
+// still produces `ok: false`. Status-code semantics (401 vs 403 vs 5xx) are
+// preserved on the wire via `status` / `statusText` and surfaced to the UI
+// through `note` so the user can tell apart "target wants auth" from
+// "upstream is broken".
 func (e *ExtraHandlers) proxyTestThrough(w http.ResponseWriter, r *http.Request, proxyURL *url.URL, target string) {
 	transport := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
 	client := &http.Client{Transport: transport, Timeout: 10 * time.Second}
@@ -1185,14 +1198,34 @@ func (e *ExtraHandlers) proxyTestThrough(w http.ResponseWriter, r *http.Request,
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 
 	out := map[string]any{
-		"ok":         resp.StatusCode < 400,
+		"ok":         true,
 		"status":     resp.StatusCode,
 		"statusText": resp.Status,
 		"elapsedMs":  elapsed,
 		"targetUrl":  target,
 	}
+	// /v2/ 端点的 401 是 Docker Registry V2 协议对匿名请求的标准应答
+	//（WWW-Authenticate: Bearer ...），等同于「对面真的在跑 registry」。
+	// 这条独立于 status code 的 OK 判断，避免 4xx 路径上丢掉这个信息。
+	isV2 := strings.HasSuffix(target, "/v2/") || strings.HasSuffix(target, "/v2")
 	if resp.StatusCode < 400 {
 		out["registryApiVersion"] = "2"
+	} else if resp.StatusCode == 401 && isV2 {
+		out["registryApiVersion"] = "2"
+	}
+	if resp.StatusCode >= 400 {
+		switch {
+		case resp.StatusCode == 401:
+			out["note"] = "目标要求认证（HTTP 401）；代理可达,目标在线"
+		case resp.StatusCode == 403:
+			out["note"] = "目标拒绝访问（HTTP 403）；代理可达"
+		case resp.StatusCode == 404:
+			out["note"] = "目标路径不存在（HTTP 404）；代理可达,可能 URL 写错"
+		case resp.StatusCode >= 500:
+			out["note"] = fmt.Sprintf("上游异常（HTTP %d）；代理可达", resp.StatusCode)
+		default:
+			out["note"] = fmt.Sprintf("目标返回 HTTP %d；代理可达", resp.StatusCode)
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }
