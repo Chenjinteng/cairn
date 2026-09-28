@@ -18,29 +18,36 @@ import './app.css';
  * 两边必须是同一组值，否则会出现两种不同的蓝。
  */
 const LIGHT_TOKENS = {
-  colorPrimary: '#155AEF',
-  colorBgLayout: '#F2F4F7',
-  colorBgContainer: '#FFFFFF',
-  colorText: '#1E252E',
+  /*
+   * v0.5.22: 与 theme.css 浅色版同步 —— 主色与 info 都换成 Teal 600
+   * (#0D9488),跟 Cairn mark 塔身色一致。语义色 success/warning/error 保留。
+   * 字符大小写保留 hex 的 raw 值(未小写),因为 ConfigProvider 的 token
+   * 校验对大小写不敏感;但与 theme.css 的小写一致会让「两端不同源」这件事
+   * 更显眼,review 时容易发现。
+   */
+  colorPrimary: '#0d9488',
+  colorBgLayout: '#f2f4f7',
+  colorBgContainer: '#ffffff',
+  colorText: '#1e252e',
   colorTextSecondary: '#475468',
-  colorBorder: '#EAECF0',
-  colorSuccess: '#27C274',
-  colorWarning: '#FAAD14',
-  colorInfo: '#1677FF',
-  colorError: '#F43B2C',
+  colorBorder: '#eaecf0',
+  colorSuccess: '#27c274',
+  colorWarning: '#faad14',
+  colorInfo: '#0d9488',
+  colorError: '#f43b2c',
 };
 
 const DARK_TOKENS = {
-  colorPrimary: '#4C8DFF',
-  colorBgLayout: '#0F131A',
-  colorBgContainer: '#171B24',
-  colorText: '#E6EAF2',
-  colorTextSecondary: '#AAB6C8',
-  colorBorder: '#2A313D',
-  colorSuccess: '#3DDC84',
-  colorWarning: '#FFC53D',
-  colorInfo: '#4096FF',
-  colorError: '#FF6B5E',
+  colorPrimary: '#2dd4bf',
+  colorBgLayout: '#0f131a',
+  colorBgContainer: '#171b24',
+  colorText: '#e6eaf2',
+  colorTextSecondary: '#aab6c8',
+  colorBorder: '#2a313d',
+  colorSuccess: '#3ddc84',
+  colorWarning: '#ffc53d',
+  colorInfo: '#2dd4bf',
+  colorError: '#ff6b5e',
 };
 
 const STORAGE_KEY = 'registry-manager-theme';

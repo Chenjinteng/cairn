@@ -6,6 +6,48 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.22] - 2026-09-28
+
+本轮主题:**整体配色与 Cairn Logo 对齐 —— 主色从蓝换 Teal 600,info 与 primary 同色**。0.5.21 把产品名 + Logo 改了,但应用界面仍是蓝主色 —— 这一轮把 UI 主品牌色也跟上,做到「Logo / 顶栏 / 链接 / 按钮 / 选中态」一个色。
+
+### 变更
+
+- **`web/src/theme.css` 浅色版主色**:`--color-primary` 从 `#155aef` 换成 Teal 600 `#0d9488`(Cairn mark 塔身色);`--color-primary-bg-active` 从 `#e1edfc`(浅蓝)换成 Teal 100 `#ccfbf1`(浅 teal);`--color-info` 从 `#1677ff` 换成 `#0d9488`(与 primary 同色 —— info 提示与主品牌色合一,避免 Harbor / Quay / Docker 那种「整屏蓝」的同质化);`--color-side-nav-text-active` / `--color-side-nav-active-bg` 同步。
+- **`web/src/theme.css` 深色版主色**:`--color-primary` 从提亮蓝 `#4c8dff` 换成 Teal 400 `#2dd4bf`(色阶感跟原「蓝 → 亮蓝」一致);深色下 `--color-primary-foreground` 从 `#0b1220`(深蓝)换成 `#042f2e`(深 teal,与 teal-600 同一色族的更深档,保证按钮文字对比度);`--color-primary-bg-active` / `--color-info` / `--color-side-nav-*` 同步。
+- **`web/src/main.tsx` 的 ConfigProvider LIGHT_TOKENS / DARK_TOKENS** 同步替换成对应的 teal 值。token 与 theme.css 必须**字节对应**,否则会出现「自定义 CSS 是 teal,但 antd 表格 / 弹窗 / 下拉还是蓝」的「半 teal」翻车。
+- **品牌资产文件归位**:`tmps/cairn-brand.html` → `docs/cairn-brand.html`。`tmps/` 是 gitignored 临时目录,品牌资产是产品文档的一部分,放在 `docs/` 里随仓库分发,且 README 顶部新增「品牌资产」小节给出链接。
+- **README「品牌资产」段**:指向 `docs/cairn-brand.html` + 引用 `cairn-mark.tsx` + `theme.css`,便于后续接手的同学顺着链接找到全部资产。
+
+### 影响范围(升级须知)
+
+- **视觉变化**:链接、按钮、Tab 选中态、Tag(蓝色预设)、表格选中行、Drawer 头部、Alert info / success 等等所有用 `--color-primary` 的地方都会从蓝变 teal。语义色 `success / warning / fail` 维持绿 / 黄 / 红(已建立的视觉契约,改色会误导)。文字色、边框、背景中性色完全不动。
+- **API / 数据 / 配置**:零变化。
+- **向后兼容**:`theme.css` token 名没改;ConfigProvider 的 token 名也没改;只是具体色值变了。组件层调用方式零改动。
+- **未触动项(明确划线)**:
+  - **Amber `#f59e0b` 当前只用于 Logo 标记点,未引入 UI 强调色**。考虑过用 amber 替代 warning 的 `#faad14`,但改 warning 风险(用户对红黄之争早已稳定)大于收益,留待单独 PR。
+  - **未触动 `web/package.json` 的 `name: "cairn-web"`**:同 0.5.21。
+  - **`internal/webui/dist/` 仍是 gitignored**,由 docker build 的 pnpm build 自动重生成。
+
+### 验证
+
+- **类型层**:`web/tsconfig.json` 下 `tsc --noEmit` 仍为 **8 条错误**,全部为基线既有,本轮 `theme.css` / `main.tsx` 改动相关行**零新增**。
+- **Go 侧门禁**:`gofmt -l internal/` 无输出;`go vet ./internal/... ./cmd/...` 退出码 0;`go build ./internal/... ./cmd/...` 退出码 0。
+- **色值对照**(`theme.css` 与 `main.tsx` 两边必须同值,避免「半 teal」):
+  - 浅色 primary / info:`#0d9488` / `#0d9488`
+  - 深色 primary / info:`#2dd4bf` / `#2dd4bf`
+  - 浅色 primary-bg-active:`#ccfbf1`
+  - 深色 primary-bg-active:`#2dd4bf26`
+- **生产现场复测待办**:158 容器升级到 `cairn:0.5.22` 后,
+  - 浏览器硬刷 → 顶栏左侧 Cairn mark 仍在,但链接、按钮、Tab 选中态、Tag 颜色从蓝变 teal
+  - 切深色主题(右上角)→ 深色底上 teal 更亮(`#2dd4bf`),选中态从「亮蓝底」变成「teal 半透明底」;Cairn mark 自动反白为 teal-300
+  - 警告语调 `success / warning / fail` 三色维持不变(绿 / 黄 / 红)
+
+### 轮次与号位
+
+- 本轮占 **0.5.22**:既有 UI 的品牌色同步优化 + 一个文档归位,按 `AGENTS.md` 判定为**小版本(第 3 位)+1**(既有 UI 的调色,不引入新功能模块)。按 `docs/ROADMAP.md`「号位是预留」的规则,整表自 0.5.22 之后顺延一格;`0.6.0`(TLS 证书管理)由人指定,不随顺延改号。
+
+---
+
 ## [0.5.21] - 2026-09-28
 
 本轮主题：**品牌升级 —— 产品名从「镜像仓库管理」改为 Cairn,顶部 brand 替换为新 Logo**。`cairn` 仍是项目 module path / 二进制名 / 内部代号,跟对外产品名 Cairn 并存。
