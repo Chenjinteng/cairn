@@ -30,7 +30,7 @@ import IgnoreRuleModal from '../components/ignore-rule-modal';
 import LoadError from '../components/load-error';
 import { useAppConfig } from '../config-store';
 import type { ApiResult, AppConfig, IgnoreRules, Inventory } from '../types';
-import { formatDateTime } from '../utils';
+import { formatDateTime, stripUrlProtocol } from '../utils';
 
 interface Props {
   config: AppConfig | null;
@@ -113,7 +113,8 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
     // v0.5.18（F7）：config 缺失时整页已早退，这里只是防御。
     if (!config) return;
     const m = config.mutable;
-    setRegistryUrlDraft(m.registryUrl ?? '');
+    // v0.5.28: 历史值可能还带 http:// 前缀,加载到编辑态时剥掉,完成一次性迁移。
+    setRegistryUrlDraft(stripUrlProtocol(m.registryUrl ?? ''));
     setRegistryNameDraft(m.registryName ?? '');
     setAllowDeleteDraft(m.allowDelete ?? false);
     setAllowPullDraft(m.allowPull ?? false);
@@ -133,8 +134,9 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
     const patch: Record<string, string> = {};
     if (registryUrlDraft.trim() !== (m.registryUrl ?? '')) {
       const v = registryUrlDraft.trim();
-      if (v !== '' && !/^https?:\/\//.test(v)) {
-        message.error('地址必须以 http:// 或 https:// 开头');
+      // v0.5.28: 字段语义改成「裸 host:port」,协议留给 v0.6.0 的 http/https 切换。
+      if (v !== '' && !/^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?(?::\d{1,5})?$/.test(v)) {
+        message.error('地址格式:host 或 host:port(如 registry.example.com:8787),不要带协议');
         return;
       }
       patch['registry.url'] = v;
@@ -234,7 +236,8 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
     // v0.5.18（F7）：config 缺失时整页已早退，这里只是防御。
     if (!config) return;
     const m = config.mutable;
-    setRegistryUrlDraft(m.registryUrl);
+    // v0.5.28: 历史值可能还带 http:// 前缀,加载时剥掉。
+    setRegistryUrlDraft(stripUrlProtocol(m.registryUrl));
     setRegistryNameDraft(m.registryName ?? '');
     setAllowDeleteDraft(m.allowDelete ?? false);
     setAllowPullDraft(m.allowPull ?? false);
@@ -447,22 +450,36 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
           {/* 仓库地址 */}
           <Form.Item
             label={<span>仓库地址（/前缀）</span>}
-            extra="配置本仓库对外暴露的地址（docker login / docker push 用）。示例：http://registry.example.com:8787 或 https://devhub..io；写哪个客户端就连哪个，无需重启。"
+            extra={
+              <>
+                配置本仓库对外暴露的地址（docker login / docker push 用）。示例：<span className="mono">registry.example.com:8787</span> 或 <span className="mono">devhub..io:443</span>。协议 = http（v0.6.0 起可切到 https），写在前面那个固定 badge 上，**这里只填 host:port**。
+              </>
+            }
           >
             {editing ? (
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                {/* v0.5.28: addonBefore 把当前协议 (http) 显式画出来,用户不会被「我刚填的为啥报错」困扰;
+                    v0.6.0 加 https 切换时,这个 badge 改成 Select。 */}
                 <Input
                   className="mono"
                   value={registryUrlDraft}
                   onChange={(e) => setRegistryUrlDraft(e.target.value)}
                   disabled={savingBulk}
                   allowClear
+                  addonBefore={<Tag color="cyan" bordered={false}>http://</Tag>}
+                  placeholder="registry.example.com:8787"
                   style={{ maxWidth: 560 }}
                 />
               </div>
             ) : (
+              // 只读视图也补上协议前缀,避免用户看到「http://registry.example.com:8787」却找不到它是从哪儿配出来的。
               <ReadonlyValue
-                value={config?.mutable.registryUrl || '(空 — pull 任务回退到 Docker Hub)'}
+                value={
+                  (() => {
+                    const v = config?.mutable.registryUrl ?? '';
+                    return v ? `http://${stripUrlProtocol(v)}` : '(空 — pull 任务回退到 Docker Hub)';
+                  })()
+                }
                 mono
               />
             )}

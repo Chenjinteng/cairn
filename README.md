@@ -28,7 +28,7 @@
 3. **库式后端**：HTTP handler 通过 `cmd/server` 装配，业务逻辑在 `internal/` 下，方便后续挂到别人的服务里
 4. **可观测性**：自带 `/healthz` `/readyz`
 
-## 当前状态:v0.5.27(2026-09-28) —— **删除 tag 成功后不弹空 Alert,改顶部 toast**
+## 当前状态:v0.5.28(2026-09-28) —— **仓库地址改成「裸 host:port」(为 v0.6.0 的 http/https 切换铺路);右上角主显示改为「展示名称」**
 
 ✅ 已实现（v0.1 – v0.4）：
 
@@ -80,7 +80,7 @@
 4. `README.md` 里所有 `docker build/tag/push` 示例
 5. `CHANGELOG.md` 新增一节
 
-当前版本：`0.5.27`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
+当前版本：`0.5.28`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
 
 ## 项目结构
 
