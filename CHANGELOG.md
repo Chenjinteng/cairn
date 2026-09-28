@@ -6,6 +6,61 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.33] - 2026-09-28
+
+本轮主题:**修复 v0.5.18 起的 docker pull unauthorized bug —— `/v2/` 在需要 auth 时返 200 + WWW-Authenticate header,被 docker daemon 误判为「不需要 auth」**。
+
+### 修复
+
+- **`/v2/` 也走 `requireBasicAuth` middleware**(`internal/registryd/routes.go:90-119` 的 New 路由组装):
+
+  ```diff
+   - // /v2/ is the protocol "ping" endpoint. The OCI spec lets it 200 even
+   - // when auth is required, so we deliberately do NOT put it behind the
+   - // auth middleware -- docker / skopeo rely on a 200 here to detect
+   - // "this server speaks V2" before issuing authenticated requests.
+   - r.Get("/", h.apiVersion)
+   + // v0.5.33: /v2/ 也放进 requireBasicAuth。之前以为 OCI spec 允许 /v2/
+   + // 在需要 auth 时也返 200(只挂 WWW-Authenticate header),实测 docker daemon
+   + // 看到 200 就**以为不需要 auth**,manifest/blobs 请求**不发 Authorization
+   + // header** → server 返 401 → docker daemon 报 "unauthorized"(根本没带
+   + // creds,没法 retry)。
+   + r.Group(func(r chi.Router) {
+   +   if h.getCreds != nil {
+   +     r.Use(h.requireBasicAuth)
+   +   }
+   +   r.Get("/", h.apiVersion)
+   +   ...
+  ```
+
+- **`apiVersion` 不再主动设 WWW-Authenticate header**:`requireBasicAuth` middleware 在没带/错 credentials 时会自动写 WWW-Authenticate + 401,这里只关心 happy path。
+
+### 根因(158 实测链路)
+
+| 请求序列 | 旧(v0.5.32 及之前) | 新(v0.5.33) |
+| --- | --- | --- |
+| `GET /v2/` 无 creds | `200 OK` + WWW-Authenticate header | `401` + WWW-Authenticate ✓ |
+| `GET /v2/` 带 admin:password | `200 OK` | `200 OK` ✓ |
+| `HEAD /v2/<repo>/manifests/<ref>` | `401`(**无 Authorization**) | `200 OK` ✓(用 GET /v2/ 拿到的 creds 重试) |
+| `GET /v2/<repo>/manifests/<ref>` | `401`(**无 Authorization**) | `200 OK` ✓ |
+
+**关键链路**:
+1. docker daemon 先发匿名 `GET /v2/`(探测 server 协议版本)
+2. v0.5.32 server 返 **200 + WWW-Authenticate header** —— docker daemon 看到 200 就**以为不需要 auth**
+3. 后续 HEAD/GET manifest 请求**不发 Authorization header**
+4. server 返 401(没有 Authorization 就 401,这是 `requireBasicAuth` 的标准行为)
+5. docker daemon 报错 `Error response from daemon: unauthorized`(因为**根本没带 creds**,无法 retry)
+
+**与 v0.5.32 HEAD Flush 修复的关系**:v0.5.32 解决了 keep-alive 僵持问题(HEAD 不再 hang),但**没修根因** —— docker daemon 仍然不带 creds,所以 pull 仍然 unauthorized。本次 v0.5.33 才真正修上。
+
+### 影响范围(升级须知)
+
+- **行为变化**:升级后 `GET /v2/` 无凭证返 **401**(之前返 200)。**已经做过这一步的客户端**(docker / skopeo / registry-manager)会自动用 config.json / --creds 里的 creds 重试,所以登录体验不变。**未配凭证的客户端**会收到 401,符合 OCI spec 期望。
+- **API 契约变化**:`GET /v2/` 状态码在「无凭证 / 凭证错」时从 200 → 401。**这是破坏性变更**,但符合 OCI spec,且客户端都自动 retry。
+- **回归测试**:`go test ./...` 全绿。`requireBasicAuth` 路径行为不变,只是 `/v2/` 也走它。
+
+---
+
 ## [0.5.32] - 2026-09-28
 
 本轮主题:**修复配置 Registry 认证后 `docker pull` 报 `unauthorized` 的根因 —— HEAD handler 在 keep-alive 下僵持,客户端超时被 docker 简化成 `unauthorized`**。
