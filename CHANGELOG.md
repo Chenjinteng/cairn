@@ -6,6 +6,32 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.27] - 2026-09-28
+
+本轮主题:**修复删除 tag 成功后弹空 Alert 的 UI bug —— 后端 `writeJSON` 注入的 message 是空串,前端直接把空字符串渲进 AntD Alert**。
+
+### 修复
+
+- **删除 tag 改用顶部 toast**(`web/src/components/image-detail-drawer.tsx:78-99` 的 `handleDelete`):
+
+  旧实现:成功也 `setNotice(result)`,drawer 顶部 Alert 的 `message={notice.message}` 直接拿后端注入的空串渲染。AntD Alert 的 message 为空时不会报错,只是渲成「只有对勾图标 + 关闭按钮的空白绿条」,让人误以为系统在发什么公告。
+
+  新实现:成功走 `message.success(\`已删除 tag ${record.tag}\`)` 顶部 toast(沿用 `images-page.tsx:250` 删除仓库的模式,3 秒自动消失),**根本不进** `setNotice`。
+
+- **drawer 顶部 Alert 收紧为「错误反馈专用」**(同文件 L202-218):
+
+  - 加 `!notice.success` 守卫:成功路径完全不画 Alert(代码原本有,但因为当时 setNotice(result) 把成功响应也塞进去,渲染分支被走了)。
+  - description 从 `affectedTags.join('、')`(成功路径下读 sibling tags)换成 `错误分类: ${code}` —— 后端拒绝时给用户看 code 是有价值的事实;成功时根本不会进这条分支。
+  - type 从 `'success' | 'warning'` 收窄到 `'warning'`,编译期就锁死「这里只画错误」。
+
+### 影响范围(升级须知)
+
+- **行为变化**:升级后删除单个 tag,drawer 顶部不再出现绿色空 Alert,改在页面右上角弹「已删除 tag X」toast(3 秒自动消失)。失败(allowDelete 关闭、tag 不存在、manifest 删除错误等)依旧在 drawer 顶部画橙 Alert + 错误分类。
+- **API 契约无变化**:后端 `DELETE /api/tags` 响应字节完全一致,只调整前端渲染。
+- **无回归测试变动**:`handleDelete` 是组件内回调,后端逻辑零改动。
+
+---
+
 ## [0.5.26] - 2026-09-28
 
 本轮主题:**热度页面去掉「还没收到任何热度事件」空态提示 —— Cairn 只管自带 registry 的热度,不引导用户排查外部 registry**。
