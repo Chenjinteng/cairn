@@ -40,7 +40,11 @@ export function formatDateTime(value?: string | null, fallback = '--'): string {
 
 /** registry 引用不带协议头：docker pull 里用 host[:port]/path:tag。 */
 export function buildPullCommand(host: string, repository: string, tag: string): string {
-  return `docker pull ${host}/${repository}:${tag}`;
+  // v0.5.28: AppConfig.host 现在是裸 host:port(协议由 AppConfig.url 带),docker pull
+  // 拿到裸 host 默认按 https 处理 —— 这里补 http://,确保 docker 真的能拉。
+  // v0.6.0 引入 https 切换后改成按当前协议补前缀。
+  const prefix = /^https?:\/\//.test(host) ? '' : 'http://';
+  return `docker pull ${prefix}${host}/${repository}:${tag}`;
 }
 
 /**
@@ -124,6 +128,18 @@ export function isDockerHubUrl(url: string): boolean {
     return false;
   }
 }
+
+/**
+ * v0.5.28: 仓库地址改成「裸 host:port」(协议留给后续 v0.6.0 的 http/https 切换)。
+ * 历史值还可能是 `http://registry.example.com:8787` —— 加载到编辑态时统一剥掉协议前缀
+ *  展示,提交时也按裸 host:port 校验/存盘,完成一次性数据迁移。
+ */
+export function stripUrlProtocol(value: string | null | undefined): string {
+  return String(value ?? '').replace(/^https?:\/\//, '');
+}
+
+/** v0.5.28: 仓库地址校验 —— 字母数字 / [._-] 主机段,可选 :端口。 */
+export const HOST_PORT_PATTERN = /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?(?::\d{1,5})?$/;
 
 /** 把任意 Docker Hub 别名归一到真正的 API 主机。 */
 function normalizeDockerHubHost(host: string): string {

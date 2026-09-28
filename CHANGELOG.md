@@ -6,6 +6,62 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.28] - 2026-09-28
+
+本轮主题:**为 v0.6.0「http/https 切换」做准备 —— 仓库地址字段语义改成「裸 host:port」,协议字段拆出来单独管理;展示名称上右上角,不再被 host 淹没**。
+
+### 变更
+
+- **仓库地址字段语义调整**(`internal/api/handlers.go` `MutableFieldType["url"]` 校验 + `GetConfig` 的 `displayURL` 拼接):
+
+  | 旧 (≤v0.5.27) | 新 (v0.5.28) |
+  | --- | --- |
+  | 字段存 `http://registry.example.com:8787`(带协议) | 字段存 `registry.example.com:8787`(裸 host:port) |
+  | 校验:必须 `http://` 或 `https://` 开头 | 校验:必须是合法 host 或 host:port,端口 1..65535,**不允许协议前缀** |
+  | 渲染 URL:直接用字段值 | 渲染 URL:`"http://" + 字段值`(协议在服务端补) |
+
+  协议现在写死 http。**为 v0.6.0「http/https 切换按钮」铺路**:届时这块从硬编码改成读 https toggle 状态,字段本身不动。
+
+- **`isValidHostPort()` 校验 helper**(`internal/api/handlers.go`):
+  - 正则 `^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?(?::\d{1,5})?$`
+  - 端口合法区间 1..65535
+  - 拒绝 `http://` / `https://` 前缀,错误信息直说「不要带协议前缀,只填 host:port」
+
+- **设置页 UI 改造**(`web/src/pages/settings-page.tsx`):
+  - Input 加 `addonBefore={<Tag color="cyan">http://</Tag>}`,让用户一眼看到当前协议 = http,**v0.6.0 改 Select 即可**
+  - placeholder 改成 `registry.example.com:8787`,跟示例对齐
+  - extra 文案:去掉 `http://...` / `https://...` 例子,改成裸 host 例子,并加一句「协议 = http(写在前面那个 badge),**这里只填 host:port**」
+  - 只读视图也补上 `http://` 前缀,避免用户看到「`http://registry.example.com:8787`」却找不到它从哪儿配出来
+
+- **一次性数据迁移**(前端 `stripUrlProtocol()` helper):
+  - 用户已有的 `http://...` 值加载到编辑态时,**自动剥掉协议前缀**显示
+  - 提交后存进 SQLite 的就是新格式
+  - 老用户首次升级后,进设置页保存一次即完成迁移,无需手工改
+
+- **右上角主显示改为「展示名称」**(`web/src/App.tsx`):
+  - 旧:`{config.url}` 单行(展示名称填了没人看到,等于没填)
+  - 新:主行 `config.name`(展示名称);副行 `config.url` 灰色小字号(保留 host 入口可见性,避免操作员失去「当前连哪个 registry」的直觉)
+  - 鼠标 hover 任意位置看 tooltip 都是 `config.url` 全文
+  - 用户原话「展示名称要在右上角显示出来,不然配置就没有用」—— 本轮兑现
+
+- **`buildPullCommand` 内部补协议**(`web/src/utils.ts`):
+  - 旧:接收的 `config.host` 是带协议的完整 URL,直接拼 `docker pull ${host}/...`
+  - 新:`config.host` 是裸 host:port(从 `hostOf(displayURL)` 抽出 host 部分,不含协议);`buildPullCommand` 内部补 `http://` 前缀
+  - 否则 docker pull 拿到裸 host 默认按 https 处理,会失败
+
+### 影响范围(升级须知)
+
+- **存量的 `http://...` 值**:升级后**首次进设置页保存一次**即完成迁移(前端自动 strip,后端按新格式校验)。在此之前显示还是带协议(右上也还是裸 host:port 拼出来的 URL,跟之前一致)。
+- **API 契约无破坏**:`/api/config` 的 `mutable.registryUrl` 字段类型未变(string),只是值的语义变了。客户端调用方需要同步去掉 `^https?:\/\/` 才能拼回原值。
+- **`buildPullCommand` 兼容性**:接收带或不带协议的 host 都行,内部统一补 `http://`。
+- **行为变化**:
+  - 设置页仓库地址 Input 前面多一个 `http://` badge(只读视图前缀也跟着补)
+  - 右上角现在显示「展示名称」作为主标题,URL 退到副行 + tooltip
+  - docker pull 命令现在带 `http://` 前缀(之前是裸 URL,行为其实是 docker 默认按 https 处理;补 http 后语义明确)
+- **回归测试**:本轮纯字段语义调整,没引入新单测。
+
+---
+
 ## [0.5.27] - 2026-09-28
 
 本轮主题:**修复删除 tag 成功后弹空 Alert 的 UI bug —— 后端 `writeJSON` 注入的 message 是空串,前端直接把空字符串渲进 AntD Alert**。

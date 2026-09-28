@@ -99,10 +99,16 @@ export default function App({
             {/* v0.5.9: 经代理 Tag removed — per-credential proxy in proxy library */}
             {config && !config.allowDelete ? <Tag color="green">只读模式</Tag> : null}
             {config && !config.allowPull ? <Tag color="default">禁止拉取</Tag> : null}
+            {/* v0.5.28: 右上角主显示改「展示名称」(用户在设置里填的那个) —— 之前一直只画
+   config.url,展示名称填了没人看到,等于没填。host 退到副文本 + tooltip,
+   操作员要看 registry 入口时 hover 即可,不抢主行的视觉。 */}
             {config ? (
-              <span className="ellipsis mono" title={config.url}>
-                {config.url}
-              </span>
+              <Tooltip title={config.url}>
+                <span className="app-registry-name ellipsis">{config.name || '镜像仓库'}</span>
+                <span className="app-registry-url ellipsis mono" title={config.url}>
+                  {config.url}
+                </span>
+              </Tooltip>
             ) : configFailure ? (
               /* v0.5.18（F6）：顶栏也要有出口 —— 否则读配置失败时各页各报各的，
                  最上面却一直写「加载中…」，看起来像整站卡住。 */

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -150,8 +151,13 @@ func (h *Handlers) GetConfig(w http.ResponseWriter, r *http.Request) {
 	// v0.5.2: URL/Host reflect whichever source wins right now (Mutable
 	// override > env). displayURL is the v0.5 "manage itself" fallback
 	// when no upstream is configured anywhere.
+	//
+	// v0.5.28: RegistryURL 现在存的是「裸 host:port」(协议留给 v0.6.0 的 http/https 切换),
+	// 渲染 URL 时按当前协议补上 http://。v0.6.0 起这里改成读 https toggle 状态。
 	displayURL := h.Cfg.RegistryURL()
-	if displayURL == "" {
+	if displayURL != "" {
+		displayURL = "http://" + displayURL
+	} else {
 		displayURL = "http://" + r.Host // cairn now manages itself; no upstream set
 	}
 	writeJSON(w, http.StatusOK, AppConfig{
@@ -228,10 +234,19 @@ func (h *Handlers) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 		val := strings.TrimSpace(rawVal)
 		switch config.MutableFieldType[key] {
 		case "url":
-			if val != "" && !strings.HasPrefix(val, "http://") && !strings.HasPrefix(val, "https://") {
-				writeError(w, r, http.StatusBadRequest,
-					errors.New(key+" must start with http:// or https://, or be empty"))
-				return
+			// v0.5.28: 字段语义改成「裸 host:port」。协议留给 v0.6.0 的 http/https 切换,
+			// 现在写死 http 所以这里只接受 host[:port],不允许任何协议前缀。
+			if val != "" {
+				if strings.HasPrefix(val, "http://") || strings.HasPrefix(val, "https://") {
+					writeError(w, r, http.StatusBadRequest,
+						errors.New(key+" 不要带协议前缀,只填 host:port(协议留给 v0.6.0 的 http/https 切换)"))
+					return
+				}
+				if !isValidHostPort(val) {
+					writeError(w, r, http.StatusBadRequest,
+						errors.New(key+" 必须是合法 host 或 host:port(字母数字 . _ - 加可选 :端口)"))
+					return
+				}
 			}
 		case "int":
 			if n, err := strconv.Atoi(val); err != nil || n <= 0 {
@@ -357,6 +372,25 @@ func hostOf(rawURL string) string {
 		return u.Host
 	}
 	return rawURL
+}
+
+// v0.5.28: 仓库地址 = 裸 host[:port],不带 http(s)://。
+// 协议留给后续 v0.6.0 的 http/https 切换;现在写死 http。
+// 端口合法区间 1..65535,host 段允许字母数字 . _ -。
+var hostPortRe = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?(?::\d{1,5})?$`)
+
+func isValidHostPort(val string) bool {
+	if !hostPortRe.MatchString(val) {
+		return false
+	}
+	// 端口在 1..65535。
+	if i := strings.LastIndexByte(val, ':'); i >= 0 {
+		port, err := strconv.Atoi(val[i+1:])
+		if err != nil || port < 1 || port > 65535 {
+			return false
+		}
+	}
+	return true
 }
 
 // --- inventory ---------------------------------------------------------------
