@@ -6,6 +6,41 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.26] - 2026-09-28
+
+本轮主题:**热度页面去掉「还没收到任何热度事件」空态提示 —— Cairn 只管自带 registry 的热度,不引导用户排查外部 registry**。
+
+### 变更
+
+- **`statsNotice()` 返回类型收窄**(`web/src/pages/stats-page.tsx:813`):
+  - 旧:`{type, message, description}` 三种形态(DB 报错 / `allowRegistryEvents=false` / 一切就绪但窗口内没事件 —— 后者返回 `info` 提示 + 长篇延伸「是不是外部 registry 没配好?`REGISTRY_NOTIFY_TOKEN`?Harbor 怎么打开 notifications?」)
+  - 新:`{type: 'warning', ...} | null` —— DB 错 / `allowRegistryEvents=false` 才返回 warning,其他场景返回 `null`
+  - 写明的设计意图:**Cairn 0.5.23 起定位改成「自带 registry 的镜像基础设施平台」**,事件=0 只表示当前窗口没 pulls,**不再代表操作员配错了什么**;插一条「你是不是没配 REGISTRY_NOTIFY_TOKEN」反而会让人误以为系统没在干活。
+
+- **`empty` 分支彻底不画任何提示**(原行 ~620-647 一整段 `<Alert>` + `<Collapse>` 嵌入 `NotifyConfigSnippet` 已删除):
+  - KPI 卡片自带的「事件总数 0 / 拉取次数 0」已经是准确表达
+  - 真要排查走下方「最近事件」面板(不受 200 条窗口限制、重启也不丢)与 KPI 自检
+  - 当前分支留一行注释说明 v0.5.26 移除原因,免得有人回看 git blame 误以为是漏改
+
+- **`!config.statsEnabled` 分支加 `notice ?` 守卫**(`web/src/pages/stats-page.tsx:553-566`):
+  - 旧实现:`statsEnabled=false` 时**无脑**展示 alert + `NotifyConfigSnippet`(外部 registry 配置片段)
+  - 新实现:仅当 DB 报错或 `allowRegistryEvents=false` 时才展示告警 + 配置片段;其它情况让页面空白显示 metric 0
+  - 与「当且仅当 DB 报错时显示告警 + 配置片段」保持一致
+
+### 保守保留 / 待后续清理
+
+- **`NotifyConfigSnippet` 组件**(整段保留,未删除):本轮只针对用户要求的「没事件」提示做最小改动。`NotifyConfigSnippet`(附 YAML 配置片段 + 「Distribution 没有热重载,改完必须重启 registry」提醒)目前**仍**在 `!config.statsEnabled` 分支被 `notice ?` 守卫渲染。**Cairn 不接外部 registry,这部分组件理论上应该整体下线**,但用户没明确要求删,留到下一轮单独清理。
+  - 跟踪项:打开 `web/src/pages/stats-page.tsx`,搜 `NotifyConfigSnippet`,整段应该删掉(连同 `NOTIFY_CONFIG_YAML` 常量、`TextCopyButton` helper 若不再被引用)。
+  - 跟踪项:`internal/server/api.go` 的 `notify.token` / `AllowRegistryEvents()` 配置面也一并评估**(本轮不动后端,只删前端)**。
+
+### 影响范围(升级须知)
+
+- **后端零变化**:本轮纯前端 UI 删除,`/api/stats/*` 响应字节、`stats.db` schema 全部不变。
+- **行为变化**:升级后即使从来没收到任何事件,「热度」页面也不会再弹提示;打开就是干净的 KPI + Top 榜单(空) + 趋势图 + 最近事件。
+- **无回归测试变动**:`statsNotice()` 是纯展示函数,不引入新单测。
+
+---
+
 ## [0.5.25] - 2026-09-28
 
 本轮主题:**修「拉取平台过滤不生效」的 UX bug —— 后端其实过滤对了,但 tag 仍指向原始 multi-arch INDEX,UI 因此显示"+13"**。

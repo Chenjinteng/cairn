@@ -542,21 +542,28 @@ export default function StatsPage({ config, onConfigChange }: Props) {
    */
   const notice = statsNotice(config);
 
-  // 未启用：按原因解释，并始终给出 registry 侧配置片段。绝不报错。
+  // 未启用:仅在「确实有错误」(DB 坏/禁收事件)时显示告警 + 配置片段;无错就让
+  // 页面空白显示 metric 0 —— v0.5.26 之前这里固定 alert + NotifyConfigSnippet
+  // (外部 registry 配置),现在 Cairn 不接外部,这段保留也不合适,但用户只要求
+  // 去掉「没事件」那条,本轮保守保留 NotifyConfigSnippet,留给后续单独清理。
   if (!config.statsEnabled) {
     return (
       <div className="page">
         {header}
-        <Alert
-          type={notice.type}
-          showIcon
-          message={notice.message}
-          description={notice.description}
-        />
-        <div className="panel" style={{ padding: 16 }}>
-          <h3 className="stats-panel-title">外部 registry 需要这样配（可选）</h3>
-          <NotifyConfigSnippet />
-        </div>
+        {notice ? (
+          <Alert
+            type={notice.type}
+            showIcon
+            message={notice.message}
+            description={notice.description}
+          />
+        ) : null}
+        {notice ? (
+          <div className="panel" style={{ padding: 16 }}>
+            <h3 className="stats-panel-title">外部 registry 需要这样配（可选）</h3>
+            <NotifyConfigSnippet />
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -610,34 +617,9 @@ export default function StatsPage({ config, onConfigChange }: Props) {
         />
       </div>
 
-      {empty ? (
-        <Alert
-          type={notice.type}
-          showIcon
-          message={notice.message}
-          description={
-            <div>
-              <div>{notice.description}</div>
-              <div style={{ marginTop: 4, color: 'var(--color-text-3)' }}>
-                所选 {days} 天窗口内没有符合口径的事件，下面的「最近事件」能看到 registry
-                到底发过什么。
-              </div>
-              {/* 已经能用了，配置片段就别再占显眼位置；需要时展开。 */}
-              <Collapse
-                ghost
-                style={{ marginTop: 8 }}
-                items={[
-                  {
-                    key: 'notify-config',
-                    label: '要让外部 registry 也算进热度？查看配置片段',
-                    children: <NotifyConfigSnippet />,
-                  },
-                ]}
-              />
-            </div>
-          }
-        />
-      ) : null}
+      {/* v0.5.26 起空态不再画任何提示：Cairn 只管理自带 registry 的热度,「事件=0」只表示
+          当前窗口内没有 pulls,不需要用户去配 REGISTRY_NOTIFY_TOKEN / 排查外部 registry。
+          真要排查走下面的「最近事件」面板与 KPI 自检。 */}
 
       {!empty ? (
         <div className="panel" style={{ padding: 16 }}>
@@ -817,14 +799,22 @@ export default function StatsPage({ config, onConfigChange }: Props) {
 
 /**
  * 「为什么没有热度数据」。按原因分档，因为处置方式完全不同：
- * 库坏了要找服务端看数据目录，开关关了要改环境变量，没配密钥要两边配同一个值，
- * 而一切就绪时可能只是真的没人用 —— 最后一种不能断言用户配错。
+ * 库坏了要找服务端看数据目录，开关关了要改环境变量，
+ * 而一切就绪时可能只是真的没人用 —— 这种情况不再展示提示,因为 metric 卡片
+ * 已经老老实实显示「0」,再插一条「还没收到事件」的解释只会让操作员误以为
+ * 系统没在干活。Cairn 只负责自带的 registry 产生的 push / pull,不接外部
+ * registry,所以「没配 NotifyToken / 别忘了加外部配置」这类提示已无意义。
+ *
+ * v0.5.26: 移除原本「一切就绪 + 窗口内没有事件」分支的 info 提示 —— 那是基于
+ * 历史假设(cairn 还能收外部 registry 的事件),现在 Cairn 定位改成
+ * 「自带 registry 专属」之后,「事件=0」就是「事件=0」,不再有「你是不是
+ * 配错了」的延伸解释。
  */
 function statsNotice(config: AppConfig): {
-  type: 'warning' | 'info';
+  type: 'warning';
   message: string;
   description: ReactNode;
-} {
+} | null {
   const statsError = config.statsError;
 
   if (statsError) {
@@ -861,28 +851,11 @@ function statsNotice(config: AppConfig): {
     };
   }
 
-  return {
-    type: 'info',
-    message: '还没收到任何热度事件',
-    description: (
-      <div>
-        <div>
-          自带的 registry 已经会自动计入 push / pull，不需要任何额外配置。
-          这里一条事件都没有，最可能的是最近真的没人 push / pull ——
-          不要据此断定用户配错了。
-        </div>
-        <div style={{ marginTop: 4, color: 'var(--color-text-3)' }}>
-          {config.statsSince
-            ? `服务端最早的数据是 ${config.statsSince}，可能不在当前时间窗内，可以切到 90 天看看。`
-            : '排查顺序：随便 push / pull 一个镜像 → 回本页点「刷新」。'}
-          {' '}
-          如果你想让<strong>外部</strong> registry（Docker Distribution /
-          Harbor 等）也算进来，再去 <span className="mono">REGISTRY_NOTIFY_TOKEN</span> 处配
-          <span className="mono">共享密钥</span>，并把下面的配置片段塞到外部 registry 的 config.yml。
-        </div>
-      </div>
-    ),
-  };
+  // v0.5.26 之前:这里返回 info「还没收到任何热度事件」+ 长篇延伸解释(怎么排查、
+  // 怎么接外部 registry)。删除原因:Cairn 现在只管理自带 registry 的热度,
+  // metric 卡片显示「事件总数 0」已是准确表达;插一条「你可能配错了」的延伸
+  // 会让操作员误以为系统没在干活。
+  return null;
 }
 
 /** 可复制的 registry notifications 配置片段 + 重启提醒。 */
