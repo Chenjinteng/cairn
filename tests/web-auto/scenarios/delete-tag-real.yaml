@@ -6,7 +6,8 @@
 # 删除只解除引用，磁盘回收要跑 GC —— 见 gc-real.yaml（独立场景，避免 GC 耗时掐断删除证据）。
 #
 # 仓库级删除（DELETE /api/repositories/{repo}）拆到独立场景 delete-repo-real.yaml：
-#   本 registry 现存仓库名全为多段名（含 /），多段名的仓库级删除命中已知缺陷（见报告 P1）。
+#   v0.5.29 起镜像列表行内不再有「删除仓库」入口（见 images-page.tsx:229-242 的决策注释），
+#   该场景因此改为「UI 负向回归守卫 + 后端保留端点契约验证」。
 #
 # ⚠️ 破坏性：会真的删掉 registry 里的 webauto-pull/busybox。
 #    dev 环境数据不作数（2026-09-27 用户授权），其他环境不要跑。
@@ -15,13 +16,20 @@
 #   1. 抽屉里 tag 行的删除按钮是**纯 icon**（icon={<DeleteOutlined/>}，无 children）
 #      → 没有文案可依赖，只能用 .ant-btn-dangerous 定位；同列 CopyOutlined 按钮非 danger，可区分。
 #   2. 抽屉删除的 Popconfirm：title=「确认删除 <tag>？」、okText=「确认删除」（4 汉字 → 不插空格）。
-#   3. 列表行「删除」按钮**带 icon** → antd autoInsertSpace 不生效 → 文本是「删除」；
-#      它的 Popconfirm OK 是**无 icon 的 2 汉字** → 插空格 → 「删 除」。
-#      两者严格互斥：has-text("删 除") 不会误命中行内「删除」。
-#   4. 弹窗一律加 :not(.ant-popover-hidden) 作用域（antd 关闭后节点驻留 DOM，
+#   3. v0.5.27 起「删 tag 成功」**不再画 drawer 内 Alert**，改走顶部 message toast
+#      （image-detail-drawer.tsx:86-95 的成功分支只有 message.success(`已删除 tag ${tag}`)）。
+#      只有**失败**才 setNotice → 渲染 drawer 顶部 Alert（`.ant-alert-warning`，message 取后端文案）。
+#      → 旧断言 `.ant-drawer .ant-alert-success` 在 0.5.27+ 必然失效，已改为「toast 快照」两步。
+#   4. message 是命令式 API、3 秒自动消失，直接 assert 会撞竞态 → 页内轮询抓文本 + 注入
+#      DOM 标记 #__tag_toast，再对标记做 assert（evaluate 无断言能力，只能这样搭闸门）。
+#   5. 弹窗一律加 :not(.ant-popover-hidden) 作用域（antd 关闭后节点驻留 DOM，
 #      runner 的 css 定位非 strict、取首个匹配 —— 见 images-page.yaml 头部说明）。
-#   5. 删 tag 后仓库行**不会消失**：后端 buildRepoView 无论 tags 是否为空都回带 name，
-#      前端 handleDeleted 用同名快照替换 → 行仍在、Tag 数变 0。故第 4 步可继续点该行。
+#   6. 删 tag 后仓库行**不会消失**：后端 buildRepoView 无论 tags 是否为空都回带 name，
+#      前端 handleDeleted 用同名快照替换 → 行仍在、Tag 数变 0。故末步仍能断言该行可见。
+#
+# 步数 × 时长口径：runner.js:274 `stepTimeoutMs = timeout / max(steps, 5)`。
+#   本场景 19 步、跑时传 timeout=300000 → 单步硬上限 300000/19 = 15789ms，
+#   故所有显式 timeout ≤12000ms、页内轮询 LIMIT=10000ms 都在预算内。
 #
 # 前置：webauto-pull/busybox:latest 存在（由 pull-real.yaml 拉入）
 # 用法：POST /api/run {scenario: "cairn/delete-tag-real", env: "dev", timeout: 300000}
@@ -30,8 +38,9 @@ description: |
   真实删除（tag 级；dev 专用，破坏性）：
     1. 搜索定位 webauto-pull/busybox
     2. 打开镜像详情抽屉，删除 tag latest（后端按 digest 删 manifest）
-    3. 断言抽屉内成功提示 + tag 列表变空态
-    4. 关闭抽屉，断言仓库行仍在（删 tag 不改仓库存在性）
+    3. 轮询顶部 toast 断言「已删除 tag latest」（v0.5.27 起成功不再画 drawer Alert）
+    4. 断言抽屉 tag 列表变空态
+    5. 关闭抽屉，断言仓库行仍在（删 tag 不改仓库存在性）
   收尾即绿：删 tag 后仓库仍在是期望行为；仓库级删除见 delete-repo-real.yaml。
 env: dev
 tags: [destructive, images, cairn]
@@ -129,11 +138,41 @@ steps:
         - { type: css, value: '.ant-popconfirm:not(.ant-popover-hidden) .ant-popconfirm-buttons button:has-text("确认删除")' }
     timeout: 8000
 
-  - name: 断言抽屉内成功提示
+  # evaluate 无断言能力（runner.js 的 case 'evaluate' 只 return {status,result}）：
+  # 「等条件」一律脚本内轮询 → 注入 DOM 标记 → 再由 assert 读标记做硬闸门。
+  - name: 轮询删除结果 toast 并注入快照标记
+    action: evaluate
+    script: |
+      (async () => {
+        const t0 = Date.now();
+        const LIMIT = 10000;
+        const STEP = 200;
+        let picks = [];
+        const snap = () => Array.from(document.querySelectorAll('.ant-message-notice-content'))
+          .map(el => (el.innerText || '').replace(/\s+/g, ' ').trim())
+          .filter(t => !!t);
+        while (Date.now() - t0 < LIMIT) {
+          picks = snap();
+          if (picks.some(s => s.indexOf('已删除 tag') >= 0 || s.indexOf('删除失败') >= 0)) break;
+          await new Promise(r => setTimeout(r, STEP));
+        }
+        const old = document.getElementById('__tag_toast');
+        if (old) old.remove();
+        const d = document.createElement('div');
+        d.id = '__tag_toast';
+        d.style.cssText = 'position:fixed;left:0;bottom:0;z-index:99999;font-size:1px;color:transparent;';
+        d.textContent = picks.join(' | ') || '(no-message)';
+        document.body.appendChild(d);
+        return JSON.stringify({ outcome: picks.length ? 'captured' : 'empty', elapsedMs: Date.now() - t0, picks: picks });
+      })()
+
+  - name: 断言提示为「已删除 tag latest」
     action: assert
-    type: visible
-    selector: '.ant-drawer .ant-alert-success'
-    timeout: 12000
+    type: text
+    selector: '#__tag_toast'
+    value: "已删除 tag latest"
+    match: contains
+    timeout: 6000
 
   - name: 断言抽屉 tag 列表变空态
     action: assert
@@ -158,7 +197,7 @@ steps:
     selector: '.app-content tr.ant-table-row:has-text("webauto-pull/busybox")'
     timeout: 12000
 
-# 期望结果（步数与 steps 逐一对应：18）
+# 期望结果（步数与 steps 逐一对应：19）
 expected:
-  totalSteps: 18
+  totalSteps: 19
   maxDuration: 300000
