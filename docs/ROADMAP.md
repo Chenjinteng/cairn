@@ -17,7 +17,7 @@
 | 0.5.17 | 拉取预检误报修复：前端消费探测结论 · 后端校验源镜像存在性 | 缺陷修复 | **已发布**（2026-09-27） |
 | 0.5.18 | 韧性轮 + 遗留收口：前端不再假死 · 后端不再阻塞 · 拉取历史闭环 · 4 项既有缺陷 · **部署方案收敛（破坏性）** | 缺陷修复 / 优化（含 1 项新能力，见下） | 待开工 |
 | 0.5.19 | 工程化：最小 CI · `-race` 守门 | 工程化 | 待开工 |
-| 0.6.0 | TLS 证书管理 | 新模块（中版本） | 号位已定，待开工 |
+| 0.6.0 | registry 同步（regsync 内建）：拉 / 推 双向可配 | 新模块（中版本） | 号位已定，待开工 |
 
 > **号位是预留，不是承诺。** 中途插入更高优先级的 hotfix 时，它占用顺位号位，本表自上而下整体顺延；
 > `0.6.0` 由人指定，不随顺延改号。
@@ -101,7 +101,7 @@ v0.5.17 交付时记录的「已知遗留」共 5 条，经逐条取证后全部
 
 **号位说明（L1 含 1 项新能力）**
 
-L1（拉取历史闭环）按 `AGENTS.md` 属**用户可感知的新能力** → 严格按规则应进中版本；而 `0.6.0` 已由人指定给 TLS 证书管理、不随顺延改号。
+L1（拉取历史闭环）按 `AGENTS.md` 属**用户可感知的新能力** → 严格按规则应进中版本；而 `0.6.0` 已由人指定、不随顺延改号（2026-09-28 由同步议题替换原 TLS 议题）。
 故按人指定把 L1~L5 并入 `0.5.18` 这一交付批次；**发版时需再确认号位**（若坚持按性质判定，L1 应拆到 `0.6.x`，其余 4 条留在 `0.5.18`）。
 
 **追加验收（随 L1~L5）**
@@ -179,26 +179,134 @@ compose 从不传递（旧 compose 也从未列 `PORT` ⇒ `.env` 里的 `PORT` 
 韧性轮的回归测试（例如「`List` 在 500ms 内必须返回」这类超时型断言）如果不进固定流程，
 下次改动照样能悄悄退化。E5 是本轮临时验证点的固化——**验证方式本身要被版本化**。
 
-## 0.6.0 · TLS 证书管理（新模块，中版本）
+## 0.6.0 · registry 同步（regsync 内建）（新模块，中版本）
 
-号位 0.6.0 由人指定，不随顺延改号。本路线图里按「中版本」办理的改动有三处：**0.5.12 代理交互轮**（新增「一键探测全部」这一用户可感知的新能力，按性质自动判定）、**0.5.13 新增弹窗内「测试连接」**（保存前试连，同为用户可感知的新能力，按性质自动判定），以及本轮 **0.6.0**（号位由人指定）。
+号位 0.6.0 由人指定，不随顺延改号（2026-09-28 由同步议题替换原 TLS 议题）。
+**TLS 证书管理** 不在本轮做；其触发条件与决策归档仍见 `AGENTS.md`「HTTPS / TLS 证书管理」节，待真正需求落地再排下一号位。
 
-- 现状（开工起点，已实测）：
-  - `internal/server/server.go:213-222` 已预留 `TLSConfig`，但只设了 `MinVersion: tls.VersionTLS12`；
-    而 `:282` 实际调用的是 `ListenAndServe()` —— **没有证书装载路径，该字段当前不生效**。
-  - `internal/config` **没有任何证书相关配置项**（不存在 `tls_*`）：证书路径 / 开关 / SAN 均需新增。
-  - 出站方向另有 `internal/registry/client.go:97` 的 `InsecureTLS`（按 registry 跳过证书校验），
-    属于上游连接选项，与本模块无关，勿混为一谈。
-- 规划要点：
-  - 数据目录（`REGISTRY_CREDENTIALS_DIR`，默认 `/app/data`）新增证书存储
-  - 上传自有证书 / 一键生成自签名证书
-  - 证书与私钥落盘，容器重建后不丢失（挂卷约定见 `AGENTS.md`）
-  - 服务启动路径从 `ListenAndServe()` 切到带证书的监听，让预留的 `TLSConfig` 真正生效
-- 待确认（开工前需先回答）：
-  - 证书轮换与热加载的边界：是否需要 `SIGHUP` 之外的重载入口
-  - 与单二进制 / scratch 镜像约束的兼容性（不引入外部依赖）
-  - 自签名证书的默认有效期与 SAN 默认值
-  - 同端口按 mode 切换（HTTP / HTTPS）如何与单个 `http.Server` 监听器共存
+### 背景
+
+- 用户当前用 [regsync](https://github.com/regsync/regsync) 在两个独立 registry 间做同步，希望把这一能力内建进 cairn，作为产品能力而不是外部依赖。
+- 0.6.0 只做「registry ↔ registry」的同步，**不做多 registry 聚合**（后者违反 `AGENTS.md`「单进程单二进制、单 registry」原则）。
+- 双向同步不在本轮做"互相同步"特殊处理：cairn-A 有「A→B」任务 + cairn-B 有「B→A」任务即视为双向，由各端独立配置组合，cairn 不感知「对端也在同步」。
+
+### 设计要点
+
+#### 同步任务模型
+
+每条同步任务 = (源, 目标, 调度, repo 过滤, 可选目标前缀, 凭据引用)。
+
+- 源 / 目标 二选一是「本机」，另一边是「远端 registry URL」。
+- 源 ≠ 目标（不能配成自己跟自己同步）。
+- 不做「远端 ↔ 远端」中转模式 —— cairn 不是 sync hub。
+- 数据落地在 SQLite，跟现有 `pull_*` / `settings_*` 表同库。
+
+#### 方向（拉 / 推）
+
+- **拉取任务**：远端 → 本机。本机作为目标，源远端可只读。
+- **推送任务**：本机 → 远端。出于网络拓扑原因（DMZ、单向可达、上游只能拉不能暴露），需要让本机主动把镜像推到对端。
+- **双向同步** = A 上有「A→B」任务 + B 上有「B→A」任务，互不感知。
+
+#### repo 范围匹配（iv 混合）
+
+- 默认同步源 registry 全 catalog。
+- 用户可填「拒绝列表」（deny list）按 repo 名精确排除；空 = 全量。
+- **不做正则**（regsync 也提供 regex，但 cairn 用户群体对正则门槛偏高，需要时再补）。
+- 跟 regsync 默认行为对齐，迁移成本最低。
+
+#### 凭据
+
+- 打通 v0.2 凭据库（`internal/credentials/`，AES-256-GCM 加密 JSON），同步任务**只引用凭据 ID**，不在任务里塞明文。
+- 拉方向需要源远端的**读权限**凭据（Docker Hub / ghcr 走 Bearer Token，私有 registry 走 Basic Auth，cairn 当作 Basic Auth 远端）。
+- 推方向需要目标远端的**写权限**凭据（cairn 远端用 Basic Auth，外部 registry 按其 scheme）。
+- 出站方向证书校验沿用现有 `internal/registry/client.go:97` 的 `InsecureTLS` 字段，不在本轮为同步专门做证书开关。
+
+#### 调度
+
+- 内嵌 cron，cairn 进程内跑 ticker，跟现有 `internal/events` 模块复用 ticker 模式。
+- 每条任务可单独关调度（仅手工触发）；开调度则按 cron 表达式到点跑。
+- 单次执行时长可超过调度间隔时，**跳过本次**而非排队（避免积压）。
+
+#### repo 映射
+
+- 默认 M1（1:1 保留）：源 `team-a/web:v1` → 目标 `team-a/web:v1`。
+- UI 可选「目标前缀」输入框，留空 = M1，填了 = M2（`mirrored/team-a/web:v1`）。
+- 不做去前缀（M3）。
+
+### 代码结构
+
+```
+internal/sync/
+  types.go        // SyncTask, TaskRun, Direction 枚举
+  engine.go       // copy(repo, src, dst) — 复用 pull executor 的 blob 推送路径
+                   // 拉取 = (远端 client, 本地 push);推送 = (本地 client, 远端 push)
+                   // 两侧都用现有 internal/registry/client.go，无新出栈
+  scheduler.go    // cron 解析 + ticker(复用 events 模块模式)
+  filter.go       // repo deny list
+  store.go        // SQLite: sync_tasks + sync_runs 表
+internal/api/
+  sync_handlers.go // GET/POST/PUT/DELETE /api/sync, POST /api/sync/:id/run,
+                   //              GET /api/sync/:id/runs
+web/src/pages/
+  Sync.tsx         // 镜像同步页面(独立顶部 tab,跟"拉取队列"并列)
+```
+
+预计 **~1500 行 Go + ~400 行 TS**。
+
+### 复用现状（开工前要敲定的代码接缝）
+
+- 现有 `internal/registry/blob.go` 已有完整 BlobExists / StartBlobUpload / UploadBlob 链路 —— 同步引擎直接复用，不重写。
+- 现有 `internal/pull/executor.go` 的推送路径（拉方向）—— 抽出「读 src + 写 dst」通用化即可覆盖推方向，无需新增两套。
+- 现有 `internal/db/` 的 SQLite 表迁移机制（v0.3 起）—— 新增 `sync_tasks` / `sync_runs` 表走同一套迁移。
+- 现有 `internal/credentials` 凭据库 —— 同步任务表加 `credential_id` 外键，不复制凭据存储。
+
+### 阶段交付（Phase 拆解）
+
+#### Phase 1 · 拉方向骨架（先跑通端到端）
+
+- `internal/sync/{types,store,filter,engine}.go` 写完
+- 拉方向 API：`GET/POST/PUT/DELETE /api/sync`、`POST /api/sync/:id/run`
+- 端到端：手工触发一条「远端 → 本机」任务跑通，blob / manifest 全部走通
+- 单测：`engine` 复制语义、`filter` deny list
+
+#### Phase 2 · 推方向
+
+- engine 抽象「src → dst」通用化（同一份 `copy` 函数，src 与 dst 互换）
+- 推方向端到端跑通（拿 Phase 1 的镜像反向再推一次）
+- 单测：双向对称
+
+#### Phase 3 · 调度
+
+- `scheduler.go` cron 表达式解析（先支持标准 5 字段，秒级与 timezone 后续再说）
+- ticker 与 events 模块对齐
+- 「跳过本次不排队」逻辑
+
+#### Phase 4 · UI
+
+- `Sync.tsx` 任务列表 + 新建 / 编辑 / 删除 / 立即运行
+- 同步历史（每次 run 的状态、起止时间、复制了多少 manifest / blob）
+- 顶部 tab 加「同步」入口，跟「拉取队列」并列
+- 设置页「凭据」tab**不变**，仅同步任务页引用凭据 ID 下拉
+
+### 验收标准
+
+- 跑通端到端：起两个 cairn 实例（A、B），B 上配「从 A 拉 `library/nginx:1.25`」任务，A 上 push 一个 `library/nginx:1.25`，B 上手工触发任务，B 内出现该镜像，digest 一致。
+- 跑通推方向：B 上配「推到 A」任务，B 内 push 一个镜像，A 内出现。
+- 跑通调度：cron 表达式配置为 `*/5 * * * *`，等一个周期，任务自动执行且 UI 显示上次成功时间。
+- 跑通 deny list：源有 10 个 repo，deny 1 个，同步后本地只有 9 个。
+- 跑通凭据：源远端启用 Basic Auth，同步任务引用 v0.2 凭据库里的凭据 ID，能拉到。
+- 跑通双向：A 上「A→B」任务 + B 上「B→A」任务各跑一次，两端都有双方的镜像（验证无回路 bug）。
+- 同步历史表里每条 run 都有 `status`（success/failed/skipped）、`started_at`、`finished_at`、`manifests_copied`、`blobs_copied`、`error` 字段。
+
+### 已知不做（0.6.x 或后续再说）
+
+- ❌ 同步循环检测告警（A→B 同时 B→A 互拉的 UI 提示）。本期不挡功能，靠配置自律。
+- ❌ 多 image tar 导入（用户 2026-09-28 讨论后否决，非本期议题）。
+- ❌ TLS / HTTPS 证书管理（用户 2026-09-28 决定不做，原 0.6.0 议题已撤；触发条件归档在 `AGENTS.md`）。
+- ❌ 远端 ↔ 远端 中转模式（违反单 registry 原则）。
+- ❌ 凭据库新 scheme（Bearer Token 之外的 S3 / GCP 之类，不在本轮范围；现有 cairn 凭据库只管 Basic Auth）。
+- ❌ 同步实时进度推送（web UI 显示当前正在复制哪个 repo）。当前先做「执行完一次刷新结果」，实时进度跟 events 模块联动后续再说。
+- ❌ 同步 dry-run / 预览（regsync 支持 `--dry-run`，本轮不做，UI 上有「立即运行」按钮可点击看效果即可）。
 
 ## 刻意不做
 
