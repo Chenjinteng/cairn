@@ -5,10 +5,13 @@
 // env that remains are infrastructure / boot-only:
 //
 //   - PORT                        (HTTP listener port)
-//   - REGISTRY_CREDENTIALS_DIR    (DATA_DIR for SQLite + credentials.json)
-//   - REGISTRY_STORAGE_DIR        (blob / manifest / tag on-disk path)
 //   - REGISTRY_CREDENTIAL_KEY     (AES-256-GCM key for the vault)
 //   - GO_HUB_ENV                  (prod / dev log verbosity)
+//
+// Container-internal paths are compile-time constants (DataDirPath,
+// StorageDirPath) rather than knobs: where a file sits inside the
+// container is an implementation detail. Relocate the host side with a
+// bind mount on /app/data instead of with env.
 //
 // Everything else (registry URL, proxy, auth, name, allow.delete,
 // allow.pull, pull.platforms, notify token, allow.registry_events,
@@ -28,7 +31,6 @@ package config
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,8 +39,8 @@ import (
 // Mutable holds runtime-editable settings persisted to SQLite. v0.5.2
 // generalises v0.5.1's single-field Mutable into a key->value map so the
 // settings page can edit any field in MutableKeys without code changes.
-// Env still seeds the bootstrap values; the settings page overrides
-// anything in MutableKeys and that override survives restarts.
+// Values come from the SQLite settings table (hydrated at boot); the
+// settings page writes into MutableKeys and those writes survive restarts.
 //
 // Values are stored as strings (SQLite TEXT). Per-key helpers below know
 // how to parse them back into the right Go type for Config.Effective*().
@@ -50,8 +52,8 @@ type Mutable struct {
 // MutableKeys is the whitelist of fields the settings page can edit. The
 // map key matches the SQLite settings.key column. Anything not in this
 // list is rejected by UpdateConfig so the UI can never write fields that
-// would need a restart to take effect (e.g. PORT, REGISTRY_CREDENTIALS_DIR,
-// REGISTRY_STORAGE_DIR, REGISTRY_CREDENTIAL_KEY).
+// would need a restart to take effect (e.g. PORT, the container-internal
+// paths, REGISTRY_CREDENTIAL_KEY).
 //
 // NOTE (v0.5.4): cache.ttl.seconds was REMOVED from this list. Since v0.5.0
 // the inventory is read straight from local storage, so registry.CachedRegistry
@@ -281,28 +283,39 @@ func (c *Config) StatsIgnoreUserAgents() []string {
 	return out
 }
 
+// Container-internal paths are compile-time constants, not knobs. A path
+// inside the container is an implementation detail; the host side is moved
+// with a bind mount (see docker-compose.yml), never with env.
+const (
+	// DataDirPath holds the credential vault, the SQLite databases and the
+	// embedded registry storage.
+	DataDirPath = "/app/data"
+	// StorageDirPath is where the embedded /v2 endpoint keeps blobs,
+	// manifests and upload sessions. It nests inside DataDirPath so a single
+	// bind mount carries both the metadata and every pulled/pushed image.
+	StorageDirPath = DataDirPath + "/registry"
+)
+
 // Config is the resolved runtime configuration for cairn.
 //
-// Field semantics mirror registry-manager so we can swap .env.example wholesale.
 // Fields are populated in Load(); no defaults are applied at struct-literal time.
 type Config struct {
 	// HTTP listener. Env only — boot must restart to change.
 	Port int // PORT, default 8787
 
-	// Infrastructure-only env: storage location + vault key. None of
-	// these flow through the panel; boot fails fast if any required
-	// field is missing. Mutable is the only edit channel for everything
+	// Infrastructure-only: storage location + vault key. Neither flows
+	// through the panel; Mutable is the only edit channel for everything
 	// else.
 	//
-	// StorageDir is where the embedded /v2 endpoint keeps blobs,
-	// manifests and upload sessions. Mount a dedicated volume here in
-	// containers: every pulled and pushed image lives on this path,
-	// and recreating the container without it loses them.
-	StorageDir string // REGISTRY_STORAGE_DIR, default "<REGISTRY_CREDENTIALS_DIR>/registry"
+	// StorageDir and CredentialsDir are always the StorageDirPath /
+	// DataDirPath constants for Load()-produced configs. They stay
+	// settable so tests can build a Config by hand, but are never read
+	// from env.
+	StorageDir string // always StorageDirPath
 
 	// Credential vault
 	CredentialKey  string // REGISTRY_CREDENTIAL_KEY, strongly recommended; absence disables vault (pulls still work anonymously)
-	CredentialsDir string // REGISTRY_CREDENTIALS_DIR, default /app/data
+	CredentialsDir string // always DataDirPath
 
 	// Dev convenience
 	Env string // "dev" / "prod", default "prod"
@@ -315,22 +328,20 @@ type Config struct {
 	Mutable *Mutable
 }
 
-// Load reads configuration from process env. Only infrastructure env
-// (PORT, REGISTRY_CREDENTIALS_DIR, REGISTRY_STORAGE_DIR, REGISTRY_CREDENTIAL_KEY,
-// GO_HUB_ENV) are honoured here; business fields come from Mutable, hydrated
-// later by server.go from SQLite. There is no env fallback for business
-// fields.
+// Load reads configuration from process env. Only three infrastructure env
+// are honoured: PORT, REGISTRY_CREDENTIAL_KEY and GO_HUB_ENV. Container paths
+// are compile-time constants (DataDirPath / StorageDirPath) — the host side is
+// relocated with a bind mount, not with env. Business fields come from
+// Mutable, hydrated later by server.go from SQLite. There is no env fallback
+// for business fields.
 func Load() (*Config, error) {
 	c := &Config{
 		Port:           intEnv("PORT", 8787),
 		CredentialKey:  os.Getenv("REGISTRY_CREDENTIAL_KEY"),
-		CredentialsDir: strEnv("REGISTRY_CREDENTIALS_DIR", "/app/data"),
+		CredentialsDir: DataDirPath,
+		StorageDir:     StorageDirPath,
 		Env:            strEnv("GO_HUB_ENV", "prod"),
 	}
-	// Keep the registry data next to the credential vault by default
-	// (one volume covers both), while still allowing an explicit path /
-	// its own volume.
-	c.StorageDir = strEnv("REGISTRY_STORAGE_DIR", filepath.Join(c.CredentialsDir, "registry"))
 
 	// v0.5.2: always seed Mutable so handlers can call Set/Get on it
 	// without a nil-pointer guard. The server later hydrates from SQLite
@@ -346,9 +357,6 @@ func Load() (*Config, error) {
 func (c *Config) validate() error {
 	if c.Port <= 0 || c.Port > 65535 {
 		return fmt.Errorf("PORT out of range: %d", c.Port)
-	}
-	if c.StorageDir == "" {
-		return fmt.Errorf("REGISTRY_STORAGE_DIR resolved to an empty path")
 	}
 	if c.CredentialKey != "" && len(c.CredentialKey) < 32 {
 		return fmt.Errorf("REGISTRY_CREDENTIAL_KEY should be at least 32 chars when set (got %d); use `openssl rand -hex 32`", len(c.CredentialKey))

@@ -55,18 +55,19 @@ type Runtime struct {
 //  8. Admin API + extras (browse/delete/etc.)
 //  9. Composite router
 func Build(cfg *config.Config) (*Runtime, error) {
+	// Load() always fills both fields from the compile-time path
+	// constants; the empty guards below only cover hand-built configs
+	// (tests that construct a bare config.Config).
 	dataDir := cfg.CredentialsDir
 	if dataDir == "" {
-		dataDir = "/app/data"
+		dataDir = config.DataDirPath
+	}
+	storageDir := cfg.StorageDir
+	if storageDir == "" {
+		storageDir = config.StorageDirPath
 	}
 
 	// 1. Storage layer — cairn's own filesystem backend.
-	//    v0.5.0 honours REGISTRY_STORAGE_DIR (defaults to <dataDir>/registry
-	//    for back-compat with v0.4.x deployments).
-	storageDir := cfg.StorageDir
-	if storageDir == "" {
-		storageDir = filepath.Join(dataDir, "registry")
-	}
 	store, err := storage.NewFilesystem(storageDir)
 	if err != nil {
 		return nil, fmt.Errorf("server: open storage: %w", err)
