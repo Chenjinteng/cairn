@@ -28,7 +28,7 @@
 3. **库式后端**：HTTP handler 通过 `cmd/server` 装配，业务逻辑在 `internal/` 下，方便后续挂到别人的服务里
 4. **可观测性**：自带 `/healthz` `/readyz`
 
-## 当前状态:v0.5.29(2026-09-28) —— **去掉镜像列表的「删除仓库」入口:让删除仓库走「删 tag → GC」链路**
+## 当前状态:v0.5.30(2026-09-28) —— **右上角展示名称 + url 改成括号形式 `name (url)`,解决 antd Tooltip 把兄弟 span 吞掉的问题**
 
 ✅ 已实现（v0.1 – v0.4）：
 
@@ -80,7 +80,7 @@
 4. `README.md` 里所有 `docker build/tag/push` 示例
 5. `CHANGELOG.md` 新增一节
 
-当前版本：`0.5.29`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
+当前版本：`0.5.30`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
 
 ## 项目结构
 
