@@ -28,7 +28,7 @@
 3. **库式后端**：HTTP handler 通过 `cmd/server` 装配，业务逻辑在 `internal/` 下，方便后续挂到别人的服务里
 4. **可观测性**：自带 `/healthz` `/readyz`
 
-## 当前状态:v0.5.24(2026-09-28) —— **Critical fix:GC「也清理 0 tag 仓库」选项会误删所有仓库(命名空间遍历 bug)**
+## 当前状态:v0.5.25(2026-09-28) —— **拉取平台过滤生效:tag 指向过滤后的 root,UI 的「+13」消失**
 
 ✅ 已实现（v0.1 – v0.4）：
 
@@ -80,7 +80,7 @@
 4. `README.md` 里所有 `docker build/tag/push` 示例
 5. `CHANGELOG.md` 新增一节
 
-当前版本：`0.5.24`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
+当前版本：`0.5.25`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
 
 ## 项目结构
 
