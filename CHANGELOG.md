@@ -6,6 +6,57 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.29] - 2026-09-28
+
+本轮主题:**镜像列表的「删除仓库」入口去掉,改走「删 tag → GC」链路**。
+
+### 变更
+
+- **镜像列表操作列收紧**(`web/src/pages/images-page.tsx:230-247`):
+
+  旧:`操作` 列同时挂 `详情` + `删除仓库` 两个入口;删除仓库调 `DELETE /api/repositories/{repo}`,**前端在 `await deleteRepository(...)` 之后无脑 `message.success(...)`**,不检查 `result.success`。后端 `Store.DeleteRepository` 在 v0.5.24 Pass 3 bug fix 之后对命名空间段路径 (`library/alpine`) 是支持的,但**前端无脑 success toast 掩盖了后端真删与否的状态** —— 体感就是「提示删除没用」。
+
+  新:操作列只剩 `详情` 一个入口;列宽 140 → 100;Popconfirm + `deleteRepository` 整套移除。`DeleteOutlined` / `Popconfirm` / `message` imports **不删**(GC 弹窗 `运行 GC` 按钮仍在用)。
+
+  ```diff
+  - {config?.allowDelete ? (
+  -   <Popconfirm ... onConfirm={async () => {
+  -     try {
+  -       await deleteRepository(record.name);
+  -       message.success(`已删除仓库 ${record.name}`);  // 无脑 success
+  -       ...
+  -     }
+  -   }}>
+  -     <Button ... danger icon={<DeleteOutlined />}>删除</Button>
+  -   </Popconfirm>
+  - ) : null}
+  + // v0.5.29 注释:操作员在仓库列表上「一键删整个仓库」不合理。要清掉一个仓库走
+  + // 「详情 → 删完所有 tag → 列表 → 运行 GC + 勾「也清理 0 tag 仓库」」。
+  + <Button type="link" size="small" onClick={() => setDetailName(record.name)}>详情</Button>
+  ```
+
+### 设计意图
+
+- 一键删仓库是**危险操作**(即便有 Popconfirm 也防不住误操作),且**没用**:删 manifest 只是解除引用,磁盘空间要 GC 才回收。
+- 让操作员走「删 tag → GC」链路的好处:
+  1. 每个 tag 的删除是独立动作,误删一个不影响其他
+  2. GC 是显式动作,操作员**自己决定**何时清理磁盘
+  3. `运行 GC` 弹窗的「也清理 0 tag 仓库」勾选框(v0.5.20)是**批量**清空仓库的合法入口,自动 / 手动都覆盖到了
+
+### 保守保留 / 待后续清理
+
+- **`DELETE /api/repositories/{repo}` HTTP 端点保留**(`internal/api/handlers_extra.go:588`):本轮只去 UI 入口,后端 API 不动 —— 防止破坏外部手动 curl / 调试场景;`Storage.DeleteRepository` 也保留(GC Pass 3 还要用)。
+- **前端 `web/src/api.ts:225-229` 的 `deleteRepository` export 保留**:无人调用,但删 export 是一次性破坏,留到下一轮统一清理。
+- 跟踪项:如果确认不需要外部 API 调用,后续一轮统一删 `DeleteRepository` handler + `deleteRepository` export + `DeleteRepositoryPayload` in `types.ts`。
+
+### 影响范围(升级须知)
+
+- **行为变化**:升级后镜像列表操作列只剩 `详情`,**仓库层级的删除按钮彻底消失**(包含 `allowDelete=false` 时的灰态占位)。
+- **API 契约无变化**:`DELETE /api/repositories/{repo}` 端点仍能调通,只是 UI 不再暴露。
+- **无回归测试变动**:删除链路本来就没测试覆盖(单元测试重点在 GC Pass 1..4)。
+
+---
+
 ## [0.5.28] - 2026-09-28
 
 本轮主题:**为 v0.6.0「http/https 切换」做准备 —— 仓库地址字段语义改成「裸 host:port」,协议字段拆出来单独管理;展示名称上右上角,不再被 host 淹没**。
