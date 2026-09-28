@@ -83,9 +83,15 @@ export default function ImageDetailDrawer({
     setNotice(null);
     try {
       const result = await deleteTag(repository.name, record.tag);
-      setNotice(result);
       if (result.success && result.data) {
+        // 成功走顶部 toast（与 images-page 删除仓库同模式,3 秒自动消失），
+        // 别再把「操作回执」塞进 drawer Alert —— 后端 writeJSON 把 message
+        // 写成空串,AntD 会渲成「只剩对勾的空白框」(v0.5.27 之前的 bug)。
+        message.success(`已删除 tag ${record.tag}`);
         onDeleted(result.data);
+      } else {
+        // 失败才需要占据 drawer 顶部的 Alert：把后端的 code / message 摊给用户看。
+        setNotice(result);
       }
     } finally {
       setDeletingTag(null);
@@ -199,18 +205,20 @@ export default function ImageDetailDrawer({
       destroyOnClose
     >
       <div className="drawer-stack">
-        {notice ? (
+        {/*
+          v0.5.27 之前:成功也塞 notice，message 是后端 writeJSON 注入的空串，
+          AntD 渲成「只剩对勾的空白框」。现在成功走顶部 toast,只有失败才画 Alert;
+          顺手清掉 affectedTags 描述 —— 按 digest 删除影响多 tag 是技术副作用,
+          不是用户需要看的「事实」。
+        */}
+        {notice && !notice.success ? (
           <Alert
-            type={notice.success ? 'success' : 'warning'}
+            type="warning"
             showIcon
             closable
             onClose={() => setNotice(null)}
-            message={notice.message}
-            description={
-              notice.success && notice.data && notice.data.affectedTags.length > 1 ? (
-                <span>受影响 tag: {notice.data.affectedTags.join('、')}</span>
-              ) : undefined
-            }
+            message={notice.message || '删除失败'}
+            description={notice.code ? <span>错误分类：{notice.code}</span> : undefined}
           />
         ) : null}
 
