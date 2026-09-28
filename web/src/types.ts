@@ -38,6 +38,12 @@ export interface AppConfig {
   name: string;
   /** 当前运行中的版本（服务端从 package.json 读取）；取不到时为空串。 */
   version: string;
+  /**
+   * v0.5.34: 容器内 cairn 进程监听端口(PORT env 烘进 cfg.Port)。**只读** ——
+   * 改端口要走 docker-compose.yml 改 HOST_PORT + 重建容器,UI 不暴露修改入口
+   * (改了容器内监听但不改 docker 端口映射,用户视角实际无效)。
+   */
+  port: number;
   url: string;
   host: string;
   /** 是否给本 registry 配了 basic auth（密码不会回传）。 */
