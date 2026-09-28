@@ -6,6 +6,45 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.20] - 2026-09-28
+
+本轮主题：**给 GC 加一个可勾选的「清理 0 tag 仓库」,让 0 tag 仓库彻底从镜像列表上消失**。背景:用户接入自动化测试时留下 `webauto-pull/busybox` 这种 0 tag 仓库 —— tag 已全部删除,但 `repos/<repo>/` 目录、孤儿 manifest body、blob 字节全部残留,既占清单一格,也占磁盘空间;旧版 GC 对此完全无效。
+
+### 新增
+
+- **GC 弹窗新增「也清理 0 tag 的仓库」勾选框**（`web/src/pages/images-page.tsx`）:**默认不勾**,保留 v0.5.18/v0.5.19 的纯 blob 清理行为;勾上之后才走破坏性更强的整仓库删除路径。Popconfirm 的 description 段把警告字面写出来 ——「会删除整个仓库目录,不可恢复」—— 让操作员在点「运行」之前能看到自己点的是什么。Tooltip 也同步加了一句话说明这个新开关。
+- **GC 加 Pass 3（删空仓库目录）+ Pass 4（二次 blob 回收）**（`internal/storage/filesystem.go`）:Pass 3 扫 `repos/`,对每个目录三重检查后才删 —— ① `tags/` 为空(或不存在);② `uploads/<repo>/` 里没有 startedat 在 24h 之内的会话（保护正在 push 的仓库）;③ 拿 `lockRepo` 防并发。删除前先用 `filepath.Walk` 累加目录 size,记到 `GCResult.EmptyRepoFreedBytes` 给前端展示。Pass 3 删掉的孤儿 manifest body 之前引用的 blob 现在真正变成孤儿,Pass 4 再扫一遍 Pass 1 把这些字节真正回收 —— 这是 0 tag 仓库能释放空间的关键（光删目录不回收 manifest 引用的 blob,字节还在）。
+- **`POST /api/gc` 接受可选 body `{"cleanEmptyRepos": true}`**（`internal/api/handlers_extra.go` 的 `RunGC`）:默认 false → 走 v0.5.18 行为,byte-for-byte 兼容;true → 走 Pass 3/4。空 body / 缺字段 / 字段值缺失 都按 false 处理,**不破坏任何既有客户端**。
+- **`GCResult` 加 `removedEmptyRepos` 与 `emptyRepoFreedBytes`**（`internal/storage/storage.go`）:两者都用 `omitempty` —— 默认请求路径下响应里**完全不出现**这两个字段,JSON 形状与 v0.5.18 一致;只有请求带 `cleanEmptyRepos=true` 才会有。
+- **`ProxyTestResult` 同款扩展**(no,this is the GC entry):Go side,前端 types 加 `removedEmptyRepos?: string[]` / `emptyRepoFreedBytes?: number`;前端 `api.ts` 的 `runGC` 现在接受 `GCOption` 参数,默认 `{}`（保持旧调用形态）。
+- **GC 跑完自动刷新镜像清单**(`load(false)`):勾选状态下删了空仓库之后,清单会变短 —— 不刷一下用户会以为 GC 没生效。这个刷新只在「勾选了且真有删除」时发生,默认路径不刷。
+- **`formatRepoList` helper**(`images-page.tsx` 底部):>3 个截断成「前 3 + 等 N 个」,与镜像清单顶部 error 列表的展示风格一致。
+
+### 影响范围（升级须知）
+
+- **零侵入的默认行为**:**不勾** 弹窗里的 checkbox,GC 的行为与 v0.5.18 完全一致 —— Pass 1 删孤儿 blob、Pass 2 删 24h+ 孤儿上传,**不会碰任何仓库目录**。所有「老操作员按旧习惯点 GC」的路径不受影响。
+- **新开关打开后的语义变化**:勾上之后,镜像列表上 0 tag 的仓库会被物理删除（不是「隐藏」,是从磁盘抹掉）。删后无法恢复 —— 与 `DeleteRepository` 同级破坏性。任何生产环境如果想在删之前再 review 一次,先**不勾**跑一次 GC 看 `removedBlobs / freedBytes` 是不是符合预期,然后再勾一次干。
+- **API 契约向前兼容**:响应字段顺序、空 body、缺字段路径都保持旧形状;只有客户端主动传 `cleanEmptyRepos=true` 才看到新字段。
+- **未触动项（明确划线）**:
+  - **未补 `web-auto` 自动化场景**:0.5.18 起 `gc-real.yaml` 已经能覆盖空态分支;要覆盖「勾选后删空仓库」需要在 dev 注册表里先造一个 0 tag 仓库场景。本轮未补,与 0.5.19 一致记入未触动项,留待单独 PR。
+  - **未补 `storage/filesystem_test.go`**:现有 storage 包无单测文件(其他包也以集成测试为主),开新单测覆盖 Pass 3 的三条分支（0 tag + 老 upload / 0 tag + 新 upload / 有 tag）需要新搭脚手架,本轮未做。
+  - **`removedEmptyRepos` 数组顺序未做排序保证**:返回顺序由 `os.ReadDir` 决定,UI 展示时直接用 —— 若有强顺序诉求,后续可加 sort.Strings,但当前为「原样回报」更便于定位。
+
+### 验证
+
+- **类型层**:`web/tsconfig.json` 下 `tsc --noEmit` 仍为 **8 条错误**,全部为基线既有(api.ts 三处未 import 类型 / settings-page.tsx 五处未使用声明),本轮 `images-page.tsx` / `api.ts` / `types.ts` 改动相关行**零新增**。
+- **Go 侧门禁**:`gofmt -l internal/storage/ internal/api/` 无输出;`go vet ./internal/... ./cmd/...` 退出码 0;`go build ./internal/... ./cmd/...` 退出码 0。
+- **默认路径契约不变**:不传 body / 传 `{}` / 传 `{"cleanEmptyRepos":false}` 三个路径,响应 JSON 应与 v0.5.18 完全一致(`removedBlobs` + `freedBytes` 两个字段,无 `removedEmptyRepos` / `emptyRepoFreedBytes`)。
+- **生产现场复测待办**:158 容器升级到 `cairn:0.5.20` 后,
+  - 默认路径:点「运行 GC」→ toast 文案与 0.5.19 一致(`清理 N 个孤儿 blob,回收 X.XX MiB`),清单不刷新。
+  - 新路径:勾「也清理 0 tag 的仓库」→ 点「运行」→ `webauto-pull/busybox` 应被物理删除;toast 文案类似「GC 完成:清理 N 个孤儿 blob,回收 X.XX MiB;清空 1 个空仓库(webauto-pull/busybox)」;镜像清单上这一行消失,其它行不动。
+
+### 轮次与号位
+
+- 本轮占 **0.5.20**:既有 GC 能力的扩展 + 一个用户可控的破坏性开关,按 `AGENTS.md` 判定为**小版本（第 3 位）+1**。按 `docs/ROADMAP.md`「号位是预留」的规则,整表自 0.5.20 之后顺延一格;`0.6.0`(TLS 证书管理)由人指定,不随顺延改号。
+
+---
+
 ## [0.5.19] - 2026-09-28
 
 本轮主题：**修掉「代理测试把 Docker Hub 匿名 /v2/ 的标准 401 误报成连通失败」**。现象是编辑代理时点「测试连接」、目标填 `https://registry-1.docker.io/v2/`,弹窗直接红字「连通失败」——但同样这条代理在拉取任务里是能正常工作的。

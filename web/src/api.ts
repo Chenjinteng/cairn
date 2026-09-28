@@ -6,6 +6,7 @@ import type {
   CredentialPatch,
   DeleteTagPayload,
   DestStatus,
+  GCOption,
   HeatPurgeResult,
   IgnoreRules,
   Inventory,
@@ -235,8 +236,13 @@ export const deleteManifestByDigest = (repo: string, digest: string) =>
   );
 
 // v0.5.0: 触发一次存储 GC 扫描，返回本次回收的 blob 数与字节数。
-export const runGC = () =>
-  requestSlow<GCResult>('/api/gc', { method: 'POST' });
+// v0.5.20: opts.cleanEmptyRepos=true 时，额外清理 0 tag 且无 24h 内
+// 上传会话的仓库（默认 false 保持 v0.5.18 行为）。
+export const runGC = (opts: GCOption = {}) =>
+  requestSlow<GCResult>('/api/gc', {
+    method: 'POST',
+    body: JSON.stringify(opts),
+  });
 
 export const createPullJob = (input: PullJobInput) =>
   request<PullJob>('/api/pull/jobs', {

@@ -168,9 +168,18 @@ export interface DeleteManifestPayload {
 }
 
 // v0.5.0: 存储 GC 一次扫描的回收量。
+// v0.5.20: 加 removedEmptyRepos / emptyRepoFreedBytes,仅当请求带
+// cleanEmptyRepos=true 时才返回(否则 omitempty 不在 JSON 里出现)。
 export interface GCResult {
   removedBlobs: number;
   freedBytes: number;
+  removedEmptyRepos?: string[];
+  emptyRepoFreedBytes?: number;
+}
+
+/** v0.5.20: runGC 的请求体 —— 默认空 body 仍走 v0.5.18 路径。 */
+export interface GCOption {
+  cleanEmptyRepos?: boolean;
 }
 
 export type PullJobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
