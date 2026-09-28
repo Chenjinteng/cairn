@@ -1,0 +1,201 @@
+# cairn 仓库级删除 — 单段仓库名 happy path（破坏性：删除 webauto-single2）
+#
+# 为什么单独造一个「单段仓库名」的仓库：
+#   handlers_extra.go:126-132 的 DELETE /api/repositories/{repo} 走 chi 的 URL 参数。
+#   多段名（webauto-pull/busybox）经前端 encodeURIComponent 后变成 %2F，chi 按 RawPath
+#   匹配时 {repo} 原样保留 %2F，filesystem.go:670-690 的 os.Stat(repos/webauto-pull%2Fbusybox)
+#   必然失败 → 500 storage: not found（P1 缺陷，已由 curl 探针 + 容器日志坐实）。
+#   单段名不含 %2F，{repo} 与目录名一致 → 走通 happy path，用来证明「UI 删除链路本身是通的，
+#   坏的只是多段名的 URL 转义」，把缺陷范围精确收窄到「含 / 的仓库名」。
+#
+# 目标仓库 webauto-single2 由 curl POST /api/pull/jobs 造出（destRepo 无多段名要求，
+#   handlers_extra.go:258-261 只校验非空）；选它而不是 webauto-single 的原因：
+#   ":has-text(\"webauto-single\")" 会同时命中 webauto-single 与 webauto-single2 两行，
+#   resolveLocator（runner.js:51）非 strict、取 DOM 顺序第一个 → 有选错行的风险；
+#   "webauto-single2" 全局唯一，无此歧义。
+#
+# 确认件源码事实（images-page.tsx:234-256）：
+#   1. Popconfirm title = `确认删除仓库 ${record.name}？`（含中文问号）
+#   2. okText="删除"（2 汉字、无 icon）→ antd autoInsertSpace 插空格 → 实际文本「删 除」
+#   3. 触发按钮 `:252-254` 带 icon（DeleteOutlined）→ 文本「删除」不插空格
+#   4. onConfirm 成功 `message.success(`已删除仓库 ${record.name}`)`；失败
+#      `message.error(`删除失败：${…}`)` —— 失败时本场景的 toast 断言会直接炸，能一眼分辨
+#   5. Popconfirm 关闭后组件不卸载，DOM 里会累积 .ant-popover-inner → 所有弹窗定位必须加
+#      :not(.ant-popover-hidden)
+#
+# localStorage 探针：message.success 是命令式 API，文本只存在于 antd 的 message 容器里且
+#   会自动消失；这里用 DOM 注入把所有 .ant-message-notice 文本快照进 #__del_toast，
+#   再对它做 assert visible / assert text，避免「轮询时消息已经消失」的竞态。
+#
+# 步数 × 时长口径：runner.js:274 `stepTimeoutMs = timeout / max(steps, 5)`，
+#   server.js:83 把 timeout 夹到 ≤300000ms。本场景 16 步 → 单步硬上限 18750ms，
+#   因此所有显式 timeout 一律 ≤12000ms。
+name: cairn-delete-repo-real
+description: |
+  仓库级删除（单段名 happy path，破坏性）：
+    1. 打开首页 → 切「镜像列表」Tab
+    2. 断言 webauto-single2 行可见（行仍在 = 起点状态正确）
+    3. 点该行「删除」按钮 → 等 Popconfirm 出现
+    4. 断言 Popconfirm 标题指名道姓 `确认删除仓库 webauto-single2？`
+    5. 点「删 除」确认（作用域限定在未隐藏的 Popconfirm 内）
+    6. 页内轮询：把 antd message 文本快照进 DOM 标记 #__del_toast
+    7. 断言 #__del_toast 可见 + 文本命中 `已删除仓库 webauto-single2`
+    8. 断言 webauto-single2 行已从列表消失
+    9. 断言 webauto-single 行仍在（证明只删了目标行，不是整表清空/误删）
+env: dev
+tags: [destructive, delete, cairn]
+
+target:
+  baseUrl: "{{env.baseUrl}}"
+
+artifacts:
+  screenshot: always
+  trace: on-failure
+  video: never
+  har: never
+
+steps:
+  - name: 打开首页
+    action: goto
+    url: "{{baseUrl}}/"
+    timeout: 30000
+
+  - name: 等待主框架
+    action: waitFor
+    locator:
+      strategies:
+        - { type: css, value: ".app-shell" }
+    timeout: 12000
+
+  - name: 点击「镜像列表」Tab
+    action: click
+    locator:
+      strategies:
+        - { type: text, value: "镜像列表", match: exact }
+        - { type: css, value: '.app-nav .ant-segmented-item:has-text("镜像列表")' }
+    timeout: 8000
+
+  - name: 等待仓库表格渲染
+    action: assert
+    type: visible
+    selector: '.app-content tr.ant-table-row:has-text("webauto-single2")'
+    timeout: 12000
+
+  - name: 点击目标行「删除」按钮
+    action: click
+    locator:
+      strategies:
+        - { type: css, value: '.app-content tr.ant-table-row:has-text("webauto-single2") button.ant-btn-dangerous' }
+        - { type: css, value: 'tr.ant-table-row:has-text("webauto-single2") button.ant-btn-dangerous' }
+    timeout: 8000
+
+  - name: 等待 Popconfirm 出现
+    action: waitFor
+    locator:
+      strategies:
+        - { type: css, value: '.ant-popconfirm:not(.ant-popover-hidden)' }
+    timeout: 8000
+
+  - name: 断言确认件指名目标仓库
+    action: assert
+    type: visible
+    selector: '.ant-popconfirm:not(.ant-popover-hidden):has-text("确认删除仓库 webauto-single2")'
+    timeout: 8000
+
+  - name: 点击「删 除」确认
+    action: click
+    locator:
+      strategies:
+        - { type: css, value: '.ant-popconfirm:not(.ant-popover-hidden) .ant-popconfirm-buttons button:has-text("删")' }
+        - { type: css, value: '.ant-popconfirm:not(.ant-popover-hidden) button.ant-btn-primary' }
+    timeout: 8000
+
+  - name: 页内轮询并快照 message 文本
+    action: evaluate
+    script: |
+      (async () => {
+        const t0 = Date.now();
+        const LIMIT = 10000;
+        let picks = [];
+        const snap = () => {
+          const out = [];
+          document.querySelectorAll('.ant-message-notice').forEach(n => {
+            const s = (n.innerText || '').replace(/\s+/g, ' ').trim();
+            if (s) out.push(s);
+          });
+          return out;
+        };
+        while (Date.now() - t0 < LIMIT) {
+          picks = snap();
+          if (picks.some(s => s.indexOf('已删除仓库') >= 0 || s.indexOf('删除失败') >= 0)) break;
+          await new Promise(r => setTimeout(r, 200));
+        }
+        const old = document.getElementById('__del_toast');
+        if (old) old.remove();
+        const d = document.createElement('div');
+        d.id = '__del_toast';
+        d.style.cssText = 'position:fixed;left:0;bottom:0;z-index:99999;font-size:1px;color:transparent;';
+        d.textContent = picks.join(' | ') || '(no-message)';
+        document.body.appendChild(d);
+        const rowGone = !Array.from(document.querySelectorAll('.app-content tr.ant-table-row')).some(tr => (tr.innerText || '').indexOf('webauto-single2') >= 0);
+        return JSON.stringify({ outcome: picks.length ? 'captured' : 'empty', elapsedMs: Date.now() - t0, picks: picks, rowGone: rowGone });
+      })()
+
+  - name: 断言删除结果提示可见
+    action: assert
+    type: visible
+    selector: '#__del_toast'
+    timeout: 6000
+
+  - name: 断言提示为「已删除仓库 webauto-single2」
+    action: assert
+    type: text
+    selector: '#__del_toast'
+    value: "已删除仓库 webauto-single2"
+    match: contains
+    timeout: 6000
+
+  - name: 页内轮询目标行消失并注入标记
+    action: evaluate
+    script: |
+      (async () => {
+        const t0 = Date.now();
+        const LIMIT = 10000;
+        const gone = () => !Array.from(document.querySelectorAll('.app-content tr.ant-table-row')).some(tr => (tr.innerText || '').indexOf('webauto-single2') >= 0);
+        while (Date.now() - t0 < LIMIT && !gone()) {
+          await new Promise(r => setTimeout(r, 200));
+        }
+        const old = document.getElementById('__del_rowgone');
+        if (old) old.remove();
+        const d = document.createElement('div');
+        d.id = '__del_rowgone';
+        d.style.cssText = 'position:fixed;left:0;bottom:12px;z-index:99999;font-size:1px;color:transparent;';
+        d.textContent = gone() ? 'ROW_GONE' : 'ROW_STILL_THERE';
+        document.body.appendChild(d);
+        return JSON.stringify({ elapsedMs: Date.now() - t0, gone: gone() });
+      })()
+
+  - name: 断言目标行已消失
+    action: assert
+    type: text
+    selector: '#__del_rowgone'
+    value: "ROW_GONE"
+    match: contains
+    timeout: 6000
+
+  - name: 断言相邻仓库行仍在（只删目标行）
+    action: assert
+    type: visible
+    selector: '.app-content tr.ant-table-row:has-text("webauto-single")'
+    timeout: 8000
+
+  - name: delete-repo-after
+    action: screenshot
+
+  - name: delete-repo-end
+    action: screenshot
+
+# 期望结果（步数与 steps 逐一对应：16）
+expected:
+  totalSteps: 16
+  maxDuration: 300000

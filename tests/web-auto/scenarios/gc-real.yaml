@@ -1,0 +1,155 @@
+# cairn 镜像列表页 — 真实 GC 场景（破坏性，仅限 dev）
+#
+# 为什么单独成场景（不并进 delete-real）：
+#   runner 的单步硬上限 = runTimeout / max(步数, 5)（runner.js:274）。
+#   GC 耗时不可预估，若与删除同场景，GC 的长等会撞单步上限、race reject 直接
+#   abort 整个场景（status=errored，该步还不进 steps）—— 删除的证据会一起丢。
+#   单独成场景后步数少（11 步）→ 单步上限 300000/11 = 27272ms，够 GC 慢慢跑。
+#
+# 验证的协议事实：「删除 manifest 只解除引用，磁盘空间要 GC 才回收」
+#   Pass 1：repos/**/data 里被引用的 digest 集合 live → 删掉 blobs/sha256/**/data 中
+#           不被引用的 blob（对应 registry garbage-collect 的等价语义）
+#   Pass 2：uploads/**/startedat 超过 24h 的孤立上传会话
+#   → 后端 POST /api/gc 返回 {removedBlobs, freedBytes}，前端 toast 里带这两个数。
+#
+# ⚠️ 弹窗文案：Popconfirm title=「确认运行 GC？」、okText=「运行」（无 icon 的 2 汉字 → 插空格 → 「运 行」）。
+#    触发按钮 <Button icon={...}>运行 GC</Button> **带 icon** → 不插空格 → 文本是「运行 GC」。
+#    弹窗一律加 :not(.ant-popover-hidden) 作用域（关闭后驻留 DOM，runner css 非 strict）。
+#
+# ⚠️ 破坏性：会真删孤儿 blob。dev 环境数据不作数（2026-09-27 用户授权）。
+#
+# ⚠️ evaluate 没有断言能力（runner.js: case 'evaluate' 只 return {status:'passed', result}），
+#    一切「等条件」走「脚本内轮询 → 注入 DOM 标记 → assert 读标记」；
+#    assert type:text 取 page.textContent 且无等待、默认 exact → 必须显式 match:regex。
+# 用法：POST /api/run {scenario: "cairn/gc-real", env: "dev", timeout: 300000}
+name: cairn-gc-real
+description: |
+  真实 GC（dev 专用，破坏性）：
+    1. 切到镜像列表 Tab（GC 按钮仅在 allowDelete=true 时渲染）
+    2. 点「运行 GC」→ 断言二次确认弹窗
+    3. 点「运 行」真跑 GC，轮询快照 toast 文本（evaluate 无断言能力）→ assert match:regex 硬断言形状；
+    4. 精确数值（removedBlobs / freedMiB / raw）从 steps[].result 读，不写死数字
+env: dev
+tags: [destructive, images, gc, cairn]
+
+target:
+  baseUrl: "{{env.baseUrl}}"
+
+artifacts:
+  screenshot: always
+  trace: on-failure
+  video: never
+  har: never
+
+steps:
+  - name: 打开首页
+    action: goto
+    url: "{{baseUrl}}/"
+    timeout: 12000
+
+  - name: 等待主框架
+    action: waitFor
+    locator:
+      strategies:
+        - { type: css, value: ".app-shell" }
+    timeout: 12000
+
+  - name: 点击「镜像列表」Tab
+    action: click
+    locator:
+      strategies:
+        - { type: text, value: "镜像列表", match: exact }
+        - { type: css, value: '.app-nav .ant-segmented-item:has-text("镜像列表")' }
+    timeout: 8000
+
+  - name: 等待「运行 GC」按钮就绪
+    action: assert
+    type: visible
+    selector: '.app-content button:has-text("运行 GC")'
+    timeout: 12000
+
+  - name: 点击「运行 GC」按钮
+    action: click
+    locator:
+      strategies:
+        - { type: css, value: '.app-content button:has-text("运行 GC")' }
+    timeout: 8000
+
+  - name: 断言「确认运行 GC？」二次确认
+    action: assert
+    type: visible
+    selector: '.ant-popconfirm:not(.ant-popover-hidden):has-text("确认运行 GC？")'
+    timeout: 8000
+
+  - name: gc-confirm
+    action: screenshot
+
+  - name: 点击「运 行」（真跑 GC）
+    action: click
+    locator:
+      strategies:
+        - { type: css, value: '.ant-popconfirm:not(.ant-popover-hidden) .ant-popconfirm-buttons button:has-text("运 行")' }
+    timeout: 8000
+
+  # evaluate 无断言能力（runner.js 的 case 'evaluate' 只 return {status,result}），
+  # 所以「等条件」要脚本内轮询 → 结果注入 DOM 标记 → 再由 assert 读标记做硬闸门。
+  # assert 的 type:text 走 page.textContent（无等待、默认 exact）→ 必须显式写 match:regex。
+  # 另：evaluate 的 step.timeout 被忽略（只受单步 race 罩住），故 LIMIT 自设 12000ms < 27272ms。
+  - name: 轮询 GC toast 并注入快照标记
+    action: evaluate
+    script: |
+      (() => {
+        const LIMIT = 12000, STEP = 200, t0 = Date.now();
+        const pick = () => Array.from(document.querySelectorAll('.ant-message-notice-content'))
+          .map(el => (el.innerText || '').replace(/\s+/g, ' ').trim())
+          .filter(t => t.indexOf('GC 完成') >= 0 || t.indexOf('GC 失败') >= 0);
+        const mark = (s) => {
+          const el = document.createElement('div');
+          el.id = '__gc_toast';
+          el.style.cssText = 'position:fixed;left:-9999px;top:0;width:0;height:0;overflow:hidden;';
+          el.textContent = s;
+          document.body.appendChild(el);
+        };
+        return new Promise(resolve => {
+          const tick = () => {
+            const picks = pick();
+            if (picks.length) {
+              const raw = picks[picks.length - 1];
+              const m = raw.match(/清理\s*(\d+)\s*个孤儿\s*blob[，,]\s*回收\s*([0-9.]+)\s*MiB/);
+              mark(raw);
+              resolve(JSON.stringify({
+                outcome: 'captured',
+                elapsedMs: Date.now() - t0,
+                raw: raw,
+                removedBlobs: m ? Number(m[1]) : null,
+                freedMiB: m ? Number(m[2]) : null,
+                picks: picks
+              }));
+              return;
+            }
+            if (Date.now() - t0 > LIMIT) {
+              mark('TIMEOUT_NO_TOAST');
+              resolve(JSON.stringify({ outcome: 'timeout', elapsedMs: Date.now() - t0, picks: picks }));
+              return;
+            }
+            setTimeout(tick, STEP);
+          };
+          tick();
+        });
+      })()
+
+  - name: 断言 toast 形状（GC 完成：清理 N 个孤儿 blob，回收 X.XX MiB）
+    action: assert
+    type: text
+    selector: '#__gc_toast'
+    value: 'GC 完成：清理 [0-9]+ 个孤儿 blob，回收 [0-9]+\.[0-9]{2} MiB'
+    match: regex
+    timeout: 12000
+
+  - name: gc-after
+    action: screenshot
+
+# 期望结果（步数与 steps 逐一对应：11）
+expected:
+  totalSteps: 11
+  maxDuration: 300000

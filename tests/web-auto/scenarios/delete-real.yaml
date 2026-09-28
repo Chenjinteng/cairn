@@ -1,0 +1,191 @@
+# cairn 镜像列表页 — 真实删除场景（破坏性，仅限 dev）
+#
+# 覆盖两条真实删除路径：
+#   抽屉内按 tag 删 → DELETE /api/tags?repository=&tag=
+#                      （后端 TagDigest 解析 digest 后 DeleteManifest，即「按 digest 删除」的 UI 入口）
+#   列表行「删除」  → DELETE /api/repositories/{repo}
+# 删除只解除引用，磁盘回收要跑 GC —— 见 gc-real.yaml（独立场景，避免 GC 耗时掐断删除证据）。
+#
+# ⚠️ 破坏性：会真的删掉 registry 里的 webauto-pull/busybox。
+#    dev 环境数据不作数（2026-09-27 用户授权），其他环境不要跑。
+#
+# ⚠️ 选择器要点（逐条对着源码核过）
+#   1. 抽屉里 tag 行的删除按钮是**纯 icon**（icon={<DeleteOutlined/>}，无 children）
+#      → 没有文案可依赖，只能用 .ant-btn-dangerous 定位；同列 CopyOutlined 按钮非 danger，可区分。
+#   2. 抽屉删除的 Popconfirm：title=「确认删除 <tag>？」、okText=「确认删除」（4 汉字 → 不插空格）。
+#   3. 列表行「删除」按钮**带 icon** → antd autoInsertSpace 不生效 → 文本是「删除」；
+#      它的 Popconfirm OK 是**无 icon 的 2 汉字** → 插空格 → 「删 除」。
+#      两者严格互斥：has-text("删 除") 不会误命中行内「删除」。
+#   4. 弹窗一律加 :not(.ant-popover-hidden) 作用域（antd 关闭后节点驻留 DOM，
+#      runner 的 css 定位非 strict、取首个匹配 —— 见 images-page.yaml 头部说明）。
+#   5. 删 tag 后仓库行**不会消失**：后端 buildRepoView 无论 tags 是否为空都回带 name，
+#      前端 handleDeleted 用同名快照替换 → 行仍在、Tag 数变 0。故第 4 步可继续点该行。
+#
+# 前置：webauto-pull/busybox:latest 存在（由 pull-real.yaml 拉入）
+# 用法：POST /api/run {scenario: "cairn/delete-real", env: "dev", timeout: 300000}
+name: cairn-delete-real
+description: |
+  真实删除（dev 专用，破坏性）：
+    1. 搜索定位 webauto-pull/busybox
+    2. 打开镜像详情抽屉，删除 tag latest（后端按 digest 删 manifest）
+    3. 断言抽屉内成功提示 + tag 列表变空态
+    4. 关闭抽屉，断言仓库行仍在（删 tag 不改仓库存在性）
+    5. 在列表行删除整个仓库，断言列表回到「没有匹配的镜像」空态
+env: dev
+tags: [destructive, images, cairn]
+
+target:
+  baseUrl: "{{env.baseUrl}}"
+
+artifacts:
+  screenshot: always
+  trace: on-failure
+  video: never
+  har: never
+
+steps:
+  # ---- 0. 导航 ----
+  - name: 打开首页
+    action: goto
+    url: "{{baseUrl}}/"
+    timeout: 12000
+
+  - name: 等待主框架
+    action: waitFor
+    locator:
+      strategies:
+        - { type: css, value: ".app-shell" }
+    timeout: 12000
+
+  - name: 点击「镜像列表」Tab
+    action: click
+    locator:
+      strategies:
+        - { type: text, value: "镜像列表", match: exact }
+        - { type: css, value: '.app-nav .ant-segmented-item:has-text("镜像列表")' }
+    timeout: 8000
+
+  - name: 等待列表页就绪（搜索框）
+    action: assert
+    type: visible
+    selector: '.app-content input[placeholder*="搜索"]'
+    timeout: 12000
+
+  # ---- 1. 搜索定位目标仓库 ----
+  - name: 搜索「webauto-pull」
+    action: fill
+    locator:
+      strategies:
+        - { type: css, value: '.app-content input[placeholder*="搜索"]' }
+    value: "webauto-pull"
+    timeout: 8000
+
+  - name: 等待目标行出现
+    action: waitFor
+    locator:
+      strategies:
+        - { type: css, value: 'table tbody tr.ant-table-row:has-text("webauto-pull/busybox")' }
+    timeout: 12000
+
+  - name: delete-before
+    action: screenshot
+
+  # ---- 2. 打开抽屉，按 tag 删除 ----
+  - name: 点击仓库名打开详情抽屉
+    action: click
+    locator:
+      strategies:
+        - { type: css, value: '.app-content button.link-cell:has-text("webauto-pull/busybox")' }
+    timeout: 8000
+
+  - name: 等待抽屉内 tag 行（latest）
+    action: assert
+    type: visible
+    selector: '.ant-drawer .ant-table-tbody tr.ant-table-row:has-text("latest")'
+    timeout: 12000
+
+  - name: drawer-open
+    action: screenshot
+
+  - name: 点击该 tag 行的删除按钮（纯 icon）
+    action: click
+    locator:
+      strategies:
+        - { type: css, value: '.ant-drawer .ant-table-tbody tr.ant-table-row:has-text("latest") button.ant-btn-dangerous' }
+    timeout: 8000
+
+  - name: 断言「确认删除 latest？」二次确认
+    action: assert
+    type: visible
+    selector: '.ant-popconfirm:not(.ant-popover-hidden):has-text("确认删除 latest？")'
+    timeout: 8000
+
+  - name: 点击「确认删除」（真删）
+    action: click
+    locator:
+      strategies:
+        - { type: css, value: '.ant-popconfirm:not(.ant-popover-hidden) .ant-popconfirm-buttons button:has-text("确认删除")' }
+    timeout: 8000
+
+  - name: 断言抽屉内成功提示
+    action: assert
+    type: visible
+    selector: '.ant-drawer .ant-alert-success'
+    timeout: 12000
+
+  - name: 断言抽屉 tag 列表变空态
+    action: assert
+    type: visible
+    selector: '.ant-drawer .ant-empty-description:has-text("该仓库当前没有可用的 tag")'
+    timeout: 12000
+
+  - name: drawer-after-delete
+    action: screenshot
+
+  # ---- 3. 关抽屉，删整个仓库 ----
+  - name: 关闭抽屉
+    action: click
+    locator:
+      strategies:
+        - { type: css, value: ".ant-drawer-close" }
+    timeout: 8000
+
+  - name: 断言仓库行仍在（删 tag 不改仓库存在性）
+    action: assert
+    type: visible
+    selector: '.app-content tr.ant-table-row:has-text("webauto-pull/busybox")'
+    timeout: 12000
+
+  - name: 点击该行「删除」按钮（仓库级）
+    action: click
+    locator:
+      strategies:
+        - { type: css, value: '.app-content tr.ant-table-row:has-text("webauto-pull/busybox") button.ant-btn-dangerous' }
+    timeout: 8000
+
+  - name: 断言「确认删除仓库」二次确认
+    action: assert
+    type: visible
+    selector: '.ant-popconfirm:not(.ant-popover-hidden):has-text("确认删除仓库 webauto-pull/busybox？")'
+    timeout: 8000
+
+  - name: 点击「删 除」（真删仓库）
+    action: click
+    locator:
+      strategies:
+        - { type: css, value: '.ant-popconfirm:not(.ant-popover-hidden) .ant-popconfirm-buttons button:has-text("删 除")' }
+    timeout: 8000
+
+  - name: 断言列表回到检索空态
+    action: assert
+    type: visible
+    selector: '.app-content .ant-empty-description:has-text("该 registry 没有匹配的镜像")'
+    timeout: 12000
+
+  - name: delete-after
+    action: screenshot
+
+# 期望结果（步数与 steps 逐一对应：23）
+expected:
+  totalSteps: 23
+  maxDuration: 300000
