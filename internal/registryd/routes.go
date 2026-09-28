@@ -91,18 +91,22 @@ func New(store storage.Storage, getCreds basicAuthCreds, eventsH *events.Handler
 	h := &Handler{Store: store, getCreds: getCreds, realm: "cairn", Events: eventsH}
 	r := chi.NewRouter()
 
-	// /v2/ is the protocol "ping" endpoint. The OCI spec lets it 200 even
-	// when auth is required, so we deliberately do NOT put it behind the
-	// auth middleware -- docker / skopeo rely on a 200 here to detect
-	// "this server speaks V2" before issuing authenticated requests.
-	r.Get("/", h.apiVersion)
-
-	// Everything else (catalog, tags/list, manifest, blob, upload) goes
-	// through requireBasicAuth when credentials are configured.
+	// Everything (including /v2/) goes through requireBasicAuth when
+	// credentials are configured.
+	//
+	// v0.5.33: /v2/ 也放进 requireBasicAuth。之前以为 OCI spec 允许 /v2/ 在需要
+	// auth 时也返 200(只挂 WWW-Authenticate header),实测 docker daemon 看到 200
+	// 就**以为不需要 auth**,manifest/blobs 请求**不发 Authorization header** →
+	// server 返 401 → docker daemon 报 "unauthorized"(根本没带 creds,没法 retry)。
+	// 正确做法:需要 auth 时返 401 + WWW-Authenticate challenge,docker daemon 看到
+	// 401 后会用 config.json 里的 credentials 重试 GET /v2/ → 200,后续 manifest
+	// 请求**也**带 creds 才能过。
 	r.Group(func(r chi.Router) {
 		if h.getCreds != nil {
 			r.Use(h.requireBasicAuth)
 		}
+		r.Get("/", h.apiVersion)
+
 		r.Get("/_catalog", h.catalog)
 
 		// Repository-scoped routes all go through one wildcard dispatcher.
@@ -121,12 +125,10 @@ func New(store storage.Storage, getCreds basicAuthCreds, eventsH *events.Handler
 // --- /v2/ -------------------------------------------------------------------
 
 func (h *Handler) apiVersion(w http.ResponseWriter, r *http.Request) {
-	// OCI spec: GET /v2/ must return 200 with an empty body. We advertise
-	// our auth realm even on success so clients that probe the challenge
-	// before retrying (e.g. skopeo --creds) get a consistent answer.
-	if h.getCreds != nil {
-		w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Basic realm="%s"`, h.realm))
-	}
+	// v0.5.33 之前:这里在未带/错 credentials 时也返 200 + WWW-Authenticate header,
+	// 导致 docker daemon 误判为「不需要 auth」后续请求不发 Authorization → server 401。
+	// 现在让 requireBasicAuth middleware 处理:带对 creds 走到这里返 200,否则早就
+	// 401 challenge 拦掉了。这里只关心 happy path。
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write([]byte(`{}`))
 }
