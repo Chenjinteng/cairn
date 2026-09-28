@@ -4,7 +4,9 @@
 
 ## 这是什么
 
-**cairn** 是一个**独立**的 CNCF Distribution（Docker Registry HTTP API V2）镜像仓库管理 Web 工具，**用 Go 从零写的**，**不 fork** [registry-manager](http://github.com/Chenjinteng/registry-manager.git)。
+**cairn**(产品名 **Cairn**)是一个**独立**的 CNCF Distribution（Docker Registry HTTP API V2）轻量级容器镜像基础设施平台，**用 Go 从零写的**，**不 fork** [registry-manager](http://github.com/Chenjinteng/registry-manager.git)。
+
+> v0.5.21 起,产品面对用户时称 **Cairn**(轻量级容器镜像基础设施平台);`cairn` 仍是项目 module path / 二进制名 / 内部代号,两者并存。
 
 行为 / API 与 registry-manager 对齐：
 

@@ -6,6 +6,45 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.21] - 2026-09-28
+
+本轮主题：**品牌升级 —— 产品名从「镜像仓库管理」改为 Cairn,顶部 brand 替换为新 Logo**。`cairn` 仍是项目 module path / 二进制名 / 内部代号,跟对外产品名 Cairn 并存。
+
+### 变更
+
+- **产品面对用户时改名 Cairn**(Lightweight Container Image Infrastructure / 轻量级容器镜像基础设施平台)。原因:`cairn` 起名时参照 registry-manager 的「Go-Hub」思路,现在产品已经超越 registry-manager 的「给 registry 配个管理 UI」定位,变成「集成仓库、扫描、拉取队列、热度统计的完整基础设施」,旧名承载不了。
+- **新 Logo `CairnMark` 组件**(`web/src/components/cairn-mark.tsx`):3 块圆角矩形堆叠成塔身 + 顶部琥珀色标记点。**三块石头**对应 cairn 三个能力面 —— 存储(基座)/ 拉取(中层)/ UI(顶层);**琥珀点**是「目标服务器位置标记」,也是导航隐喻。SVG 内联无外部依赖,favicon / app nav / hero 都可直接复用。提供 `size` / `variant`(light / dark)两个 props。
+- **顶部 brand 区替换**(`web/src/App.tsx`):从 `<DockerOutlined /> + 镜像仓库管理` 换成 `<CairnMark size={26} /> + Cairn`。NAV_ITEMS 里的 `DockerOutlined` 是「镜像列表」菜单的 icon,不是品牌 mark,**不动** —— 跟新 mark 各司其职。
+- **`<title>` 改为 `Cairn`**(`web/index.html`):浏览器 tab 上看到的标题。
+
+### 影响范围(升级须知)
+
+- **品牌资产统一**:`web/index.html`、`web/src/App.tsx`、`web/src/components/cairn-mark.tsx`(新增)、`README.md` 当前状态行 + 顶部描述、`AGENTS.md` 顶部「这是什么」段 —— 5 处产品名同步更新。`internal/webui/dist/index.html` 由 `pnpm build` 重新生成,不手改。
+- **`cairn` 仍是 module path / 二进制名**:Docker image tag 仍是 `cairn:X.Y.Z`,compose 服务名仍叫 `cairn`,`/api/version` 返回的 `userAgent` 仍是 `cairn/<version>`。改 module path 是破坏性更大的改动,本轮不做。
+- **`package.json` 的 `"name": "cairn-web"`** 是 npm package 内部名,不影响任何用户面,**不动**。
+- **零功能 / 零修复**:仅品牌资产变更,API 契约、数据格式、磁盘布局、配置项均未触动。
+- **未触动项(明确划线)**:
+  - **未提供 PNG / ICO favicon**:本轮只交付 inline SVG,适合嵌入 web 与高 DPI 渲染。需要 favicon.ico 的场景另起一个 PR 跑 sharp 或 Inkscape 转码。
+  - **未替换登录页 logo**(cairn dev 模式目前没有登录页,无需改)。
+  - **`NavOutlined` 等菜单 icon** 仍是 antd 默认集,菜单的视觉风格没改 —— 只动顶部 brand 区。
+  - **历史 CHANGELOG 条目不动**:0.5.20 及之前的「镜像仓库管理」字样保留(那是描述当时的事实)。
+
+### 验证
+
+- **类型层**:`web/tsconfig.json` 下 `tsc --noEmit` 仍为 **8 条错误**,全部为基线既有(api.ts 三处未 import 类型 / settings-page.tsx 五处未使用声明),本轮 `cairn-mark.tsx` / `App.tsx` / `index.html` 改动相关行**零新增**。
+- **Go 侧门禁**:`gofmt -l internal/` 无输出;`go vet ./internal/... ./cmd/...` 退出码 0;`go build -tags webui` 退出码 0(bundle 自动从 `web/src/` 经 `pnpm build` 重新生成 dist,本轮不需要直接 build web)。
+- **生产现场复测待办**:158 容器升级到 `cairn:0.5.21` 后,
+  - 浏览器 tab 标题:`Cairn`
+  - 顶栏左侧:浅 teal Cairn mark + `Cairn` 文字 + `v0.5.21` 徽章(版本号同步)
+  - 「镜像列表」菜单 icon **仍是** DockerOutlined(故意不动)
+  - 暗色主题(右上角月亮按钮):Cairn mark 自动反白为 teal-300 + amber-400
+
+### 轮次与号位
+
+- 本轮占 **0.5.21**:纯品牌资产变更,按 `AGENTS.md` 判定为**小版本(第 3 位)+1**(既有产品的标识变更,无功能 / 修复)。按 `docs/ROADMAP.md`「号位是预留」的规则,整表自 0.5.21 之后顺延一格;`0.6.0`(TLS 证书管理)由人指定,不随顺延改号。
+
+---
+
 ## [0.5.20] - 2026-09-28
 
 本轮主题：**给 GC 加一个可勾选的「清理 0 tag 仓库」,让 0 tag 仓库彻底从镜像列表上消失**。背景:用户接入自动化测试时留下 `webauto-pull/busybox` 这种 0 tag 仓库 —— tag 已全部删除,但 `repos/<repo>/` 目录、孤儿 manifest body、blob 字节全部残留,既占清单一格,也占磁盘空间;旧版 GC 对此完全无效。

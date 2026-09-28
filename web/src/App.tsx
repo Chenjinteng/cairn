@@ -19,6 +19,7 @@ import CredentialsPage from './pages/credentials-page';
 import ProxiesPage from './pages/proxies-page';
 import SettingsPage from './pages/settings-page';
 import StatsPage from './pages/stats-page';
+import CairnMark from './components/cairn-mark';
 import type { Inventory } from './types';
 
 type PageKey = 'images' | 'stats' | 'pull' | 'credentials' | 'proxies' | 'settings';
@@ -82,8 +83,11 @@ export default function App({
       <div className="app-shell">
         <header className="app-header">
           <div className="app-brand">
-            <DockerOutlined />
-            <span>镜像仓库管理</span>
+            {/* v0.5.21: 品牌升级 —— 顶部 brand 从 antd DockerOutlined + "镜像仓库管理"
+                换成自定义的 Cairn 标记 + 产品名 "Cairn"。NAV_ITEMS 里的
+                DockerOutlined 还在用(给"镜像列表"页当 icon),不动。 */}
+            <CairnMark size={26} />
+            <span>Cairn</span>
             {/* 运行中的版本：服务端从 package.json 读，界面上不写死 */}
             {config?.version ? (
               <Tooltip title={`当前运行版本 v${config.version}`}>
