@@ -40,11 +40,12 @@ export function formatDateTime(value?: string | null, fallback = '--'): string {
 
 /** registry 引用不带协议头：docker pull 里用 host[:port]/path:tag。 */
 export function buildPullCommand(host: string, repository: string, tag: string): string {
-  // v0.5.28: AppConfig.host 现在是裸 host:port(协议由 AppConfig.url 带),docker pull
-  // 拿到裸 host 默认按 https 处理 —— 这里补 http://,确保 docker 真的能拉。
-  // v0.6.0 引入 https 切换后改成按当前协议补前缀。
-  const prefix = /^https?:\/\//.test(host) ? '' : 'http://';
-  return `docker pull ${prefix}${host}/${repository}:${tag}`;
+  // v0.5.28 曾经在这里补 `http://` 前缀(担心 docker pull 拿到裸 host 默认按 https
+  // 处理会失败),v0.5.31 回退:docker daemon 配了 insecure-registry 时会从 https
+  // 自动回退到 http,而且 `docker pull` 本身不接受 URL 形式(scheme) —— 加了
+  // 反而让操作员复制出去 `docker pull http://registry.example.com/...` 跑不起来。
+  // 直接拼裸 host:port,跟原来的工作流一致。
+  return `docker pull ${host}/${repository}:${tag}`;
 }
 
 /**

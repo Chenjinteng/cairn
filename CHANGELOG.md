@@ -6,6 +6,42 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.31] - 2026-09-28
+
+本轮主题:**回退 v0.5.28 加的「`buildPullCommand` 内部补 `http://` 前缀」—— 当时判断错了,补前缀反而 broke 复制粘贴**。
+
+### 修复
+
+- **`buildPullCommand` 不再补协议前缀**(`web/src/utils.ts:42-50`):
+
+  旧 (v0.5.28):
+  ```ts
+  const prefix = /^https?:\/\//.test(host) ? '' : 'http://';
+  return `docker pull ${prefix}${host}/${repository}:${tag}`;
+  ```
+  → 操作员复制出去是 `docker pull http://registry.example.com/registry-manager:0.5.0` —— **`docker pull` 不接受 URL 形式**(reference 语法是 `[registry[:port]/]repository[:tag]`,scheme 不在规范里),需要手动剥掉 `http://` 才能跑。
+
+  新 (v0.5.31):
+  ```ts
+  return `docker pull ${host}/${repository}:${tag}`;
+  ```
+  → 直接拼裸 `host:port`,跟 v0.5.28 之前的工作流完全一致。
+
+### 为什么当初判断错了
+
+- 我以为「docker pull 拿到裸 host 默认按 https 处理,会失败」 —— 这是真的,但只对**未配 insecure-registry** 的 daemon 成立。
+- 内网部署(`registry.example.com`)docker daemon 几乎都配了 `--insecure-registry=registry.example.com` 或 `daemon.json` 里的 `insecure-registries`,这种情况下 docker 会**先按 https 处理,失败再回退到 http** —— 拿到裸 host 直接就能拉。
+- 加 `http://` 前缀反而让 reference 解析失败,操作员**不能**贴流程走。
+
+### 影响范围(升级须知)
+
+- **行为变化**:升级后从详情抽屉复制 pull 命令,出来是 `docker pull registry.example.com/<repo>:<tag>` —— 跟 v0.5.27 之前完全一致,**直接粘贴到 docker 客户端能跑**(前提是 daemon 配了 insecure-registry)。
+- **API 契约无变化**:`/api/config` 的 `AppConfig.host` 仍是裸 `host:port`(v0.5.28 的字段语义不变)。
+- **设置页仓库地址字段语义不变**:仍只填 `host:port`,v0.6.0 的 http/https 切换按钮铺路逻辑不破。
+- **无回归测试变动**:`buildPullCommand` 是纯函数,无单测覆盖。
+
+---
+
 ## [0.5.30] - 2026-09-28
 
 本轮主题:**修复 v0.5.28 右上角展示名称和 url 挤成一坨的 UI bug —— antd Tooltip 把兄弟 span 视为单一 inline-block,父 flex gap 进不去**。
