@@ -28,7 +28,7 @@
 3. **库式后端**：HTTP handler 通过 `cmd/server` 装配，业务逻辑在 `internal/` 下，方便后续挂到别人的服务里
 4. **可观测性**：自带 `/healthz` `/readyz`
 
-## 当前状态:v0.5.33(2026-09-28) —— **修复 v0.5.18 起的 docker pull unauthorized bug:`/v2/` 在需要 auth 时返 200 + WWW-Authenticate,被 docker daemon 误判为不需要 auth**
+## 当前状态:v0.5.34(2026-09-28) —— **设置页加「监听端口」只读显示 + README 加改端口指南**(不暴露修改入口,因 docker 端口映射 cairn 管不到)
 
 ✅ 已实现（v0.1 – v0.4）：
 
@@ -80,7 +80,7 @@
 4. `README.md` 里所有 `docker build/tag/push` 示例
 5. `CHANGELOG.md` 新增一节
 
-当前版本：`0.5.33`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
+当前版本：`0.5.34`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
 
 ## 项目结构
 
@@ -203,6 +203,21 @@ docker compose up -d --build
 | registry 地址 / 代理 / 认证 / 展示名 | 设置页 | 落 SQLite，热生效 |
 | 能力开关（`allow.delete` / `allow.pull` / `allow.registry_events`） | 设置页 | 落 SQLite，热生效 |
 | 通知 token / 各类保留天数 / 忽略 UA | 设置页 | 落 SQLite，热生效 |
+
+### 改监听端口（HOST_PORT）
+
+Cairn 监听端口 = **宿主机映射端口** + **容器内 cairn 进程监听端口** 两层的组合。
+
+- **宿主机 → 容器映射**：`HOST_PORT`（默认 8787）。这是 docker 编排层的事，cairn 进程管不到。
+- **容器内 cairn 进程监听**：`PORT` 环境变量 → `cfg.Port`（默认 8787，Dockerfile `EXPOSE 8787`）。boot 期固定，改需要重启进程 + 改 env。
+
+**改端口步骤**：
+
+1. 编辑 `.env`：`HOST_PORT=8888`（改 8787 为你想要的宿主机端口）
+2. `docker compose up -d` 重建容器（仅改 HOST_PORT 时 cairn 进程内部监听端口不变，仍是 8787；如果同时改了容器内监听端口需要重新构建镜像）
+3. 浏览器访问 `http://<host>:8888`，`docker pull <host>:8888/...`
+
+**为什么不暴露到设置页？** UI 改 `cfg.Port` 只能改容器内监听端口，**没法改 docker 端口映射**——浏览器 / docker daemon 还在走 80/8787，改了等于没改。设置页只读显示当前端口，改法在 `.env` + `docker compose.yml`。
 
 <details>
 <summary>和 registry-manager 的对照（已分叉）</summary>

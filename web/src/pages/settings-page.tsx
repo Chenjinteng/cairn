@@ -485,6 +485,20 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
             )}
           </Form.Item>
 
+          {/* v0.5.34: 监听端口只读显示 —— 改端口要走 docker-compose.yml 的
+              HOST_PORT + docker compose up -d 重建容器,UI 不暴露修改入口
+              (改了容器内监听但不改 docker 端口映射,用户视角实际无效)。 */}
+          <Form.Item
+            label={<span>监听端口</span>}
+            extra={
+              config?.port
+                ? `容器内 cairn 进程监听 ${config.port};宿主机→容器映射在 docker-compose.yml 的 HOST_PORT,改完需要 docker compose up -d 重建容器。`
+                : '读取中…'
+            }
+          >
+            <ReadonlyValue value={config?.port ? String(config.port) : '--'} mono />
+          </Form.Item>
+
           {/* Registry 认证 */}
           <Form.Item
             label={<span>Registry 认证</span>}

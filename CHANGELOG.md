@@ -6,6 +6,56 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.34] - 2026-09-28
+
+本轮主题:**设置页加「监听端口」只读显示 + README 加改端口指南 —— 解决 user「能不能在页面上改端口」的疑问**。
+
+### 变更
+
+- **后端暴露 cfg.Port**(`internal/api/handlers.go` AppConfig 加 `Port int` 字段 + GetConfig 填值):
+
+  旧:AppConfig 不暴露监听端口,前端无从显示。
+  新:加 `Port: h.Cfg.Port`,字段 JSON 名 `port`,前端 `AppConfig` 同步加 `port: number`。
+
+- **设置页加「监听端口」只读字段**(`web/src/pages/settings-page.tsx`):
+
+  ```tsx
+  <Form.Item
+    label={<span>监听端口</span>}
+    extra={
+      config?.port
+        ? `容器内 cairn 进程监听 ${config.port};宿主机→容器映射在 docker-compose.yml 的 HOST_PORT,改完需要 docker compose up -d 重建容器。`
+        : '读取中…'
+    }
+  >
+    <ReadonlyValue value={config?.port ? String(config.port) : '--'} mono />
+  </Form.Item>
+  ```
+
+  放在「仓库地址」之后、「Registry 认证」之前。**只读** —— 没有 Input / 数字编辑框。
+
+- **README 「配置在哪配」节加改端口指南**:
+
+  解释 Cairn 监听端口 = 宿主机映射端口 (`HOST_PORT`, docker 编排层) + 容器内 cairn 进程监听端口 (`PORT` env → `cfg.Port`, boot 期固定) 两层组合,以及 `.env` 改 `HOST_PORT` + `docker compose up -d` 的步骤。
+
+### 为什么不做「UI 改 cfg.Port」?
+
+讨论过三种方案,最终选**只读 + README 指南**:
+
+| 方案 | 评 |
+| --- | --- |
+| **A. 只读显示 + README 改法说明(本轮)** | 最简、最诚实;**用户不会误以为改了生效**。 |
+| B. UI 改 cfg.Port + graceful restart | 改的是容器内监听端口,**宿主机→容器映射不在 cairn 进程控制下**;浏览器 / docker daemon 还走老端口,改了 = 没改。 |
+| C. UI 改 + 引导改 docker-compose.yml | 比 A 复杂,比 B 老实,但操作比直接改 docker-compose.yml 还麻烦。 |
+
+### 影响范围(升级须知)
+
+- **行为变化**:设置页多一个「监听端口」只读字段,显示容器内 cairn 进程当前监听端口(默认 8787)。
+- **API 契约变化**:`/api/config` 响应新增 `"port": <number>` 字段。客户端如果 strict 解析 JSON 可能报错 —— 但字段类型稳定,加新字段不破坏既有字段。
+- **无回归测试变动**:AppConfig 结构体变动,跟其他 v0.5.x 加字段同理。
+
+---
+
 ## [0.5.33] - 2026-09-28
 
 本轮主题:**修复 v0.5.18 起的 docker pull unauthorized bug —— `/v2/` 在需要 auth 时返 200 + WWW-Authenticate header,被 docker daemon 误判为「不需要 auth」**。

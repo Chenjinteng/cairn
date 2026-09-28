@@ -60,6 +60,9 @@ type apiErr struct {
 type AppConfig struct {
 	Name                  string   `json:"name"`
 	Version               string   `json:"version"`
+	// v0.5.34: 暴露 cfg.Port 让 settings page 能只读显示当前监听端口。
+	// 见 settings page 「监听端口」—— 端口本身不可热改。
+	Port                  int      `json:"port"`
 	URL                   string   `json:"url"`
 	Host                  string   `json:"host"`
 	UsingAuth             bool     `json:"usingAuth"`
@@ -167,6 +170,10 @@ func (h *Handlers) GetConfig(w http.ResponseWriter, r *http.Request) {
 		// immediately instead of the env bootstrap value.
 		Name:                  h.Cfg.RegistryName(),
 		Version:               version.Version,
+		// v0.5.34: 暴露 cfg.Port 让 settings page 能只读显示当前监听端口。
+		// 端口本身不可热改(改需要 graceful restart + 改 docker-compose 的
+		// HOST_PORT 端口映射),UI 只显示不改 —— 见 settings page 「监听端口」字段。
+		Port:                  h.Cfg.Port,
 		URL:                   displayURL,
 		Host:                  hostOf(displayURL),
 		UsingAuth:             h.Cfg.UsingAuth(),
