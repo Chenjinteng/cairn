@@ -6,7 +6,7 @@
 //
 //   - PORT                        (HTTP listener port)
 //   - REGISTRY_CREDENTIAL_KEY     (AES-256-GCM key for the vault)
-//   - GO_HUB_ENV                  (prod / dev log verbosity)
+//   - CAIRN_ENV                   (prod / dev log verbosity; v0.5.23 由 GO_HUB_ENV 改名)
 //
 // Container-internal paths are compile-time constants (DataDirPath,
 // StorageDirPath) rather than knobs: where a file sits inside the
@@ -329,18 +329,21 @@ type Config struct {
 }
 
 // Load reads configuration from process env. Only three infrastructure env
-// are honoured: PORT, REGISTRY_CREDENTIAL_KEY and GO_HUB_ENV. Container paths
+// are honoured: PORT, REGISTRY_CREDENTIAL_KEY and CAIRN_ENV. Container paths
 // are compile-time constants (DataDirPath / StorageDirPath) — the host side is
 // relocated with a bind mount, not with env. Business fields come from
 // Mutable, hydrated later by server.go from SQLite. There is no env fallback
 // for business fields.
+//
+// v0.5.23: GO_HUB_ENV → CAIRN_ENV。改名不引入兼容期 —— 见 CHANGELOG
+// 该条目「未触动项」段的说明。
 func Load() (*Config, error) {
 	c := &Config{
 		Port:           intEnv("PORT", 8787),
 		CredentialKey:  os.Getenv("REGISTRY_CREDENTIAL_KEY"),
 		CredentialsDir: DataDirPath,
 		StorageDir:     StorageDirPath,
-		Env:            strEnv("GO_HUB_ENV", "prod"),
+		Env:            strEnv("CAIRN_ENV", "prod"),
 	}
 
 	// v0.5.2: always seed Mutable so handlers can call Set/Get on it

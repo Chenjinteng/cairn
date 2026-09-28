@@ -67,7 +67,7 @@ registry-manager 明确"一次管理一个 registry"，cairn 沿用。**单进�
 漏一处就会出现版本漂移（运行中的 binary 跟 image tag 不一致、UI 显示旧版本、CHANGELOG 没有条目）：
 
 1. `internal/version/version.go` 的 `Version` 常量
-2. `docker-compose.yml` 的 `image: ${IMAGE:-cairn:X.Y.Z}`
+2. `docker-compose.yml` 的 `image: ${IMAGE:-cairn:X.Y.Z}`（v0.5.23 起产品面对用户的 image tag 用 `cairn:` 前缀）
 3. `.env.example` 的 `IMAGE=`
 4. `README.md` 里所有 `docker build/tag/push` 示例（含"镜像推到内网"、"部署"等段落里的 tag 引用）
 5. `CHANGELOG.md` 新增一节
@@ -127,7 +127,7 @@ cairn 刻意**不做**：
 | --- | --- |
 | `PORT` | 容器内监听端口(默认 8787);对外端口走 compose 的 `HOST_PORT` |
 | `REGISTRY_CREDENTIAL_KEY` | 凭据库 AES-256-GCM 密钥 |
-| `GO_HUB_ENV` | `dev` / `prod` |
+| `CAIRN_ENV` | `dev` / `prod`(v0.5.23 起;曾用名 `GO_HUB_ENV`) |
 
 要挪数据只改宿主机侧的 `HOST_DATA_DIR`(bind mount 左侧);`/app/data` 与 `/app/data/registry` 是编译期常量。
 

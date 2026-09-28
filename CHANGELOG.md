@@ -6,6 +6,78 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.23] - 2026-09-28
+
+本轮主题:**部署命名与产品名对齐 —— env 变量、image tag、container_name、service name 全部从 `cairn` 改成 `cairn`**。0.5.21 改了产品面对用户时的名字,但运维侧的命名(`.env` 里的 env 变量、`docker compose` 里的 image / container / service)还是旧名,运维脚本和脑内记忆仍要切换两套 —— 这一轮把部署命名也跟上,做到「产品名 = env 名 = image 名 = container 名」完全一致。
+
+### 变更
+
+- **env 变量**:`GO_HUB_ENV` → `CAIRN_ENV`(`internal/config/config.go` 的 `Load()`,`docker-compose.yml` + `.env.example` 同步)。**无兼容期** —— 旧名不再被读,直接走 `prod` 默认值;若需要 dev 模式,必须改 `.env`。
+- **docker image tag**:`cairn:0.5.22` → `cairn:0.5.23`(`docker-compose.yml` + `.env.example` 的 `IMAGE` 默认值)。**注意**:这只是 tag 字符串变了,不影响镜像内容本身;老镜像 tag 仍可继续跑(只是没人再推它)。
+- **container_name + service_name**:`cairn` → `cairn`(`docker-compose.yml`)。container_name 改了,所有按 `name` 引用容器的地方(运维 `docker logs cairn` / `docker exec cairn` / `docker compose logs cairn` 等)也要改字面;service_name 跟 container_name 必须一致,否则 compose 报冲突。
+- **`UserAgent` 保留 `cairn/` 前缀**:`internal/version/version.go` 的 `UserAgent = "cairn/" + Version` **不改**。理由:对外 registry 看到的 user-agent 是允许列表 / 日志关联的关键字符串,`cairn` 是大家能搜得到的项目代号(中文圈 / GitHub),改成 `cairn/` 会让上游 registry 的 allowlist 与日志关联断链。**外部可识别性优先于内部品牌一致** —— 这条决策是「运维契约」不动。
+- **宿主机数据目录**:`HOST_DATA_DIR` 默认仍是 `/data/cairn`,**故意没改成 `/data/cairn`**。理由:它是宿主机上的物理路径,不是产品名的一部分;改名会让老运维脚本(尤其是迁移 / 备份 cron)找不到数据。**数据目录名跟产品名解耦**。
+- **AGENTS.md / README.md / ROADMAP.md 同步**:三处文档里凡是引用旧名的地方都加注释说明「曾用名, v0.5.23 改名」;ROADMAP.md 顶部「为什么砍 14 个 env」那段历史说明里,在两个引用旁加了一句 `(v0.5.23 把 GO_HUB_ENV 改名为 CAIRN_ENV)`。
+
+### 影响范围(升级须知)
+
+⚠️ **这是部署面 breaking change,不是 API breaking**。HTTP API、数据格式、磁盘布局(数据目录结构)、SQLite schema 全部不变;**只有 env 变量名 + docker 命名变了**,需要按下面的清单改 `.env`。
+
+#### 升级操作(在 158 上)
+
+```bash
+# 1. 编辑 .env,把两行改名
+sed -i 's/^GO_HUB_ENV=/CAIRN_ENV=/' .env
+sed -i 's|^IMAGE=cairn:|IMAGE=cairn:|' .env
+
+# 2. 拉新代码 + 重新 build + up
+git pull origin main
+docker compose build --no-cache
+docker compose up -d
+```
+
+不执行这两步的话:
+- 旧的 `.env` 里有 `GO_HUB_ENV=dev` 但代码读的是 `CAIRN_ENV`,**dev 模式静默丢失**(回落到 `prod`)
+- 旧的 `.env` 里有 `IMAGE=cairn:0.5.22` 但 compose 找不到这个 image,`docker compose up` 会报 pull 失败
+
+#### 别名映射
+
+| 旧(0.5.22 及以前) | 新(0.5.23) | 影响 |
+| --- | --- | --- |
+| `GO_HUB_ENV=dev` / `prod` | `CAIRN_ENV=dev` / `prod` | dev 模式需重设 |
+| `IMAGE=cairn:0.5.22` | `IMAGE=cairn:0.5.23` | image 名需在 local 重 tag 或 pull |
+| `container_name: cairn` | `container_name: cairn` | 容器引用脚本需改字面 |
+| service 名 `cairn:` | service 名 `cairn:` | compose 命令行需改字面 |
+| `User-Agent: cairn/<v>` | (不变) | 上游 registry 无影响 |
+| 宿主机数据目录 `/data/cairn` | (不变) | 备份/迁移脚本无需改 |
+| `/api/version` 返回 `version` 字段 | `version: 0.5.23`(字段值变化,字段名不变) | 监控/告警脚本无需改 |
+
+#### 兼容性选择(明确划线)
+
+- **不引入兼容期**(`GO_HUB_ENV` 不再被代码读):若兼容两套名,代码里要保留 `os.Getenv("GO_HUB_ENV")` 的退化路径,这条路径永远没人走,但每行读 env 的地方都要加分支,半年后没人记得为什么两套都在,**比硬切更糟**。直接硬切,这一轮 CHANGELOG 写清楚就够。
+- **宿主机目录路径不改**(`/data/cairn` 仍是默认):见上文理由。
+- **`UserAgent` 前缀不改**:见上文理由。
+- **`cairn` 项目代号仍保留**(module path / 二进制名 / 内部代号):AGENTS.md 顶部已有说明,本轮不动。
+
+### 验证
+
+- **类型层**:`web/tsconfig.json` 下 `tsc --noEmit` 仍为 **8 条错误**,全部为基线既有,本轮**改动文件零新增**。
+- **Go 侧门禁**:`gofmt -l internal/ cmd/` 无输出;`go vet ./internal/... ./cmd/...` 退出码 0;`go build ./internal/... ./cmd/...` 退出码 0。
+- **环境变量对照**(`internal/config/config.go` 与 `docker-compose.yml` / `.env.example` 三处必须字面一致):
+  - env 变量名:`CAIRN_ENV`(三处一致)
+  - 容器内读不到旧名(`GO_HUB_ENV`),会回落到默认值 `prod`,日志显式可见
+- **生产现场复测待办**:158 容器升级到 `cairn:0.5.23` 后,
+  - `docker ps \| grep cairn` 应看到新 container name
+  - `docker logs cairn \| grep "config loaded"` 应见 `version:0.5.23`
+  - `/api/config` 返回 `"version":"0.5.23"` 与 `"userAgent":"cairn/0.5.23"`(后者不变)
+  - 上游 registry(任何公网 registry)的访问日志里,user-agent 仍是 `cairn/0.5.23`(证明 UserAgent 没改)
+
+### 轮次与号位
+
+- 本轮占 **0.5.23**:部署命名的品牌对齐,**不做兼容期**是一次性断刀。按 `AGENTS.md` 判定为**小版本(第 3 位)+1**(既有部署流程的命名清理,不引入新功能模块)。按 `docs/ROADMAP.md`「号位是预留」的规则,整表自 0.5.23 之后顺延一格;`0.6.0`(TLS 证书管理)由人指定,不随顺延改号。
+
+---
+
 ## [0.5.22] - 2026-09-28
 
 本轮主题:**整体配色与 Cairn Logo 对齐 —— 主色从蓝换 Teal 600,info 与 primary 同色**。0.5.21 把产品名 + Logo 改了,但应用界面仍是蓝主色 —— 这一轮把 UI 主品牌色也跟上,做到「Logo / 顶栏 / 链接 / 按钮 / 选中态」一个色。

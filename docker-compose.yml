@@ -29,7 +29,7 @@ services:
         NODE_IMAGE: ${NODE_IMAGE:-node:22-alpine}
         NPM_REGISTRY: ${NPM_REGISTRY:-}
 
-    image: ${IMAGE:-cairn:0.5.22}
+    image: ${IMAGE:-cairn:0.5.23}
     container_name: cairn
     restart: unless-stopped
 
@@ -43,7 +43,8 @@ services:
     #     覆盖。要挪数据只改下面的 HOST_DATA_DIR（宿主机侧）。
     environment:
       REGISTRY_CREDENTIAL_KEY: ${REGISTRY_CREDENTIAL_KEY:?请设置 REGISTRY_CREDENTIAL_KEY；任意随机 32+ 字符字符串，启动后切勿丢失}
-      GO_HUB_ENV: ${GO_HUB_ENV:-prod}
+      # v0.5.23: GO_HUB_ENV → CAIRN_ENV。同名同名,只是换字面。
+      CAIRN_ENV: ${CAIRN_ENV:-prod}
 
     # 单一 bind mount：数据直接落在宿主机目录，不再是 named volume。
     # /app/data 一个目录装齐全部状态 —— credentials.json（凭据库）、
