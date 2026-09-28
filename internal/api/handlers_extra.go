@@ -651,20 +651,45 @@ func (e *ExtraHandlers) DeleteManifestByDigest(w http.ResponseWriter, r *http.Re
 }
 
 // RunGC triggers an inline storage GC sweep and returns the freed-blob stats.
+//
+// v0.5.20: the optional JSON body {"cleanEmptyRepos": true} additionally
+// drops empty repository directories (tags/ empty AND no upload session
+// younger than 24h). Off by default — the zero value reproduces the
+// v0.5.18 behaviour byte-for-byte, so old clients calling POST /api/gc
+// with no body see no change. The response gains removedEmptyRepos /
+// emptyRepoFreedBytes only when the flag is on, otherwise those fields
+// are omitted (zero-value omitempty).
 func (e *ExtraHandlers) RunGC(w http.ResponseWriter, r *http.Request) {
 	if e.Store == nil {
 		writeError(w, r, http.StatusServiceUnavailable, errors.New("storage backend unavailable"))
 		return
 	}
-	res, err := e.Store.GC(r.Context())
+	var body struct {
+		CleanEmptyRepos bool `json:"cleanEmptyRepos"`
+	}
+	// A missing or empty body is the v0.5.18 path — leave CleanEmptyRepos
+	// at its zero value (false). decodeJSON tolerates EOF and surfaces
+	// real parse errors, but we don't want an empty POST to 400.
+	_ = decodeJSON(r, &body)
+
+	res, err := e.Store.GC(r.Context(), storage.GCOption{CleanEmptyRepos: body.CleanEmptyRepos})
 	if err != nil {
 		writeError(w, r, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	out := map[string]any{
 		"removedBlobs": res.RemovedBlobs,
 		"freedBytes":   res.FreedBytes,
-	})
+	}
+	// Mirror the omitempty tags on GCResult so the wire shape stays
+	// identical to v0.5.18 when the flag was off.
+	if len(res.RemovedEmptyRepos) > 0 {
+		out["removedEmptyRepos"] = res.RemovedEmptyRepos
+	}
+	if res.EmptyRepoFreedBytes > 0 {
+		out["emptyRepoFreedBytes"] = res.EmptyRepoFreedBytes
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // --- Credentials ------------------------------------------------------------

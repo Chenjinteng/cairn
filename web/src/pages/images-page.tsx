@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Empty, Input, Popconfirm, Segmented, Table, Tooltip, message } from 'antd';
+import { Alert, Button, Checkbox, Empty, Input, Popconfirm, Segmented, Table, Tooltip, message } from 'antd';
 import {
   ClockCircleOutlined,
   DatabaseOutlined,
@@ -76,6 +76,12 @@ export default function ImagesPage({
   const [statsDays, setStatsDays] = useState<StatsWindow>(30);
   /** 仓库名 → 窗口内热度。查不到 = 窗口内没有事件，界面显示「—」。 */
   const [heat, setHeat] = useState<Record<string, StatsRepositoryStat>>({});
+  /**
+   * v0.5.20：GC 弹窗里的「同时清理 0 tag 仓库」勾选。默认 false——勾上之后
+   * 会删除整个仓库目录，比删 blob 危险得多，必须由操作员主动决定。GC 跑完
+   * 还要按勾选状态决定是否刷新 inventory（删了空仓库之后清单会变短）。
+   */
+  const [cleanEmptyRepos, setCleanEmptyRepos] = useState(false);
 
   const statsEnabled = config?.statsEnabled === true;
 
@@ -301,24 +307,55 @@ export default function ImagesPage({
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
               <Popconfirm
                 title="确认运行 GC？"
-                description="扫描并清理孤儿 blob（24h 以上的孤立上传会话）。"
+                description={
+                  // v0.5.20: 弹窗里加「也清理 0 tag 的仓库」勾选框。整个仓库
+                  // 删除比删 blob 危险得多,所以默认 false、勾选后还要把
+                  // 「会删除整个仓库目录」字面写出来。
+                  <div style={{ maxWidth: 320 }}>
+                    <div>扫描并清理孤儿 blob（24h 以上的孤立上传会话）。</div>
+                    <Checkbox
+                      checked={cleanEmptyRepos}
+                      onChange={(e) => setCleanEmptyRepos(e.target.checked)}
+                      // 点击 checkbox 别冒泡到 Popconfirm 外层(否则会误关弹窗)
+                      onClick={(e) => e.stopPropagation()}
+                      style={{ marginTop: 8 }}
+                    >
+                      也清理 0 tag 的仓库（会删除整个仓库目录,不可恢复）
+                    </Checkbox>
+                  </div>
+                }
                 okText="运行"
                 cancelText="取消"
                 onConfirm={async () => {
                   const hide = message.loading('正在执行 GC 扫描…', 0);
                   try {
-                    const r = await runGC();
+                    const r = await runGC({ cleanEmptyRepos });
                     if (!r.success) {
                       message.error(`GC 失败：${r.message}`);
                       return;
                     }
-                    const { removedBlobs, freedBytes } = r.data ?? { removedBlobs: 0, freedBytes: 0 };
-                    if (removedBlobs === 0) {
-                      message.success('GC 完成：没有需要清理的孤儿 blob');
-                    } else {
-                      message.success(
-                        `GC 完成：清理 ${removedBlobs} 个孤儿 blob，回收 ${(freedBytes / 1024 / 1024).toFixed(2)} MiB`
-                      );
+                    const data = r.data ?? {
+                      removedBlobs: 0,
+                      freedBytes: 0,
+                      removedEmptyRepos: [],
+                      emptyRepoFreedBytes: 0,
+                    };
+                    const blobPart =
+                      data.removedBlobs === 0
+                        ? null
+                        : `清理 ${data.removedBlobs} 个孤儿 blob,回收 ${(data.freedBytes / 1024 / 1024).toFixed(2)} MiB`;
+                    const repoPart =
+                      !cleanEmptyRepos || !data.removedEmptyRepos?.length
+                        ? null
+                        : `清空 ${data.removedEmptyRepos.length} 个空仓库(${formatRepoList(data.removedEmptyRepos)})`;
+                    const head = 'GC 完成:';
+                    const body = [blobPart, repoPart].filter(Boolean).join(';') ||
+                      (cleanEmptyRepos ? '没有需要清理的孤儿 blob 或空仓库' : '没有需要清理的孤儿 blob');
+                    message.success(head + body);
+                    // v0.5.20: 删了空仓库之后镜像清单会变短,主动刷一次。
+                    // 不在 cleanEmptyRepos=false 时刷,避免无谓的网络往返。
+                    if (cleanEmptyRepos && data.removedEmptyRepos?.length) {
+                      await load(false);
                     }
                   } catch (e) {
                     message.error(`GC 失败：${(e as Error).message ?? e}`);
@@ -330,7 +367,7 @@ export default function ImagesPage({
                 <Button icon={<DeleteOutlined />}>运行 GC</Button>
               </Popconfirm>
               <Tooltip
-                title="GC = Garbage Collection。扫描并清理孤儿 blob（被废弃的上传会话、被解除引用的层），释放磁盘空间。注意：删除 manifest 只是解除引用，真正的磁盘空间要 GC 才回收。"
+                title="GC = Garbage Collection。扫描并清理孤儿 blob（被废弃的上传会话、被解除引用的层），释放磁盘空间。注意：删除 manifest 只是解除引用，真正的磁盘空间要 GC 才回收。勾选弹窗里的「也清理 0 tag 仓库」会额外删除整个空仓库目录。"
                 placement="top"
               >
                 <QuestionCircleOutlined
@@ -482,4 +519,15 @@ function latestBuildAt(repository: RegistryRepository): string {
     }
     return item.createdAt > latest ? item.createdAt : latest;
   }, '');
+}
+
+/**
+ * v0.5.20: GC toast 把本次清空的仓库名列出来。>3 个截断成「前 3 + 等 N 个」，
+ * 与 AGENTS.md 风格的 elsewhere (镜像清单顶部 error 列表) 一致。
+ */
+function formatRepoList(repos: string[]): string {
+  if (repos.length <= 3) {
+    return repos.join('、');
+  }
+  return `${repos.slice(0, 3).join('、')} 等 ${repos.length} 个`;
 }

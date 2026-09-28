@@ -119,7 +119,13 @@ type Storage interface {
 	// GC reclaims blobs that no manifest references and abandons upload
 	// sessions older than 24h. Deleting a manifest never frees disk on its
 	// own — same semantics as `registry garbage-collect`.
-	GC(ctx context.Context) (*GCResult, error)
+	//
+	// opts.CleanEmptyRepos additionally drops the directory tree of any
+	// repository whose tags/ is empty AND that has no upload session newer
+	// than the 24h cutoff (a concurrent push in flight would otherwise be
+	// nuked mid-flight). Off by default — operators must opt in because
+	// whole-repo deletion is harder to recover than a stray blob.
+	GC(ctx context.Context, opts GCOption) (*GCResult, error)
 
 	// Stats aggregates counts across repos / tags / manifests / blobs.
 	// Best-effort: may be slow on very large trees; cached for a few seconds
@@ -127,10 +133,28 @@ type Storage interface {
 	Stats(ctx context.Context) (*StorageStats, error)
 }
 
+// GCOption tunes one GC sweep. The zero value reproduces the v0.5.18
+// behaviour exactly; new fields are always opt-in.
+type GCOption struct {
+	// CleanEmptyRepos (v0.5.20): when true, after the standard blob +
+	// orphan-upload passes, drop the entire repos/<repo>/ + uploads/<repo>/
+	// tree for every repository whose tags/ is empty AND that has no upload
+	// session younger than 24h. The freed bytes from those deleted
+	// directories are reported in GCResult.EmptyRepoFreedBytes so the UI
+	// can credit them to the user.
+	CleanEmptyRepos bool
+}
+
 // GCResult reports what one garbage-collection sweep reclaimed.
+//
+// v0.5.20: RemovedEmptyRepos / EmptyRepoFreedBytes are populated only when
+// the caller asked for CleanEmptyRepos; otherwise they stay at the zero
+// value (nil / 0) and the JSON shape stays identical to v0.5.18.
 type GCResult struct {
-	RemovedBlobs int   `json:"removedBlobs"`
-	FreedBytes   int64 `json:"freedBytes"`
+	RemovedBlobs        int      `json:"removedBlobs"`
+	FreedBytes          int64    `json:"freedBytes"`
+	RemovedEmptyRepos   []string `json:"removedEmptyRepos,omitempty"`
+	EmptyRepoFreedBytes int64    `json:"emptyRepoFreedBytes,omitempty"`
 }
 
 // StorageStats is a summary used by the admin UI's "清单概览" panel.

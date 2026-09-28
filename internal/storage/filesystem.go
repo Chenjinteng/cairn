@@ -691,57 +691,73 @@ func (f *Filesystem) DeleteRepository(_ context.Context, repo string) error {
 
 // GC sweeps the store and reclaims disk. Deleting a manifest only drops the
 // reference — the blob bytes stay on disk until a sweep runs, which is the
-// same contract as `registry garbage-collect` in CNCF Distribution. Two
-// passes:
+// same contract as `registry garbage-collect` in CNCF Distribution.
 //
-//  1. blobs no stored manifest mentions are deleted;
-//  2. upload sessions abandoned mid-PUT (>24h) are discarded.
-func (f *Filesystem) GC(_ context.Context) (*GCResult, error) {
+// Passes:
+//
+//  1. (a/b) blobs no stored manifest mentions are deleted;
+//  2. upload sessions abandoned mid-PUT (>24h) are discarded;
+//  3. (v0.5.20, opt-in via opts.CleanEmptyRepos) every repository whose
+//     tags/ is empty AND that has no upload session younger than the 24h
+//     cutoff has its repos/<repo>/ + uploads/<repo>/ tree removed
+//     wholesale. Skips repositories that look empty but are clearly in
+//     use, to avoid clobbering an in-flight push.
+//  4. (v0.5.20, opt-in) re-runs pass 1: pass 3 deletes orphan manifest
+//     bodies whose blobs were "live" only because those manifests existed.
+//     A second pass is what actually frees the bytes from those blobs.
+func (f *Filesystem) GC(_ context.Context, opts GCOption) (*GCResult, error) {
 	res := &GCResult{}
 
-	// Pass 1a: collect every digest a manifest body references. Manifest
-	// bodies live in repos/ and reference their config + layer descriptors
-	// (and their children, for an index), so this covers both cases.
-	live := map[string]struct{}{}
-	reposRoot := filepath.Join(f.root, "repos")
-	_ = filepath.Walk(reposRoot, func(p string, info os.FileInfo, err error) error {
-		if err != nil || info == nil || info.IsDir() || info.Name() != "data" {
+	// Pass 1a/1b: collect live blobs, then drop unreferenced ones. Reused by
+	// Pass 4 below; the inline closure over `live` is the same shape both
+	// times so a refactor later only touches one site.
+	collectLive := func() map[string]struct{} {
+		live := map[string]struct{}{}
+		reposRoot := filepath.Join(f.root, "repos")
+		_ = filepath.Walk(reposRoot, func(p string, info os.FileInfo, err error) error {
+			if err != nil || info == nil || info.IsDir() || info.Name() != "data" {
+				return nil
+			}
+			body, err := os.ReadFile(p)
+			if err != nil {
+				return nil
+			}
+			for _, d := range reDigest.FindAllString(string(body), -1) {
+				live[d] = struct{}{}
+			}
 			return nil
-		}
-		body, err := os.ReadFile(p)
-		if err != nil {
+		})
+		return live
+	}
+	sweepBlobs := func(live map[string]struct{}) (removed int, freed int64) {
+		blobsRoot := filepath.Join(f.root, "blobs", "sha256")
+		_ = filepath.Walk(blobsRoot, func(p string, info os.FileInfo, err error) error {
+			if err != nil || info == nil || info.IsDir() || info.Name() != "data" {
+				return nil
+			}
+			dir := filepath.Dir(p)
+			digest := "sha256:" + filepath.Base(dir)
+			if !looksLikeDigest(digest) {
+				return nil
+			}
+			if _, ok := live[digest]; ok {
+				return nil
+			}
+			removed++
+			freed += info.Size()
+			if err := os.Remove(p); err != nil {
+				removed--
+				freed -= info.Size()
+				return nil
+			}
+			pruneEmptyDirs(dir, blobsRoot)
 			return nil
-		}
-		for _, d := range reDigest.FindAllString(string(body), -1) {
-			live[d] = struct{}{}
-		}
-		return nil
-	})
+		})
+		return removed, freed
+	}
 
-	// Pass 1b: walk blobs/ and drop anything nothing references.
-	blobsRoot := filepath.Join(f.root, "blobs", "sha256")
-	_ = filepath.Walk(blobsRoot, func(p string, info os.FileInfo, err error) error {
-		if err != nil || info == nil || info.IsDir() || info.Name() != "data" {
-			return nil
-		}
-		dir := filepath.Dir(p)
-		digest := "sha256:" + filepath.Base(dir)
-		if !looksLikeDigest(digest) {
-			return nil
-		}
-		if _, ok := live[digest]; ok {
-			return nil
-		}
-		res.RemovedBlobs++
-		res.FreedBytes += info.Size()
-		if err := os.Remove(p); err != nil {
-			res.RemovedBlobs--
-			res.FreedBytes -= info.Size()
-			return nil
-		}
-		pruneEmptyDirs(dir, blobsRoot)
-		return nil
-	})
+	live := collectLive()
+	res.RemovedBlobs, res.FreedBytes = sweepBlobs(live)
 
 	// Pass 2: abandon old upload sessions. StartUpload writes a startedat
 	// marker precisely so this sweep can tell "in flight" from "client died".
@@ -764,7 +780,133 @@ func (f *Filesystem) GC(_ context.Context) (*GCResult, error) {
 		return filepath.SkipDir
 	})
 
+	if !opts.CleanEmptyRepos {
+		return res, nil
+	}
+
+	// Pass 3: drop empty repository directories. The deletion is destructive
+	// enough that we triple-check before acting:
+	//
+	//   (a) tags/ must be empty (or absent) — protects repositories with
+	//       any user-visible tag.
+	//   (b) uploads/<repo>/ must hold no session younger than the 24h
+	//       cutoff — protects in-flight pushes. Old orphan sessions in
+	//       uploads/ were already swept by Pass 2 above.
+	//   (c) repo lock per repo — protects against a push racing with us.
+	//
+	// The size of repos/<repo>/ is summed before deletion so the UI can
+	// credit those bytes to the user; the cost is one extra filepath.Walk
+	// per candidate repo, which is cheap relative to the existing sweeps.
+	reposRoot := filepath.Join(f.root, "repos")
+	repoEntries, err := os.ReadDir(reposRoot)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		// Surface the error so the caller knows the sweep was incomplete
+		// rather than silently reporting empty results.
+		return res, err
+	}
+	for _, entry := range repoEntries {
+		if !entry.IsDir() {
+			continue
+		}
+		repo := entry.Name()
+		if err := cleanRepoName(repo); err != nil {
+			continue
+		}
+		repoDir := filepath.Join(reposRoot, repo)
+		if !repoHasNoTags(repoDir) {
+			continue
+		}
+		if f.repoHasActiveUpload(repo, cutoff) {
+			continue
+		}
+		// From here on we are committed to deleting the repo. Take the lock
+		// so a concurrent push can't add a tag mid-flight.
+		unlock := f.lockRepo(repo)
+		freed := dirSize(repoDir) + dirSize(filepath.Join(uploadsRoot, repo))
+		if err := os.RemoveAll(repoDir); err != nil {
+			unlock()
+			return res, err
+		}
+		_ = os.RemoveAll(filepath.Join(uploadsRoot, repo))
+		pruneEmptyDirs(filepath.Dir(repoDir), reposRoot)
+		unlock()
+		res.RemovedEmptyRepos = append(res.RemovedEmptyRepos, repo)
+		res.EmptyRepoFreedBytes += freed
+	}
+
+	// Pass 4: re-sweep blobs. The repos we just deleted held manifest bodies
+	// whose blobs were "live" only because those manifests existed. Now
+	// they're truly orphaned, so a second Pass 1 is what actually frees
+	// those bytes. Done in addition to Pass 1 — its count goes on top.
+	if len(res.RemovedEmptyRepos) > 0 {
+		extraBlobs, extraBytes := sweepBlobs(collectLive())
+		res.RemovedBlobs += extraBlobs
+		res.FreedBytes += extraBytes
+	}
 	return res, nil
+}
+
+// repoHasNoTags reports whether repos/<repo>/tags/ holds no tag files.
+// Best-effort: a missing tags/ directory is treated as "no tags". The
+// special files (current/ subdirectory, index/) that registry layouts
+// keep under tags/ are directories — we skip them, only counting plain
+// files (which is what every actual tag is stored as).
+func repoHasNoTags(repoDir string) bool {
+	tagsDir := filepath.Join(repoDir, "tags")
+	entries, err := os.ReadDir(tagsDir)
+	if err != nil {
+		return errors.Is(err, os.ErrNotExist)
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			return false
+		}
+	}
+	return true
+}
+
+// repoHasActiveUpload reports whether uploads/<repo>/ holds any session
+// whose startedat is strictly after cutoff. A cutoff of time.Now()-24h
+// matches the Pass 2 sweep above, so this is the same notion of "live".
+// If uploads/<repo>/ is missing or contains no startedat we can read, we
+// say "no active upload" — pass 2 already cleaned the dead ones.
+func (f *Filesystem) repoHasActiveUpload(repo string, cutoff time.Time) bool {
+	uploadRoot := filepath.Join(f.root, "uploads", repo)
+	entries, err := os.ReadDir(uploadRoot)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		body, err := os.ReadFile(filepath.Join(uploadRoot, e.Name(), "startedat"))
+		if err != nil {
+			continue
+		}
+		ts, err := time.Parse(time.RFC3339, strings.TrimSpace(string(body)))
+		if err == nil && ts.After(cutoff) {
+			return true
+		}
+	}
+	return false
+}
+
+// dirSize walks path and sums every regular file's size. The result is
+// approximate (an in-flight writer can change bytes between stat and
+// delete) but good enough for the UI's freed-bytes headline. Errors are
+// swallowed; a half-failed walk returning 0 is better than blocking the
+// GC sweep on a transient read failure.
+func dirSize(path string) int64 {
+	var total int64
+	_ = filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
+		if err != nil || info == nil || info.IsDir() {
+			return nil
+		}
+		total += info.Size()
+		return nil
+	})
+	return total
 }
 
 // cleanRepoName rejects repository paths that would escape the storage root.
