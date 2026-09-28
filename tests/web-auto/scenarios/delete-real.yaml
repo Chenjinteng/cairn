@@ -1,38 +1,49 @@
-# cairn 镜像列表页 — 真实删除场景（破坏性，仅限 dev）
+# cairn 镜像列表页 — 「删除入口回归守卫 + 仓库删除端点契约」场景（**非破坏性**）
 #
-# 覆盖两条真实删除路径：
-#   抽屉内按 tag 删 → DELETE /api/tags?repository=&tag=
-#                      （后端 TagDigest 解析 digest 后 DeleteManifest，即「按 digest 删除」的 UI 入口）
-#   列表行「删除」  → DELETE /api/repositories/{repo}
-# 删除只解除引用，磁盘回收要跑 GC —— 见 gc-real.yaml（独立场景，避免 GC 耗时掐断删除证据）。
+# v0.5.29 起镜像列表行内**不再有「删除仓库」入口**（images-page.tsx:229-242 的决策注释：
+#   一键删整个仓库既危险又没意义 —— 删 manifest 只解引用，磁盘要 GC 才回收；正确路径是
+#   「进详情 → 删完所有 tag → 回列表 → 运行 GC + 勾『也清理 0 tag 仓库』」）。
+#   本场景因此改成两件事，都不修改数据：
+#     ① UI 负向回归守卫：任何仓库行出现 danger 按钮、或缺「详情」按钮 → 硬失败
+#     ② 后端保留端点契约：DELETE /api/repositories/{repo} 仍在（handlers_extra.go:586-608），
+#        但对**多段名**走 %2F 形态必然 500 storage: not found，且探针前后
+#        GET /api/inventory 完全一致（无副作用）
 #
-# ⚠️ 破坏性：会真的删掉 registry 里的 webauto-pull/busybox。
-#    dev 环境数据不作数（2026-09-27 用户授权），其他环境不要跑。
+# 实测锚定（2026-09-28，cairn:0.5.34，158 dev）：
+#   DELETE /api/repositories/webauto-pull%2Fbusybox
+#     → 500 {"code":"INTERNAL_ERROR","message":"storage: not found"}
+#   成因：chi 按 RawPath 匹配、{repo} 原样带 %2F，storage.stat(root/repos/webauto-pull%2Fbusybox)
+#   必然失败（filesystem.go:707-728 的 os.Stat 分支）。探针后目录仍在、inventory 未变。
+#   单段名的可用路径由 delete-repo-real.yaml 单独验证（期望 200 {"repo":…,"deleted":true}）。
 #
-# ⚠️ 选择器要点（逐条对着源码核过）
-#   1. 抽屉里 tag 行的删除按钮是**纯 icon**（icon={<DeleteOutlined/>}，无 children）
-#      → 没有文案可依赖，只能用 .ant-btn-dangerous 定位；同列 CopyOutlined 按钮非 danger，可区分。
-#   2. 抽屉删除的 Popconfirm：title=「确认删除 <tag>？」、okText=「确认删除」（4 汉字 → 不插空格）。
-#   3. 列表行「删除」按钮**带 icon** → antd autoInsertSpace 不生效 → 文本是「删除」；
-#      它的 Popconfirm OK 是**无 icon 的 2 汉字** → 插空格 → 「删 除」。
-#      两者严格互斥：has-text("删 除") 不会误命中行内「删除」。
-#   4. 弹窗一律加 :not(.ant-popover-hidden) 作用域（antd 关闭后节点驻留 DOM，
-#      runner 的 css 定位非 strict、取首个匹配 —— 见 images-page.yaml 头部说明）。
-#   5. 删 tag 后仓库行**不会消失**：后端 buildRepoView 无论 tags 是否为空都回带 name，
-#      前端 handleDeleted 用同名快照替换 → 行仍在、Tag 数变 0。故第 4 步可继续点该行。
+# ⚠️ 选择器/断言要点（逐条对着源码核过）
+#   1. 行内「详情」按钮是 2 汉字、无 icon（images-page.tsx:238）→ antd autoInsertSpace
+#      可能把它渲染成「详 情」，所以守卫脚本内用 textContent.replace(/\s+/g,'') 归一化后
+#      再比对，**不依赖字面空格**。
+#   2. evaluate 无断言能力（runner.js 的 case 'evaluate' 只 return {status,result}）：
+#      一切「页内异步 + 等条件」都写成脚本内轮询/比对 → 注入 DOM 标记 → 再由 assert
+#      对标记做硬闸门（本场景标记：#__del_guard / #__del_probe / #__del_inv）。
+#   3. assert type:text 走 page.textContent + RegExp.test（**部分匹配**）→ 一律用 ^…$ 全锚定。
+#   4. 探针是页内 fetch（同源，无 CORS 问题），打的就是浏览器真实会走的请求路径。
 #
-# 前置：webauto-pull/busybox:latest 存在（由 pull-real.yaml 拉入）
+# 步数 × 时长口径：runner.js:274 `stepTimeoutMs = timeout / max(steps, 5)`。
+#   本场景 14 步、跑时传 timeout=300000 → 单步硬上限 300000/14 = 21428ms，
+#   故所有显式 timeout ≤12000ms 都在预算内。
+#
+# 前置：registry 至少 1 个仓库（推荐在 delete-tag-real 之后跑，本场景对 tag 数不敏感）
 # 用法：POST /api/run {scenario: "cairn/delete-real", env: "dev", timeout: 300000}
 name: cairn-delete-real
 description: |
-  真实删除（dev 专用，破坏性）：
-    1. 搜索定位 webauto-pull/busybox
-    2. 打开镜像详情抽屉，删除 tag latest（后端按 digest 删 manifest）
-    3. 断言抽屉内成功提示 + tag 列表变空态
-    4. 关闭抽屉，断言仓库行仍在（删 tag 不改仓库存在性）
-    5. 在列表行删除整个仓库，断言列表回到「没有匹配的镜像」空态
+  删除入口回归守卫 + 仓库删除端点契约（非破坏性）：
+    1. 打开镜像列表，全表扫描：任何行出现仓库级 danger「删除」按钮 → 失败（v0.5.29 已移除）
+    2. 记录探针前 GET /api/inventory 快照
+    3. 页内 fetch 探针 DELETE /api/repositories/webauto-pull%2Fbusybox
+    4. 断言 500 storage: not found（多段名 %2F 形态不可用；端点为刻意保留，API 契约无变化）
+    5. 断言探针前后 inventory 完全一致（无副作用）且目标仓库仍在
+  真正的删除路径：tag 级 → delete-tag-real.yaml；单段名仓库级 → delete-repo-real.yaml；
+  0 tag 仓库回收 → gc-real.yaml。
 env: dev
-tags: [destructive, images, cairn]
+tags: [images, cairn, contract]
 
 target:
   baseUrl: "{{env.baseUrl}}"
@@ -71,121 +82,143 @@ steps:
     selector: '.app-content input[placeholder*="搜索"]'
     timeout: 12000
 
-  # ---- 1. 搜索定位目标仓库 ----
-  - name: 搜索「webauto-pull」
-    action: fill
-    locator:
-      strategies:
-        - { type: css, value: '.app-content input[placeholder*="搜索"]' }
-    value: "webauto-pull"
-    timeout: 8000
-
-  - name: 等待目标行出现
+  - name: 等待仓库表格出现至少一行
     action: waitFor
     locator:
       strategies:
-        - { type: css, value: 'table tbody tr.ant-table-row:has-text("webauto-pull/busybox")' }
+        - { type: css, value: "table tbody tr.ant-table-row" }
     timeout: 12000
 
-  - name: delete-before
+  - name: delete-real-before
     action: screenshot
 
-  # ---- 2. 打开抽屉，按 tag 删除 ----
-  - name: 点击仓库名打开详情抽屉
-    action: click
-    locator:
-      strategies:
-        - { type: css, value: '.app-content button.link-cell:has-text("webauto-pull/busybox")' }
-    timeout: 8000
+  # ---- 1. UI 负向回归守卫（v0.5.29 移除的入口不得回来）----
+  - name: 负向守卫：全表不得出现仓库级删除按钮
+    action: evaluate
+    script: |
+      (async () => {
+        const rows = Array.from(document.querySelectorAll('.app-content table tbody tr.ant-table-row'));
+        if (!rows.length) throw new Error('guard: no repository row rendered');
+        const bad = [];
+        rows.forEach((tr, i) => {
+          const btns = Array.from(tr.querySelectorAll('button'));
+          const danger = btns.filter(b => b.classList.contains('ant-btn-dangerous'));
+          const labels = btns.map(b => (b.textContent || '').replace(/\s+/g, ''));
+          const hasDetail = labels.some(t => t === '详情');
+          const firstCell = (tr.innerText || '').split('\n')[0].trim();
+          if (danger.length) bad.push('row' + i + '(' + firstCell + ') 有 ' + danger.length + ' 个 danger 按钮');
+          if (!hasDetail) bad.push('row' + i + '(' + firstCell + ') 缺「详情」按钮 labels=' + JSON.stringify(labels));
+        });
+        if (bad.length) throw new Error('v0.5.29 仓库级删除入口回归: ' + bad.join('; '));
+        const old = document.getElementById('__del_guard');
+        if (old) old.remove();
+        const d = document.createElement('div');
+        d.id = '__del_guard';
+        d.style.cssText = 'position:fixed;left:0;bottom:0;z-index:99999;font-size:1px;color:transparent;';
+        d.textContent = 'guard-ok rows=' + rows.length;
+        document.body.appendChild(d);
+        return JSON.stringify({ rows: rows.length, ok: true });
+      })()
 
-  - name: 等待抽屉内 tag 行（latest）
+  - name: 断言守卫通过（标记 guard-ok）
     action: assert
-    type: visible
-    selector: '.ant-drawer .ant-table-tbody tr.ant-table-row:has-text("latest")'
-    timeout: 12000
+    type: text
+    selector: '#__del_guard'
+    value: '^guard-ok rows=[1-9][0-9]*$'
+    match: regex
+    timeout: 6000
 
-  - name: drawer-open
+  # ---- 2. 保留端点契约探针（不修改数据）----
+  - name: 记录探针前 inventory 快照
+    action: evaluate
+    script: |
+      (async () => {
+        const res = await fetch('/api/inventory', { headers: { Accept: 'application/json' } });
+        if (!res.ok) throw new Error('inventory HTTP ' + res.status);
+        const json = await res.json();
+        const payload = (json && json.data) ? json.data : json;
+        const rows = ((payload && payload.repositories) || [])
+          .map(r => r.name + ':' + (r.tagCount === undefined ? (r.tags || []).length : r.tagCount))
+          .sort();
+        const old = document.getElementById('__del_inv_before');
+        if (old) old.remove();
+        const d = document.createElement('div');
+        d.id = '__del_inv_before';
+        d.style.cssText = 'position:fixed;left:0;bottom:0;z-index:99999;font-size:1px;color:transparent;';
+        d.textContent = 'BEFORE:' + rows.join(',');
+        document.body.appendChild(d);
+        return JSON.stringify({ count: rows.length, rows: rows });
+      })()
+
+  - name: 契约探针 DELETE /api/repositories/webauto-pull%2Fbusybox
+    action: evaluate
+    script: |
+      (async () => {
+        const res = await fetch('/api/repositories/webauto-pull%2Fbusybox', { method: 'DELETE' });
+        const text = await res.text();
+        const body = (text || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+        const old = document.getElementById('__del_probe');
+        if (old) old.remove();
+        const d = document.createElement('div');
+        d.id = '__del_probe';
+        d.style.cssText = 'position:fixed;left:0;bottom:0;z-index:99999;font-size:1px;color:transparent;';
+        d.textContent = 'PROBE:' + res.status + ':' + body;
+        document.body.appendChild(d);
+        return JSON.stringify({ status: res.status, body: body });
+      })()
+
+  - name: '断言探针回 500 storage: not found'
+    action: assert
+    type: text
+    selector: '#__del_probe'
+    value: '^PROBE:500:.*storage: not found.*$'
+    match: regex
+    timeout: 6000
+
+  - name: 断言无副作用：inventory 未变且仓库仍在
+    action: evaluate
+    script: |
+      (async () => {
+        const snap = document.getElementById('__del_inv_before');
+        const raw = snap ? (snap.textContent || '') : '';
+        if (raw.indexOf('BEFORE:') !== 0) throw new Error('探针前快照缺失：未读到 #__del_inv_before');
+        const before = raw.slice('BEFORE:'.length);
+        const res = await fetch('/api/inventory', { headers: { Accept: 'application/json' } });
+        if (!res.ok) throw new Error('inventory HTTP ' + res.status);
+        const json = await res.json();
+        const payload = (json && json.data) ? json.data : json;
+        const repos = (payload && payload.repositories) || [];
+        const rows = repos
+          .map(r => r.name + ':' + (r.tagCount === undefined ? (r.tags || []).length : r.tagCount))
+          .sort();
+        const after = rows.join(',');
+        const hit = repos.find(r => r.name === 'webauto-pull/busybox');
+        const tags = hit ? (hit.tagCount === undefined ? (hit.tags || []).length : hit.tagCount) : -1;
+        const state = before === after ? 'unchanged' : 'CHANGED';
+        const old = document.getElementById('__del_inv');
+        if (old) old.remove();
+        const d = document.createElement('div');
+        d.id = '__del_inv';
+        d.style.cssText = 'position:fixed;left:0;bottom:0;z-index:99999;font-size:1px;color:transparent;';
+        d.textContent = 'INV:' + state + ':busybox=' + (hit ? 'present' : 'missing') + ':tags=' + tags;
+        document.body.appendChild(d);
+        if (state !== 'unchanged') throw new Error('探针产生副作用: before=' + before + ' after=' + after);
+        if (!hit) throw new Error('探针把 webauto-pull/busybox 删掉了（本应 500 无副作用）');
+        return JSON.stringify({ state: state, tags: tags, before: before, after: after });
+      })()
+
+  - name: 断言无副作用标记
+    action: assert
+    type: text
+    selector: '#__del_inv'
+    value: '^INV:unchanged:busybox=present:tags=\d+$'
+    match: regex
+    timeout: 6000
+
+  - name: delete-real-after
     action: screenshot
 
-  - name: 点击该 tag 行的删除按钮（纯 icon）
-    action: click
-    locator:
-      strategies:
-        - { type: css, value: '.ant-drawer .ant-table-tbody tr.ant-table-row:has-text("latest") button.ant-btn-dangerous' }
-    timeout: 8000
-
-  - name: 断言「确认删除 latest？」二次确认
-    action: assert
-    type: visible
-    selector: '.ant-popconfirm:not(.ant-popover-hidden):has-text("确认删除 latest？")'
-    timeout: 8000
-
-  - name: 点击「确认删除」（真删）
-    action: click
-    locator:
-      strategies:
-        - { type: css, value: '.ant-popconfirm:not(.ant-popover-hidden) .ant-popconfirm-buttons button:has-text("确认删除")' }
-    timeout: 8000
-
-  - name: 断言抽屉内成功提示
-    action: assert
-    type: visible
-    selector: '.ant-drawer .ant-alert-success'
-    timeout: 12000
-
-  - name: 断言抽屉 tag 列表变空态
-    action: assert
-    type: visible
-    selector: '.ant-drawer .ant-empty-description:has-text("该仓库当前没有可用的 tag")'
-    timeout: 12000
-
-  - name: drawer-after-delete
-    action: screenshot
-
-  # ---- 3. 关抽屉，删整个仓库 ----
-  - name: 关闭抽屉
-    action: click
-    locator:
-      strategies:
-        - { type: css, value: ".ant-drawer-close" }
-    timeout: 8000
-
-  - name: 断言仓库行仍在（删 tag 不改仓库存在性）
-    action: assert
-    type: visible
-    selector: '.app-content tr.ant-table-row:has-text("webauto-pull/busybox")'
-    timeout: 12000
-
-  - name: 点击该行「删除」按钮（仓库级）
-    action: click
-    locator:
-      strategies:
-        - { type: css, value: '.app-content tr.ant-table-row:has-text("webauto-pull/busybox") button.ant-btn-dangerous' }
-    timeout: 8000
-
-  - name: 断言「确认删除仓库」二次确认
-    action: assert
-    type: visible
-    selector: '.ant-popconfirm:not(.ant-popover-hidden):has-text("确认删除仓库 webauto-pull/busybox？")'
-    timeout: 8000
-
-  - name: 点击「删 除」（真删仓库）
-    action: click
-    locator:
-      strategies:
-        - { type: css, value: '.ant-popconfirm:not(.ant-popover-hidden) .ant-popconfirm-buttons button:has-text("删 除")' }
-    timeout: 8000
-
-  - name: 断言列表回到检索空态
-    action: assert
-    type: visible
-    selector: '.app-content .ant-empty-description:has-text("该 registry 没有匹配的镜像")'
-    timeout: 12000
-
-  - name: delete-after
-    action: screenshot
-
-# 期望结果（步数与 steps 逐一对应：23）
+# 期望结果（步数与 steps 逐一对应：14）
 expected:
-  totalSteps: 23
+  totalSteps: 14
   maxDuration: 300000
