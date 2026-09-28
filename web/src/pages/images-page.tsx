@@ -5,6 +5,7 @@ import {
   DatabaseOutlined,
   DeleteOutlined,
   HddOutlined,
+  QuestionCircleOutlined,
   ReloadOutlined,
   SyncOutlined,
   TagsOutlined,
@@ -297,27 +298,46 @@ export default function ImagesPage({
             重新扫描
           </Button>
           {config?.allowDelete ? (
-            <Popconfirm
-              title="确认运行 GC？"
-              description="扫描并清理孤儿 blob（24h 以上的孤立上传会话）。"
-              okText="运行"
-              cancelText="取消"
-              onConfirm={async () => {
-                const hide = message.loading('正在执行 GC 扫描…', 0);
-                try {
-                  const r = await runGC();
-                  message.success(
-                    `GC 完成：清理 ${r.removedBlobs} 个孤儿 blob，回收 ${(r.freedBytes / 1024 / 1024).toFixed(2)} MiB`
-                  );
-                } catch (e) {
-                  message.error(`GC 失败：${(e as Error).message ?? e}`);
-                } finally {
-                  hide();
-                }
-              }}
-            >
-              <Button icon={<DeleteOutlined />}>运行 GC</Button>
-            </Popconfirm>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <Popconfirm
+                title="确认运行 GC？"
+                description="扫描并清理孤儿 blob（24h 以上的孤立上传会话）。"
+                okText="运行"
+                cancelText="取消"
+                onConfirm={async () => {
+                  const hide = message.loading('正在执行 GC 扫描…', 0);
+                  try {
+                    const r = await runGC();
+                    if (!r.success) {
+                      message.error(`GC 失败：${r.message}`);
+                      return;
+                    }
+                    const { removedBlobs, freedBytes } = r.data ?? { removedBlobs: 0, freedBytes: 0 };
+                    if (removedBlobs === 0) {
+                      message.success('GC 完成：没有需要清理的孤儿 blob');
+                    } else {
+                      message.success(
+                        `GC 完成：清理 ${removedBlobs} 个孤儿 blob，回收 ${(freedBytes / 1024 / 1024).toFixed(2)} MiB`
+                      );
+                    }
+                  } catch (e) {
+                    message.error(`GC 失败：${(e as Error).message ?? e}`);
+                  } finally {
+                    hide();
+                  }
+                }}
+              >
+                <Button icon={<DeleteOutlined />}>运行 GC</Button>
+              </Popconfirm>
+              <Tooltip
+                title="GC = Garbage Collection。扫描并清理孤儿 blob（被废弃的上传会话、被解除引用的层），释放磁盘空间。注意：删除 manifest 只是解除引用，真正的磁盘空间要 GC 才回收。"
+                placement="top"
+              >
+                <QuestionCircleOutlined
+                  style={{ color: 'var(--color-text-3)', cursor: 'help', marginInlineStart: -2 }}
+                />
+              </Tooltip>
+            </span>
           ) : null}
         </div>
       </div>
