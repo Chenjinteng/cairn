@@ -31,7 +31,7 @@
 3. **库式后端**：HTTP handler 通过 `cmd/server` 装配，业务逻辑在 `internal/` 下，方便后续挂到别人的服务里
 4. **可观测性**：自带 `/healthz` `/readyz`
 
-## 当前状态:v0.5.42(2026-09-29) —— **「仓库地址」收紧:只接受 IP / 域名(禁止端口)+ 帮助文案精简成一行 + 移除所有  残留示例;后端 PATCH /api/config 校验同步收紧**
+## 当前状态:v0.5.43(2026-09-29) —— **Makefile `make help` 显示当前生效的 GOPROXY + 强化「永远走 make rebuild 不要裸跑 docker build」注释 + .env.example 默认 GOPROXY=https://goproxy.io,direct(新部署开箱即用,不再需要手动改)**
 
 ✅ 已实现（v0.1 – v0.4）：
 
@@ -83,7 +83,7 @@
 4. `README.md` 里所有 `docker build/tag/push` 示例
 5. `CHANGELOG.md` 新增一节
 
-当前版本：`0.5.42`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
+当前版本：`0.5.43`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
 
 ## 项目结构
 

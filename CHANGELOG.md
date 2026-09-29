@@ -6,6 +6,37 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.43] - 2026-09-29
+
+本轮主题:**GOPROXY 配置流程顺一下** —— Makefile / .env.example 把 `https://goproxy.io,direct` 落成默认值,`make help` 显示当前生效的 GOPROXY,「永远走 `make rebuild`」注释强化。来自部署测试的 build timeout 反馈。
+
+### 变更
+
+- **`make help` 现在显示当前 GOPROXY / NPM_REGISTRY**(`Makefile`):
+
+  之前 help 只显示 `IMAGE / PORT / HOST_PORT / DATA_DIR`,看不到当前用的是哪个 Go 模块代理 —— 受限网络下出问题要临时 debug 才能知道。现在 help 末尾多两行:
+  ```
+  GOPROXY=https://goproxy.io,direct
+  NPM_REGISTRY=https://registry.npmmirror.com
+  ```
+  (实际值取决于 shell 环境变量是否预先设置,Makefile 用 `?=`)
+
+- **`build` / `rebuild` target 注释强化**(`Makefile`):
+
+  新增一段说明:「v0.5.43: 永远走 `make build` / `make rebuild`,不要裸跑 `docker build` —— 裸跑会用 Dockerfile 默认的 proxy.golang.org(在受限网络里超时),Makefile 默认 GOPROXY 是 `https://goproxy.io,direct`(已知能访问)。要看当前用的是哪个:`make help`。」
+
+- **`.env.example` 默认 `GOPROXY=https://goproxy.io,direct`**(`.env.example`):
+
+  之前默认 `GOPROXY=`(空),由 `docker-compose.yml` 的 `${GOPROXY:-https://proxy.golang.org,direct}` fallback 兜底。proxy.golang.org 在受限网络里会超时。现在 `cp .env.example .env` 后开箱就能用 `docker compose build`,不用手动改 GOPROXY。Makefile 路径不受影响(Makefile 自己的 GOPROXY 优先于 .env)。
+
+### 影响范围(升级须知)
+
+- **行为变化**:新部署 `cp .env.example .env` 后 `GOPROXY=https://goproxy.io,direct` 自动生效。**已存在的部署**不自动重写 .env,行为不变。
+- **数据兼容**:完全兼容,无 SQLite schema / 凭据库 / 镜像存储层面的改动
+- **Dockerfile 不动**:本轮只改 Makefile + .env.example + 帮助文案,Dockerfile 仍用默认 `proxy.golang.org,direct`(在受限网络里需要 build arg 覆盖)
+
+---
+
 ## [0.5.42] - 2026-09-29
 
 本轮主题:**「仓库地址」字段收紧到只接受 IP / 域名,精简帮助文案,清掉所有 `` 残留。** 来自部署测试反馈 ——「不需要输入端口」「提示太啰嗦」「示例里别出现 」。

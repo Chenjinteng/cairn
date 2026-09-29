@@ -13,6 +13,9 @@ go.work.sum
 # Build artifacts
 /dist
 /tmp/
+# v0.5.43：go mod vendor 产物。仓库默认走 GOPROXY 下载模块,不带 vendor/;
+# 这条 ignore 让本地偶尔跑 `go mod vendor` 调试时不会进版本库
+/vendor/
 
 # Env (matches registry-manager convention: never commit secrets)
 /.env
