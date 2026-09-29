@@ -44,6 +44,13 @@ export interface AppConfig {
    * (改了容器内监听但不改 docker 端口映射,用户视角实际无效)。
    */
   port: number;
+  /**
+   * v0.5.40: 宿主机侧对外端口(HOST_PORT env,docker-compose 把 .env 的
+   * ${HOST_PORT:-8787} 传进来)。0 = 与 port 同值(无端口映射,直接容器访问)。
+   * UI 「监听端口」字段同时展示「容器内 port / 宿主机 hostPort」两个值,
+   * 帮运维一眼分清两件事。
+   */
+  hostPort: number;
   url: string;
   host: string;
   /** 是否给本 registry 配了 basic auth（密码不会回传）。 */

@@ -125,7 +125,8 @@ cairn 刻意**不做**：
 
 | env | 用途 |
 | --- | --- |
-| `PORT` | 容器内监听端口(默认 8787);对外端口走 compose 的 `HOST_PORT` |
+| `PORT` | 容器内 cairn 进程监听端口(默认 8787) |
+| `HOST_PORT` | 宿主机侧对外端口(v0.5.40 起;docker-compose 通过 `environment:` 块把 .env 的 `${HOST_PORT:-8787}` 传进来,UI 「监听端口」字段才能同时显示「容器内 / 宿主机」两个值。**只读 / boot 期生效**,改需要重建容器。) |
 | `REGISTRY_CREDENTIAL_KEY` | 凭据库 AES-256-GCM 密钥 |
 | `CAIRN_ENV` | `dev` / `prod`(v0.5.23 起;曾用名 `GO_HUB_ENV`) |
 

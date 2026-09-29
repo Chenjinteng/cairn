@@ -6,6 +6,49 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.40] - 2026-09-29
+
+本轮主题:**修正 0.5.39 自动填地址带错端口(只取 host 剥掉端口)+ 新增 HOST_PORT env 通路让 UI 「监听端口」同时显示「容器内 / 宿主机」两个值。**
+
+### 修复
+
+- **「仓库地址」自动填时只填 host,不再带端口**(`web/src/utils.ts` 新增 `hostOnly` + `web/src/pages/settings-page.tsx`):
+
+  0.5.39 的自动填把 `r.Host` 整个塞进表单(含端口)。问题是 `r.Host` 的端口是**当前操作员的访问路径**(可能经反代/隧道/SSH 端口转发),不是「对外规范地址」的端口。例:`docker-compose` 是 `80→8787` 映射,操作员经 `:1122` 隧道访问,自动填 `cairn.t..io:1122` 会误导其他用户去访问 `:1122` —— 但 `:1122` 只是你本机的隧道端口。
+
+  修法:自动填时用 `hostOnly()` 把端口剥掉,只留 `cairn.t..io`(默认 80 端口)。需要显式指定非标端口时再手填。帮助文本同步澄清「port 是对外端口,不是容器内 8787」。
+
+- **「监听端口」同时显示容器内 + 宿主机两个值**(`internal/config/config.go` + `internal/api/handlers.go` + `docker-compose.yml` + `web/src/types.ts` + `web/src/pages/settings-page.tsx`):
+
+  之前 UI 只显示 `cfg.Port`(容器内 8787)。HOST_PORT 是 docker-compose 端口映射的左侧(`${HOST_PORT:-8787}:8787`),cairn 进程在容器里看不到。现在 docker-compose 把 `HOST_PORT` 通过 `environment:` 块传进容器,cairn 读取并暴露在 `/api/config.hostPort`。两者不同时,UI 显示「8787(容器内) / 80(宿主机)」;相同时,合并显示一个数字。
+
+  - `internal/config/config.go`:新增 `Config.HostPort` 字段,从 `HOST_PORT` env 读(默认 0 = 与 Port 同)
+  - `internal/api/handlers.go` `AppConfig`:新增 `HostPort int json:"hostPort"`
+  - `docker-compose.yml`:在 `environment:` 块加 `HOST_PORT: ${HOST_PORT:-8787}`
+  - `.env.example` `HOST_PORT=80` 已就位,补充一句说明
+  - `web/src/types.ts`:AppConfig 加 `hostPort: number`
+  - `web/src/pages/settings-page.tsx` 「监听端口」字段改成「8787(容器内) / 80(宿主机)」格式
+
+### 新增
+
+- **`hostOnly()` 工具函数**(`web/src/utils.ts`):从 `host:port` 字符串中只取 host 部分(端口是末尾纯数字时剥掉;IPv6 字面量暂不处理)。0 = 与 Port 同的快写。
+
+### 文档
+
+- **`AGENTS.md` env 表更新**:`HOST_PORT` 加进基础设施 env 表,说明「容器内 vs 宿主机」两件事。
+- **`CHANGELOG.md`**:本节。
+
+### 影响范围(升级须知)
+
+- **行为变化**:
+    - 「仓库地址」表单刚打开时,从 `cairn.t..io:1122` 变成 `cairn.t..io`(剥端口)。需要非标对外端口的用户手动加。
+    - 「监听端口」字段从「8787」变成「8787(容器内) / 80(宿主机)」(如果传了 HOST_PORT 且不等)。不传 HOST_PORT 时仍是单值。
+- **数据兼容**:完全兼容,无 SQLite schema / 凭据库 / 镜像存储层面的改动。
+- **docker-compose.yml 必须升级**:从 0.5.39 升级到 0.5.40 时,docker-compose.yml 的 `environment:` 块新增了 `HOST_PORT: ${HOST_PORT:-8787}`。不升级 compose 文件也能跑,但 UI 只会显示容器内端口。
+- **其他修复**(0.5.38 / 0.5.39 已就位,本轮不动):去外部字体 / Cairn favicon / 代理测试默认 Docker Hub / 「仓库地址」表单自动填。
+
+---
+
 ## [0.5.39] - 2026-09-29
 
 本轮主题:**修正 0.5.38 第 1 个修复的方向** —— 用户反馈「仓库地址未配置时表单应该是默认填 IP,而不是 badge 也跟着变『未配置』」。其余 3 个修复（去外部字体 / favicon / 代理测试默认目标）保持 0.5.38 不变。
