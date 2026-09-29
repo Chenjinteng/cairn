@@ -27,6 +27,7 @@ import {
 } from '../api';
 import IgnoreRuleModal from '../components/ignore-rule-modal';
 import LoadError from '../components/load-error';
+import type { SidebarGroup, SidebarSelection } from '../components/page-sidebar';
 import { useAppConfig } from '../config-store';
 import type { ApiResult, AppConfig, IgnoreRules, Inventory } from '../types';
 import { stripUrlProtocol } from '../utils';
@@ -35,8 +36,13 @@ interface Props {
   config: AppConfig | null;
   onConfigChange: (config: AppConfig) => void;
   onInventoryChange: (inventory: Inventory) => void;
-  /** v0.5.37.3:侧栏 filter;暂未联动 page 内容(后续 0.5.x anchor 跳转 +)。 */
-  sidebarFilter?: string | null;
+  /**
+   * v0.5.37.4：设置页侧栏是**锚点导航**，这里没有可筛的数据，只为对齐 App 的统一
+   * props 契约而收下，页面自身不读它（真正的跳转由 PageSidebar 按 DOM id 处理）。
+   */
+  sidebarFilter: SidebarSelection;
+  /** v0.5.37.4：把本页侧栏分组上浮给 App，由 App 统一下发给 PageSidebar。 */
+  onPublishGroups: (groups: SidebarGroup[]) => void;
 }
 
 /**
@@ -63,7 +69,12 @@ function ReadonlyValue({ value, mono }: { value: string; mono?: boolean }) {
   );
 }
 
-export default function SettingsPage({ config, onConfigChange, onInventoryChange }: Props) {
+export default function SettingsPage({
+  config,
+  onConfigChange,
+  onInventoryChange,
+  onPublishGroups,
+}: Props) {
   const { message, modal } = App.useApp();
   /**
    * v0.5.18（F6/F7）：读取/缓存/单飞都在 config-store；本页只在 config 缺失时
@@ -357,6 +368,40 @@ export default function SettingsPage({ config, onConfigChange, onInventoryChange
   };
 
   /**
+   * v0.5.37.4：设置页侧栏 = **页内锚点导航**（点击平滑滚动 + 随滚动高亮）。
+   *
+   * 这一页没有可"筛选"的数据：唯一一张表是热度忽略规则，条目数取决于规则数，
+   * 拿它当过滤维度没有意义（筛完还是同一批字段，只是少几行）。所以侧栏放的是
+   * 四个区块的跳转 —— 表单有 8 个字段，想回头找「允许拉取」得从底滚回中段。
+   *
+   * config 未到手时整页是「加载中 / 加载失败」，锚点目标根本不存在，
+   * 下发空组让侧栏显示空态，而不是一排点了没反应的按钮。
+   */
+  const sidebarGroups = useMemo<SidebarGroup[]>(
+    () =>
+      config
+        ? [
+            {
+              key: 'settings-nav',
+              label: '快速跳转',
+              mode: 'anchor',
+              items: [
+                { key: 'settings-connection', label: '仓库连接' },
+                { key: 'settings-switches', label: '功能开关' },
+                { key: 'settings-platforms', label: '拉取平台' },
+                { key: 'settings-heat', label: '热度记录' },
+              ],
+            },
+          ]
+        : [],
+    [config],
+  );
+
+  useEffect(() => {
+    onPublishGroups(sidebarGroups);
+  }, [onPublishGroups, sidebarGroups]);
+
+  /**
    * v0.5.18（F7）：页头与提示条提前算好，供早退分支与主分支共用。
    * 两个按钮（测试连接 / 重新扫描）不依赖 config，所以早退分支里也保留。
    */
@@ -446,280 +491,280 @@ export default function SettingsPage({ config, onConfigChange, onInventoryChange
         </div>
 
         <Form layout="vertical" size="middle" colon={false}>
-          {/* 仓库地址 */}
-          <Form.Item
-            label={<span>仓库地址（/前缀）</span>}
-            extra={
-              <>
-                配置本仓库对外暴露的地址（docker login / docker push 用）。示例：<span className="mono">registry.example.com:8787</span> 或 <span className="mono">devhub..io:443</span>。协议 = http（v0.6.0 起可切到 https），写在前面那个固定 badge 上，**这里只填 host:port**。
-              </>
-            }
-          >
-            {editing ? (
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                {/* v0.5.28: addonBefore 把当前协议 (http) 显式画出来,用户不会被「我刚填的为啥报错」困扰;
-                    v0.6.0 加 https 切换时,这个 badge 改成 Select。 */}
-                <Input
-                  className="mono"
-                  value={registryUrlDraft}
-                  onChange={(e) => setRegistryUrlDraft(e.target.value)}
-                  disabled={savingBulk}
-                  allowClear
-                  addonBefore={<Tag color="cyan" bordered={false}>http://</Tag>}
-                  placeholder="registry.example.com:8787"
-                  style={{ maxWidth: 560 }}
-                />
-              </div>
-            ) : (
-              // 只读视图也补上协议前缀,避免用户看到「http://registry.example.com:8787」却找不到它是从哪儿配出来的。
-              <ReadonlyValue
-                value={
-                  (() => {
-                    const v = config?.mutable.registryUrl ?? '';
-                    return v ? `http://${stripUrlProtocol(v)}` : '(空 — pull 任务回退到 Docker Hub)';
-                  })()
-                }
-                mono
-              />
-            )}
-          </Form.Item>
-
-          {/* v0.5.34: 监听端口只读显示 —— 改端口要走 docker-compose.yml 的
-              HOST_PORT + docker compose up -d 重建容器,UI 不暴露修改入口
-              (改了容器内监听但不改 docker 端口映射,用户视角实际无效)。 */}
-          <Form.Item
-            label={<span>监听端口</span>}
-            extra={
-              config?.port
-                ? `容器内 cairn 进程监听 ${config.port};宿主机→容器映射在 docker-compose.yml 的 HOST_PORT,改完需要 docker compose up -d 重建容器。`
-                : '读取中…'
-            }
-          >
-            <ReadonlyValue value={config?.port ? String(config.port) : '--'} mono />
-          </Form.Item>
-
-          {/* Registry 认证 */}
-          <Form.Item
-            label={<span>Registry 认证</span>}
-            extra={
-              editing
-                ? '输入新用户名 / 密码覆盖；密码不回显；保存后立即生效，无需重启。'
-                : config?.mutable.usingAuth
-                  ? '当前已开启 Basic 认证；客户端需要先 docker login 才能 push/pull。'
-                  : '留空 = 关闭认证（任何人可访问）。配了之后客户端需要 docker login。'
-            }
-          >
-            {editing ? (
-              // editing=true: 同时显示用户名 + 密码两个 input，整体保存时
-              // 一起 PATCH(username 改了就发,密码留空表示不动)。
-              <Space wrap>
-                <Input
-                  placeholder="username"
-                  value={registryUsernameDraft}
-                  onChange={(e) => setRegistryUsernameDraft(e.target.value)}
-                  style={{ maxWidth: 220 }}
-                />
-                <Input.Password
-                  placeholder="新密码（输入即覆盖；留空 = 不动；清空输入 = 关闭认证）"
-                  value={registryPasswordDraft}
-                  onChange={(e) => setRegistryPasswordDraft(e.target.value)}
-                  style={{ maxWidth: 420 }}
-                />
-              </Space>
-            ) : (
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {/* v0.5.37.4：侧栏「仓库连接」锚点 —— 地址 / 端口 / 认证 / 展示名是一件事：
+              这个仓库对外长什么样、怎么访问。 */}
+          <div id="settings-connection" className="settings-anchor">
+            {/* 仓库地址 */}
+            <Form.Item
+              label={<span>仓库地址（/前缀）</span>}
+              extra={
+                <>
+                  配置本仓库对外暴露的地址（docker login / docker push 用）。示例：<span className="mono">registry.example.com:8787</span> 或 <span className="mono">devhub..io:443</span>。协议 = http（v0.6.0 起可切到 https），写在前面那个固定 badge 上，<strong>这里只填 host:port</strong>。
+                </>
+              }
+            >
+              {editing ? (
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  {/* v0.5.28: addonBefore 把当前协议 (http) 显式画出来,用户不会被「我刚填的为啥报错」困扰;
+                      v0.6.0 加 https 切换时,这个 badge 改成 Select。 */}
+                  <Input
+                    className="mono"
+                    value={registryUrlDraft}
+                    onChange={(e) => setRegistryUrlDraft(e.target.value)}
+                    disabled={savingBulk}
+                    allowClear
+                    addonBefore={<Tag color="cyan" bordered={false}>http://</Tag>}
+                    placeholder="registry.example.com:8787"
+                    style={{ maxWidth: 560 }}
+                  />
+                </div>
+              ) : (
+                // 只读视图也补上协议前缀,避免用户看到「http://registry.example.com:8787」却找不到它是从哪儿配出来的。
                 <ReadonlyValue
                   value={
-                    config?.mutable.usingAuth
-                      ? '已开启（用户名 ' + (config.mutable.registryUsername || '?') + '）'
-                      : '关闭（任何人都可访问）'
+                    (() => {
+                      const v = config?.mutable.registryUrl ?? '';
+                      return v ? `http://${stripUrlProtocol(v)}` : '(空 — pull 任务回退到 Docker Hub)';
+                    })()
+                  }
+                  mono
+                />
+              )}
+            </Form.Item>
+
+            {/* v0.5.34: 监听端口只读显示 —— 改端口要走 docker-compose.yml 的
+                HOST_PORT + docker compose up -d 重建容器,UI 不暴露修改入口
+                (改了容器内监听但不改 docker 端口映射,用户视角实际无效)。 */}
+            <Form.Item
+              label={<span>监听端口</span>}
+              extra={
+                config?.port
+                  ? `容器内 cairn 进程监听 ${config.port};宿主机→容器映射在 docker-compose.yml 的 HOST_PORT,改完需要 docker compose up -d 重建容器。`
+                  : '读取中…'
+              }
+            >
+              <ReadonlyValue value={config?.port ? String(config.port) : '--'} mono />
+            </Form.Item>
+
+            {/* Registry 认证 */}
+            <Form.Item
+              label={<span>Registry 认证</span>}
+              extra={
+                editing
+                  ? '输入新用户名 / 密码覆盖；密码不回显；保存后立即生效，无需重启。'
+                  : config?.mutable.usingAuth
+                    ? '当前已开启 Basic 认证；客户端需要先 docker login 才能 push/pull。'
+                    : '留空 = 关闭认证（任何人可访问）。配了之后客户端需要 docker login。'
+              }
+            >
+              {editing ? (
+                // editing=true: 同时显示用户名 + 密码两个 input，整体保存时
+                // 一起 PATCH(username 改了就发,密码留空表示不动)。
+                <Space wrap>
+                  <Input
+                    placeholder="username"
+                    value={registryUsernameDraft}
+                    onChange={(e) => setRegistryUsernameDraft(e.target.value)}
+                    style={{ maxWidth: 220 }}
+                  />
+                  <Input.Password
+                    placeholder="新密码（输入即覆盖；留空 = 不动；清空输入 = 关闭认证）"
+                    value={registryPasswordDraft}
+                    onChange={(e) => setRegistryPasswordDraft(e.target.value)}
+                    style={{ maxWidth: 420 }}
+                  />
+                </Space>
+              ) : (
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <ReadonlyValue
+                    value={
+                      config?.mutable.usingAuth
+                        ? '已开启（用户名 ' + (config.mutable.registryUsername || '?') + '）'
+                        : '关闭（任何人都可访问）'
+                    }
+                  />
+                </div>
+              )}
+            </Form.Item>
+
+            {/* 展示名称 */}
+            <Form.Item
+              label={<span>展示名称</span>}
+              extra="顶部 / 设置页显示名"
+            >
+              {editing ? (
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <Input
+                    value={registryNameDraft}
+                    onChange={(e) => setRegistryNameDraft(e.target.value)}
+                    placeholder="内网离线镜像源"
+                    style={{ maxWidth: 420 }}
+                  />
+                </div>
+              ) : (
+                <ReadonlyValue
+                  value={config?.mutable.registryName || '镜像仓库'}
+                />
+              )}
+            </Form.Item>
+          </div>
+
+          {/* v0.5.37.4：侧栏「功能开关」锚点 —— 两个 allow.* 语义开关，保存即生效。 */}
+          <div id="settings-switches" className="settings-anchor">
+            {/* 允许删除 */}
+            <Form.Item
+              label={<span>允许删除</span>}
+              extra="关闭后所有删除端点（仓库 / manifest-by-digest / GC）返回 403"
+            >
+              {editing ? (
+                <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                  <Switch
+                    checked={allowDeleteDraft}
+                    onChange={setAllowDeleteDraft}
+                    checkedChildren="启用"
+                    unCheckedChildren="只读"
+                  />
+                </div>
+              ) : (
+                <ReadonlyValue
+                  value={config?.mutable.allowDelete ? '启用' : '只读（关闭）'}
+                />
+              )}
+            </Form.Item>
+
+            {/* 允许拉取 */}
+            <Form.Item
+              label={<span>允许拉取</span>}
+              extra="关闭后 /api/pull/* 写入端点拒绝"
+            >
+              {editing ? (
+                <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                  <Switch
+                    checked={allowPullDraft}
+                    onChange={setAllowPullDraft}
+                    checkedChildren="启用"
+                    unCheckedChildren="禁用"
+                  />
+                </div>
+              ) : (
+                <ReadonlyValue
+                  value={config?.mutable.allowPull ? '启用' : '禁用'}
+                />
+              )}
+            </Form.Item>
+          </div>
+
+          {/* v0.5.37.4：侧栏「拉取平台」锚点。之前它排在「热度保留天数」之后，
+              跟「多架构镜像怎么拉」的开关分散在两处；挪到开关组后面更顺。 */}
+          <div id="settings-platforms" className="settings-anchor">
+            {/* 拉取平台白名单 */}
+            <Form.Item
+              label={<span>拉取平台白名单</span>}
+              extra={
+                editing
+                  ? '勾选目标平台；取消勾选 = 排除；保存后对下一个 pull 任务立即生效。'
+                  : pullPlatformsDraft.length === 0
+                    ? '当前未启用过滤：多架构镜像会按上游索引全部拉取（等同历史默认行为）。'
+                    : `已选 ${pullPlatformsDraft.length} 个：${pullPlatformsDraft.join(', ')}。`
+              }
+            >
+              {editing ? (
+                <div>
+                  <Space wrap>
+                    {[
+                      { id: 'linux/amd64', label: 'linux/amd64 (x86_64)' },
+                      { id: 'linux/arm64', label: 'linux/arm64 (aarch64)' },
+                      { id: 'linux/arm/v7', label: 'linux/arm/v7 (32-bit ARMv7)' },
+                      { id: 'linux/386', label: 'linux/386' },
+                      { id: 'linux/ppc64le', label: 'linux/ppc64le' },
+                      { id: 'linux/s390x', label: 'linux/s390x' },
+                      { id: 'linux/riscv64', label: 'linux/riscv64' },
+                      { id: 'windows/amd64', label: 'windows/amd64' },
+                    ].map((opt) => {
+                      const on = pullPlatformsDraft.includes(opt.id);
+                      return (
+                        <Tag.CheckableTag
+                          key={opt.id}
+                          checked={on}
+                          onChange={(checked) => {
+                            setPullPlatformsDraft((prev) => {
+                              const set = new Set(prev);
+                              if (checked) set.add(opt.id);
+                              else set.delete(opt.id);
+                              return Array.from(set);
+                            });
+                          }}
+                        >
+                          {opt.label}
+                        </Tag.CheckableTag>
+                      );
+                    })}
+                  </Space>
+                  <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
+                    {pullPlatformsDraft.length > 0 ? (
+                      <Button type="link" onClick={() => setPullPlatformsDraft([])}>
+                        清空（恢复全部）
+                      </Button>
+                    ) : null}
+                  </div>
+                </div>
+              ) : (
+                <ReadonlyValue
+                  value={
+                    pullPlatformsDraft.length === 0
+                      ? '未启用（拉取所有平台）'
+                      : pullPlatformsDraft.join(', ')
                   }
                 />
-              </div>
-            )}
-          </Form.Item>
+              )}
+            </Form.Item>
+          </div>
 
-          {/* 展示名称 */}
-          <Form.Item
-            label={<span>展示名称</span>}
-            extra="顶部 / 设置页显示名"
-          >
-            {editing ? (
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <Input
-                  value={registryNameDraft}
-                  onChange={(e) => setRegistryNameDraft(e.target.value)}
-                  placeholder="内网离线镜像源"
-                  style={{ maxWidth: 420 }}
-                />
-              </div>
-            ) : (
-              <ReadonlyValue
-                value={config?.mutable.registryName || '镜像仓库'}
-              />
-            )}
-          </Form.Item>
-
-          {/* 允许删除 */}
-          <Form.Item
-            label={<span>允许删除</span>}
-            extra="关闭后所有删除端点（仓库 / manifest-by-digest / GC）返回 403"
-          >
-            {editing ? (
-              <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-                <Switch
-                  checked={allowDeleteDraft}
-                  onChange={setAllowDeleteDraft}
-                  checkedChildren="启用"
-                  unCheckedChildren="只读"
-                />
-              </div>
-            ) : (
-              <ReadonlyValue
-                value={config?.mutable.allowDelete ? '启用' : '只读（关闭）'}
-              />
-            )}
-          </Form.Item>
-
-          {/* 允许拉取 */}
-          <Form.Item
-            label={<span>允许拉取</span>}
-            extra="关闭后 /api/pull/* 写入端点拒绝"
-          >
-            {editing ? (
-              <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-                <Switch
-                  checked={allowPullDraft}
-                  onChange={setAllowPullDraft}
-                  checkedChildren="启用"
-                  unCheckedChildren="禁用"
-                />
-              </div>
-            ) : (
-              <ReadonlyValue
-                value={config?.mutable.allowPull ? '启用' : '禁用'}
-              />
-            )}
-          </Form.Item>
-
-          {/* 热度保留天数 */}
-          <Form.Item
-            label={<span>热度保留天数</span>}
-            extra="超过的天数会被 /api/stats/heat 自动清掉"
-          >
-            {editing ? (
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <InputNumber
-                  min={1}
-                  max={3650}
-                  value={statsRetentionDraft}
-                  onChange={(v) => setStatsRetentionDraft(v ?? 365)}
-                  style={{ width: 180 }}
-                />
-              </div>
-            ) : (
-              <ReadonlyValue
-                value={`${config?.mutable.statsRetentionDays ?? 365} 天`}
-              />
-            )}
-          </Form.Item>
-
-          {/* 拉取平台白名单 */}
-          <Form.Item
-            label={<span>拉取平台白名单</span>}
-            extra={
-              editing
-                ? '勾选目标平台；取消勾选 = 排除；保存后对下一个 pull 任务立即生效。'
-                : pullPlatformsDraft.length === 0
-                  ? '当前未启用过滤：多架构镜像会按上游索引全部拉取（等同历史默认行为）。'
-                  : `已选 ${pullPlatformsDraft.length} 个：${pullPlatformsDraft.join(', ')}。`
-            }
-          >
-            {editing ? (
-              <div>
-                <Space wrap>
-                  {[
-                    { id: 'linux/amd64', label: 'linux/amd64 (x86_64)' },
-                    { id: 'linux/arm64', label: 'linux/arm64 (aarch64)' },
-                    { id: 'linux/arm/v7', label: 'linux/arm/v7 (32-bit ARMv7)' },
-                    { id: 'linux/386', label: 'linux/386' },
-                    { id: 'linux/ppc64le', label: 'linux/ppc64le' },
-                    { id: 'linux/s390x', label: 'linux/s390x' },
-                    { id: 'linux/riscv64', label: 'linux/riscv64' },
-                    { id: 'windows/amd64', label: 'windows/amd64' },
-                  ].map((opt) => {
-                    const on = pullPlatformsDraft.includes(opt.id);
-                    return (
-                      <Tag.CheckableTag
-                        key={opt.id}
-                        checked={on}
-                        onChange={(checked) => {
-                          setPullPlatformsDraft((prev) => {
-                            const set = new Set(prev);
-                            if (checked) set.add(opt.id);
-                            else set.delete(opt.id);
-                            return Array.from(set);
-                          });
-                        }}
-                      >
-                        {opt.label}
-                      </Tag.CheckableTag>
-                    );
-                  })}
-                </Space>
-                <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
-                  {pullPlatformsDraft.length > 0 ? (
-                    <Button type="link" onClick={() => setPullPlatformsDraft([])}>
-                      清空（恢复全部）
-                    </Button>
-                  ) : null}
+          {/* v0.5.37.4：侧栏「热度记录」锚点 —— 保留天数在这里，忽略规则表与
+              「清空热度数据」紧接在下方信息条之后。 */}
+          <div id="settings-heat" className="settings-anchor">
+            {/* 热度保留天数 */}
+            <Form.Item
+              label={<span>热度保留天数</span>}
+              extra="超过的天数会被 /api/stats/heat 自动清掉"
+            >
+              {editing ? (
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <InputNumber
+                    min={1}
+                    max={3650}
+                    value={statsRetentionDraft}
+                    onChange={(v) => setStatsRetentionDraft(v ?? 365)}
+                    style={{ width: 180 }}
+                  />
                 </div>
-              </div>
-            ) : (
-              <ReadonlyValue
-                value={
-                  pullPlatformsDraft.length === 0
-                    ? '未启用（拉取所有平台）'
-                    : pullPlatformsDraft.join(', ')
-                }
-              />
-            )}
-          </Form.Item>
+              ) : (
+                <ReadonlyValue
+                  value={`${config?.mutable.statsRetentionDays ?? 365} 天`}
+                />
+              )}
+            </Form.Item>
+          </div>
+
         </Form>
       </div>
 
       <Alert
         type="info"
         showIcon
-        message="如何修改要管理的镜像仓库"
+        message="改这些参数不用碰环境变量"
         description={
           <div>
-            <div>这个工具一次管理一个 registry。地址通过环境变量或配置文件提供，改完重启服务即可。</div>
-            <pre
-              className="mono"
-              style={{
-                margin: '8px 0 0',
-                padding: '10px 12px',
-                background: 'var(--color-fill-1)',
-                border: '1px solid var(--color-border-2)',
-                borderRadius: 'var(--radius-sm)',
-                fontSize: 12,
-                lineHeight: 1.7,
-                whiteSpace: 'pre-wrap',
-              }}
-            >{`# 方式一：环境变量
-REGISTRY_URL=http://192.0.2.10:10001 \\
-REGISTRY_PROXY=http://proxy.example.com:8080 \\
-PORT=8787 pnpm start
-
-# 方式二：项目根目录 registry.config.json
-{
-  "name": "内网离线镜像源",
-  "url": "http://192.0.2.10:10001",
-  "proxy": "",
-  "cacheTtlSeconds": 60,
-  "port": 8787
-}`}</pre>
+            <div>
+              仓库地址、认证、功能开关、拉取平台与热度保留天数都存在本机 SQLite 里 —— 在
+              上面的面板里点「编辑」直接改，点「保存所有修改」即刻生效，不用改环境变量、
+              也不用重启容器。
+            </div>
+            <div style={{ marginTop: 4, color: 'var(--color-text-3)' }}>
+              仍然要走容器的只有两件事：对外端口映射（<span className="mono">docker-compose.yml</span>
+              的 <span className="mono">HOST_PORT</span>，改完 <span className="mono">docker compose up -d</span>
+              重建容器）与数据目录位置（<span className="mono">HOST_DATA_DIR</span>）。
+            </div>
           </div>
         }
       />
@@ -812,14 +857,13 @@ PORT=8787 pnpm start
                   磁盘空间要运行 <span className="mono">registry garbage-collect</span> 才会真正回收。
                 </div>
                 <div style={{ marginTop: 4, color: 'var(--color-text-3)' }}>
-                  想完全关掉破坏性操作：在配置里设置 <span className="mono">allowDelete: false</span>
-                  （或环境变量 <span className="mono">REGISTRY_ALLOW_DELETE=false</span>）后重启服务。
+                  想完全关掉破坏性操作：把上面的「允许删除」开关切到「只读」并保存，立即生效，无需重启。
                 </div>
               </>
             ) : (
               <div>
-                服务端已设置 <span className="mono">allowDelete=false</span>，删除入口已隐藏，
-                所有删除请求都会被拒绝。
+                「允许删除」当前为关闭，删除入口已隐藏，所有删除请求都会被拒绝。要重新放开：
+                回到上面的面板点「编辑」，把开关切到「启用」再保存。
               </div>
             )}
           </div>

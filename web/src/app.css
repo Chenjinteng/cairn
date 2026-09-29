@@ -240,6 +240,24 @@
   color: var(--color-side-nav-text-active);
 }
 
+/* 侧栏没有可用筛选项时的占位（页面未发布分组 / 当前数据为空）。 */
+.page-sidebar-empty {
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--color-text-4, var(--color-text-3));
+}
+
+/*
+ * 设置页锚点块的滚动补偿。
+ *
+ * 锚点跳转走 scrollIntoView，滚动容器是 .app-content —— 容器内没有 sticky
+ * 顶栏叠加，所以只需要一点点上边距，避免区块标题贴着容器顶部。
+ */
+.settings-anchor {
+  scroll-margin-top: 12px;
+}
+
 /* 页面骨架。外边距由 .app-main 的 p-4 提供，页面内不要再加外边距。 */
 .page {
   display: flex;

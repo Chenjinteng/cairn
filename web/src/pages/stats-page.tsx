@@ -34,6 +34,7 @@ import {
 } from '../api';
 import MetricCard from '../components/metric-card';
 import ContributionHeatmap from '../components/contribution-heatmap';
+import type { SidebarGroup, SidebarSelection } from '../components/page-sidebar';
 import type {
   ApiResult,
   AppConfig,
@@ -53,17 +54,24 @@ interface Props {
   config: AppConfig | null;
   onConfigChange: (config: AppConfig) => void;
   /**
-   * v0.5.37.3:从侧栏传入的 filter(item key)。联动:「时间窗」group 点某天 → setDays;
-   * 「客户端 UA」group 暂不联动(未来 0.5.x 优化时再加)。
+   * v0.5.37.4:从侧栏传入的当前选择（groupKey -> itemKey）。
+   * 「时间窗」组选中某档 → 下面的 days 跟着变；侧栏没有选择时兜底 30 天。
    */
-  sidebarFilter?: string | null;
+  sidebarFilter: SidebarSelection;
+  /** 把本页真实分组上浮给 App，再统一下发给 PageSidebar。热度统计未启用时下发空组。 */
+  onPublishGroups: (groups: SidebarGroup[]) => void;
 }
 
-const WINDOW_OPTIONS: { label: string; value: StatsWindow }[] = [
-  { label: '7 天', value: 7 },
-  { label: '30 天', value: 30 },
-  { label: '90 天', value: 90 },
-];
+/**
+ * v0.5.37.4:时间窗选项挪进了侧栏（侧栏存的是离散 item key），
+ * 这里只留 key → 天数的映射；页头原来那个 Segmented 是同一状态的第二入口，已删除。
+ */
+const WINDOW_VALUES: Record<string, StatsWindow> = {
+  '7d': 7,
+  '30d': 30,
+  '90d': 90,
+};
+const DEFAULT_WINDOW: StatsWindow = 30;
 
 /**
  * 日历的跨度：**固定 12 个月，不随时间窗变化**。
@@ -100,26 +108,17 @@ const NOTIFY_CONFIG_YAML = `notifications:
       threshold: 5
       backoff: 1s`;
 
-export default function StatsPage({ config, onConfigChange, sidebarFilter }: Props) {
-  const [days, setDays] = useState<StatsWindow>(30);
-  // v0.5.37.3:侧栏「时间窗:最近 7d / 30d / 90d / 全部」联动 setDays。
-  // 「最近 7d」→ 7;「最近 30d」→ 30;「最近 90d」→ 90;「全部」→ 90(用 90 近似 "全部" —— StatsWindow 类型严格 7/30/90)。
-  useEffect(() => {
-    if (!sidebarFilter) return;
-    const idx = sidebarFilter.indexOf(':');
-    if (idx < 0) return;
-    const group = sidebarFilter.slice(0, idx);
-    const item = sidebarFilter.slice(idx + 1);
-    if (group !== '时间窗') return;
-    const map: Record<string, StatsWindow> = {
-      '最近 7d': 7,
-      '最近 30d': 30,
-      '最近 90d': 90,
-      '全部': 90,
-    };
-    const next = map[item];
-    if (next !== undefined) setDays(next);
-  }, [sidebarFilter]);
+export default function StatsPage({
+  config,
+  onConfigChange,
+  sidebarFilter,
+  onPublishGroups,
+}: Props) {
+  /**
+   * v0.5.37.4：时间窗不再自带 state —— 它在侧栏里，App 存 choice，这里只是读出来。
+   * 侧栏没选（首屏）时兜底 30 天，跟 App 初值 `{ window: '30d' }` 一致。
+   */
+  const days = WINDOW_VALUES[sidebarFilter.window ?? ''] ?? DEFAULT_WINDOW;
   const [topBy, setTopBy] = useState<StatsTopBy>('repository');
   const [summary, setSummary] = useState<StatsSummary | null>(null);
   const [topItems, setTopItems] = useState<StatsTopItem[]>([]);
@@ -154,6 +153,32 @@ export default function StatsPage({ config, onConfigChange, sidebarFilter }: Pro
   const topWrapRef = useRef<HTMLDivElement>(null);
 
   const statsEnabled = config?.statsEnabled === true;
+
+  /**
+   * v0.5.37.4：侧栏只放这一页真实存在的「视图状态」。热度统计未启用时
+   * 时间窗没有意义（页面本身就是空态），下发空组让侧栏显示占位文案。
+   */
+  const sidebarGroups = useMemo<SidebarGroup[]>(
+    () =>
+      statsEnabled
+        ? [
+            {
+              key: 'window',
+              label: '时间窗',
+              items: [
+                { key: '7d', label: '最近 7 天' },
+                { key: '30d', label: '最近 30 天' },
+                { key: '90d', label: '最近 90 天' },
+              ],
+            },
+          ]
+        : [],
+    [statsEnabled]
+  );
+
+  useEffect(() => {
+    onPublishGroups(sidebarGroups);
+  }, [onPublishGroups, sidebarGroups]);
 
   /** 已经生效的规则（环境变量 ∪ 界面）。已经命中的客户端就不再给「忽略」入口。 */
   const ignoreRules = config?.statsIgnoreUseragents ?? [];
@@ -517,13 +542,7 @@ export default function StatsPage({ config, onConfigChange, sidebarFilter }: Pro
         <p className="page-subtitle">统计每个仓库与 tag 被推送、拉取的次数。</p>
       </div>
       <div className="page-actions">
-        {statsEnabled ? (
-          <Segmented
-            options={WINDOW_OPTIONS}
-            value={days}
-            onChange={(value) => setDays(value as StatsWindow)}
-          />
-        ) : null}
+        {/* v0.5.37.4：时间窗移到了左侧栏（视图状态归侧栏），页头只留「刷新」。 */}
         <Button
           icon={<ReloadOutlined />}
           loading={loading}

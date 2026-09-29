@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   App as AntdApp,
@@ -47,6 +47,7 @@ import type {
   ProxyTestResult,
 } from '../types';
 import { formatDateTime } from '../utils';
+import type { SidebarGroup, SidebarItem, SidebarSelection } from '../components/page-sidebar';
 
 /**
  * v0.5.15: 探测延迟的人类可读格式。探测是纯 TCP 建连，正常在毫秒级；
@@ -59,10 +60,49 @@ function formatLatency(ms?: number): string {
   return ms >= 10 ? `${Math.round(ms)} ms` : `${ms.toFixed(1)} ms`;
 }
 
+/**
+ * v0.5.37.4：从代理 URL 取协议（scheme，小写、去冒号），作为侧栏「协议」分组的分桶键。
+ * 解析失败 / 为空归「未知」；只看 url 本身，不碰代理的其它字段。
+ */
+function proxyProtocolOf(url: string | undefined): string {
+  const raw = String(url ?? '').trim();
+  if (!raw) return '未知';
+  try {
+    const scheme = new URL(raw).protocol.replace(/:$/, '').toLowerCase();
+    return scheme || '未知';
+  } catch {
+    return '未知';
+  }
+}
+
+/**
+ * v0.5.37.4：探测状态分桶键 —— 与「状态」列同一口径（ok / failed / 其余一律 untested）。
+ * 注意只认**已落库**的 lastProbeStatus：行上那个临时的「探测中」标签不参与分桶，
+ * 否则一次批量探测会让侧栏计数先跳到别处再跳回来。
+ */
+function probeBucketOf(p: ProxyEntry): 'ok' | 'failed' | 'untested' {
+  const s = p.lastProbeStatus || '';
+  if (s === 'ok') return 'ok';
+  if (s === 'failed') return 'failed';
+  return 'untested';
+}
+
+const PROBE_LABELS: Record<'ok' | 'failed' | 'untested', string> = {
+  ok: '可用',
+  failed: '不可用',
+  untested: '未探测',
+};
+
 interface Props {
   config: AppConfig | null;
-  /** v0.5.37.3:侧栏 filter;暂未联动 page 内容(协议 / 状态需 client-side filter,后续 0.5.x 加)。 */
-  sidebarFilter?: string | null;
+  /**
+   * v0.5.37.4：侧栏选择状态。两组，跨组 AND：
+   *   - protocol：按代理 URL 的 scheme 分桶
+   *   - probe：按已落库的探测状态分桶（可用 / 不可用 / 未探测）
+   */
+  sidebarFilter: SidebarSelection;
+  /** v0.5.37.4：把真实分组（含真实计数 badge）上浮给 App，由 App 统一下发到侧栏。 */
+  onPublishGroups: (groups: SidebarGroup[]) => void;
 }
 
 interface FormValues {
@@ -133,7 +173,7 @@ function ProxyTestAlert({ result }: { result: ProxyTestResult }) {
   );
 }
 
-export default function ProxiesPage({ config }: Props) {
+export default function ProxiesPage({ config, sidebarFilter, onPublishGroups }: Props) {
   const { message, modal } = AntdApp.useApp();
   const [proxies, setProxies] = useState<ProxyEntry[]>([]);
   // v0.5.9: per-row spinner for the '立即探测' button.
@@ -185,6 +225,68 @@ export default function ProxiesPage({ config }: Props) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  /**
+   * v0.5.37.4：侧栏分组 —— 两组都只放**视图状态**（过滤），有副作用的操作（探测全部 / 新增）
+   * 留在页头。badge 全部来自真实代理列表：
+   *   - 协议：代理 URL 的 scheme 分桶（http / https / 其它 / 未知）
+   *   - 状态：可用 / 不可用 / 未探测（与「状态」列同一口径，见 probeBucketOf）
+   * 代理列表为空时下发空组，侧栏显示占位文案而不是空壳。
+   * 注意：本部署禁止管代理时 refresh 提前返回、列表恒为空，这里自然下发空组。
+   */
+  const sidebarGroups = useMemo<SidebarGroup[]>(() => {
+    if (proxies.length === 0) return [];
+
+    const protocolCounts = new Map<string, number>();
+    proxies.forEach((p) => {
+      const scheme = proxyProtocolOf(p.url);
+      protocolCounts.set(scheme, (protocolCounts.get(scheme) ?? 0) + 1);
+    });
+    const protocolItems: SidebarItem[] = Array.from(protocolCounts.entries())
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([scheme, count]) => ({ key: scheme, label: scheme.toUpperCase(), badge: count }));
+
+    const bucketCount = (want: 'ok' | 'failed' | 'untested') =>
+      proxies.filter((p) => probeBucketOf(p) === want).length;
+    const probeItems: SidebarItem[] = [
+      { key: 'all', label: '全部', badge: proxies.length },
+      { key: 'ok', label: PROBE_LABELS.ok, badge: bucketCount('ok') },
+      { key: 'failed', label: PROBE_LABELS.failed, badge: bucketCount('failed') },
+      { key: 'untested', label: PROBE_LABELS.untested, badge: bucketCount('untested') },
+    ];
+
+    return [
+      {
+        key: 'protocol',
+        label: '协议',
+        items: [{ key: 'all', label: '全部', badge: proxies.length }, ...protocolItems],
+      },
+      { key: 'probe', label: '状态', items: probeItems },
+    ];
+  }, [proxies]);
+
+  useEffect(() => {
+    onPublishGroups(sidebarGroups);
+  }, [onPublishGroups, sidebarGroups]);
+
+  /** 表格数据 = 全量代理按侧栏两组选择做 AND 过滤。 */
+  const visibleProxies = useMemo(() => {
+    const protocol = sidebarFilter.protocol ?? null;
+    const probe = sidebarFilter.probe ?? null;
+    return proxies.filter((p) => {
+      if (protocol && protocol !== 'all' && proxyProtocolOf(p.url) !== protocol) {
+        return false;
+      }
+      if (
+        probe &&
+        probe !== 'all' &&
+        probeBucketOf(p) !== (probe as 'ok' | 'failed' | 'untested')
+      ) {
+        return false;
+      }
+      return true;
+    });
+  }, [proxies, sidebarFilter]);
 
   /**
    * v0.5.12: 单条探测的**唯一**实现，逐行按钮与"新增后即测"共用。
@@ -680,9 +782,14 @@ export default function ProxiesPage({ config }: Props) {
               rowKey="id"
               size="middle"
               columns={columns}
-              dataSource={proxies}
+              dataSource={visibleProxies}
               pagination={false}
-              locale={{ emptyText: '还没有代理，点击右上「新增代理」' }}
+              locale={{
+                emptyText:
+                  proxies.length > 0
+                    ? '当前筛选下没有代理，换个筛选条件试试'
+                    : '还没有代理，点击右上「新增代理」',
+              }}
             />
           </div>
         </>

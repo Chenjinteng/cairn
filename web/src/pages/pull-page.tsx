@@ -61,11 +61,17 @@ import {
   shortDigest,
   splitRepoTag,
 } from '../utils';
+import type { SidebarGroup, SidebarItem, SidebarSelection } from '../components/page-sidebar';
 
 interface Props {
   config: AppConfig | null;
-  /** v0.5.37.3:侧栏 filter;暂未联动 page 内容(API 已通,后续 0.5.x 加联动)。 */
-  sidebarFilter?: string | null;
+  /**
+   * v0.5.37.4:从侧栏传入的当前选择（groupKey -> itemKey）。
+   * 「状态」组选中某档 → 任务表按 status 过滤；「来源」组按 sourceUrl 的 host 过滤。
+   */
+  sidebarFilter: SidebarSelection;
+  /** 把本页真实分组（含计数）上浮给 App，再统一下发给 PageSidebar。 */
+  onPublishGroups: (groups: SidebarGroup[]) => void;
 }
 
 interface FormValues {
@@ -176,7 +182,21 @@ const STATUS_META: Record<
   cancelled: { label: '已取消', color: 'warning', icon: <PauseCircleOutlined /> },
 };
 
-export default function PullPage({ config }: Props) {
+/**
+ * v0.5.37.4：从任务源地址里取 host（含端口），作为侧栏「来源」分组的分桶键；
+ * 解析失败或为空时统一归「未知」。只用于展示与过滤，不改变任务本身的字段。
+ */
+function sourceHostOf(sourceUrl: string | undefined): string {
+  const raw = String(sourceUrl ?? '').trim();
+  if (!raw) return '未知';
+  try {
+    return new URL(raw).host || '未知';
+  } catch {
+    return '未知';
+  }
+}
+
+export default function PullPage({ config, sidebarFilter, onPublishGroups }: Props) {
   const { message, modal } = AntdApp.useApp();
   const [form] = Form.useForm<FormValues>();
   const [jobs, setJobs] = useState<PullJob[]>([]);
@@ -346,6 +366,87 @@ export default function PullPage({ config }: Props) {
     () => jobs.filter((job) => job.status === 'queued'),
     [jobs]
   );
+
+  /**
+   * v0.5.37.4：侧栏分组 —— 只放视图状态（筛选），有副作用的操作留在页头。
+   * 两组的 badge 全部来自真实任务列表，侧栏数字与表格行永远同源：
+   *   - 状态：全部 / 进行中（排队 + 拉取合并）/ 已完成 / 失败 / 已取消
+   *   - 来源：按任务源地址的 host 分桶（空值 / 解析失败归「未知」）
+   * 任务列表为空时下发空组，侧栏显示占位文案而不是空壳。
+   */
+  const sidebarGroups = useMemo<SidebarGroup[]>(() => {
+    if (jobs.length === 0) return [];
+
+    const statusItems: SidebarItem[] = [
+      { key: 'all', label: '全部', badge: jobs.length },
+      {
+        key: 'active',
+        label: '进行中',
+        badge: jobs.filter((job) => job.status === 'queued' || job.status === 'running').length,
+      },
+      {
+        key: 'succeeded',
+        label: '已完成',
+        badge: jobs.filter((job) => job.status === 'succeeded').length,
+      },
+      {
+        key: 'failed',
+        label: '失败',
+        badge: jobs.filter((job) => job.status === 'failed').length,
+      },
+      {
+        key: 'cancelled',
+        label: '已取消',
+        badge: jobs.filter((job) => job.status === 'cancelled').length,
+      },
+    ];
+
+    const sourceCounts = new Map<string, number>();
+    jobs.forEach((job) => {
+      const host = sourceHostOf(job.sourceUrl);
+      sourceCounts.set(host, (sourceCounts.get(host) ?? 0) + 1);
+    });
+    const sourceItems: SidebarItem[] = Array.from(sourceCounts.entries())
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([host, count]) => ({ key: host, label: host, badge: count }));
+
+    return [
+      { key: 'status', label: '状态', items: statusItems },
+      {
+        key: 'source',
+        label: '来源',
+        items: [{ key: 'all', label: '全部', badge: jobs.length }, ...sourceItems],
+      },
+    ];
+  }, [jobs]);
+
+  useEffect(() => {
+    onPublishGroups(sidebarGroups);
+  }, [onPublishGroups, sidebarGroups]);
+
+  /**
+   * 表格数据 = 全量任务按侧栏两组选择做 AND 过滤。
+   * 「进行中」是 queued + running 的合并口径，与侧栏 badge 同一算法。
+   */
+  const visibleJobs = useMemo(() => {
+    const status = sidebarFilter.status ?? null;
+    const source = sidebarFilter.source ?? null;
+    return jobs.filter((job) => {
+      if (status && status !== 'all') {
+        if (status === 'active') {
+          if (job.status !== 'queued' && job.status !== 'running') {
+            return false;
+          }
+        } else if (job.status !== status) {
+          return false;
+        }
+      }
+      if (source && source !== 'all' && sourceHostOf(job.sourceUrl) !== source) {
+        return false;
+      }
+      return true;
+    });
+  }, [jobs, sidebarFilter]);
 
   const handleSubmit = async (values: FormValues) => {
     if (config && !config.allowPull) {
@@ -951,7 +1052,7 @@ export default function PullPage({ config }: Props) {
           rowKey="id"
           size="middle"
           columns={columns}
-          dataSource={jobs}
+          dataSource={visibleJobs}
           scroll={{ x: 1000 }}
           pagination={false}
           expandable={{
@@ -964,7 +1065,13 @@ export default function PullPage({ config }: Props) {
           }}
           locale={{
             emptyText: (
-              <Empty description="还没有任务，填写上方表单加入第一个" />
+              <Empty
+                description={
+                  jobs.length > 0
+                    ? '当前筛选下没有任务，换个筛选条件试试'
+                    : '还没有任务，填写上方表单加入第一个'
+                }
+              />
             ),
           }}
         />

@@ -19,6 +19,7 @@ import {
 } from '../api';
 import ImageDetailDrawer from '../components/image-detail-drawer';
 import MetricCard from '../components/metric-card';
+import type { SidebarGroup, SidebarSelection } from '../components/page-sidebar';
 import { useAppConfig } from '../config-store';
 import type {
   ApiResult,
@@ -37,11 +38,12 @@ interface Props {
   onInventoryChange: (inventory: Inventory) => void;
   onGoSettings: () => void;
   /**
-   * v0.5.37.3:从侧栏传入的 filter(item key,格式 `groupLabel:itemLabel`)。
-   * 联动:「仓库」group 里点某仓库 → 把仓库名塞进 search 框;
-   * 「操作」group item 当前不联动内容(扫描清单 / 运行 GC 已是 page header actions)。
+   * v0.5.37.4:从侧栏传入的当前选择（groupKey -> itemKey）。
+   * 「仓库」组选中某命名空间 → 表格按名称第一段路径精确过滤，与搜索框叠加（AND）。
    */
-  sidebarFilter?: string | null;
+  sidebarFilter: SidebarSelection;
+  /** 把本页真实分组（含计数）上浮给 App，再统一下发给 PageSidebar。 */
+  onPublishGroups: (groups: SidebarGroup[]) => void;
 }
 
 /** 热度时间窗，与「镜像热度」页保持同样的三档。 */
@@ -57,20 +59,8 @@ export default function ImagesPage({
   onInventoryChange,
   onGoSettings,
   sidebarFilter,
+  onPublishGroups,
 }: Props) {
-  // v0.5.37.3:从侧栏拿到 item key 后,提取 item label 作为仓库名 search 关键词。
-  // 「仓库:全部」= 清空 search;「仓库:library」= search="library";以此类推。
-  // 「操作:扫描清单」/「操作:运行 GC」/「操作:备份」暂不联动内容(已有 page header actions)。
-  const sidebarSearch = useMemo(() => {
-    if (!sidebarFilter) return '';
-    const idx = sidebarFilter.indexOf(':');
-    if (idx < 0) return '';
-    const group = sidebarFilter.slice(0, idx);
-    const item = sidebarFilter.slice(idx + 1);
-    if (group !== '仓库') return '';
-    if (item === '全部') return '';
-    return item;
-  }, [sidebarFilter]);
   /**
    * v0.5.18（F8）：loading 语义统一为「本轮清单请求在途」。首屏用 !inventory 做初值
    * 只为避免配置到手前先闪一帧空表；之后一律由 load() 自己开关，不再掺 inventory 条件。
@@ -89,13 +79,6 @@ export default function ImagesPage({
    */
   const tableWrapRef = useRef<HTMLDivElement>(null);
   const [search, setSearch] = useState('');
-  // v0.5.37.3:侧栏 → search 框联动。sidebarSearch 变化时同步进 search state,
-  // 让「仓库:library」之类点击直接显示 library 仓库。但不在 sidebar 变化以外
-  // 的场合强制覆盖 —— 用户在 search 框里继续手动输入不会被侧栏反向清空。
-  useEffect(() => {
-    setSearch(sidebarSearch);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sidebarSearch]);
   const [detailName, setDetailName] = useState<string | null>(null);
   /** 热度时间窗；与热度页的三档一致。 */
   const [statsDays, setStatsDays] = useState<StatsWindow>(30);
@@ -158,12 +141,54 @@ export default function ImagesPage({
   const heatOf = (name: string) => heat[name]?.events ?? 0;
   const lastActivityOf = (name: string) => heat[name]?.lastAt ?? null;
 
+  /**
+   * v0.5.37.4:侧栏「仓库」分组 —— 从真实 catalog 派生，不再写死。
+   * 取每条仓库名的第一段路径当命名空间（`library/nginx` -> `library`），
+   * badge 是该命名空间下的仓库数；「全部」的 badge 是仓库总数。
+   * 从**全量** inventory 派生（不随搜索/侧栏过滤变化），否则过滤后侧栏自己会缩水，
+   * 就没法从侧栏再切到别的命名空间了。
+   */
+  const repoGroups = useMemo<SidebarGroup[]>(() => {
+    const repositories = inventory?.repositories ?? [];
+    if (repositories.length === 0) return [];
+    const counts = new Map<string, number>();
+    for (const item of repositories) {
+      const namespace = item.name.split('/')[0];
+      counts.set(namespace, (counts.get(namespace) ?? 0) + 1);
+    }
+    const namespaces = [...counts.entries()].sort(
+      (left, right) => right[1] - left[1] || left[0].localeCompare(right[0])
+    );
+    return [
+      {
+        key: 'repo',
+        label: '仓库',
+        items: [
+          { key: 'all', label: '全部', badge: repositories.length },
+          ...namespaces.map(([namespace, count]) => ({
+            key: namespace,
+            label: namespace,
+            badge: count,
+          })),
+        ],
+      },
+    ];
+  }, [inventory]);
+
+  useEffect(() => {
+    onPublishGroups(repoGroups);
+  }, [onPublishGroups, repoGroups]);
+
   const rows = useMemo(() => {
     const keyword = search.trim().toLowerCase();
-    return (inventory?.repositories ?? []).filter(
-      (item) => !keyword || item.name.toLowerCase().includes(keyword)
-    );
-  }, [inventory, search]);
+    // 「仓库」组选中命名空间后与搜索框叠加（AND）；点「全部」时 App 存的是 null。
+    const namespace = sidebarFilter.repo ?? null;
+    return (inventory?.repositories ?? []).filter((item) => {
+      if (keyword && !item.name.toLowerCase().includes(keyword)) return false;
+      if (namespace && item.name.split('/')[0] !== namespace) return false;
+      return true;
+    });
+  }, [inventory, search, sidebarFilter]);
 
   const metrics = useMemo(() => {
     const repositories = rows;

@@ -103,6 +103,50 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
   **实测**(53 chromium):点 sidebar「library」→ search 输入框值 `"library"` ✅;点「全部」→ search 清空 ✅;切到 stats 页面,点「最近 7d」→ 时间窗 segmented 选中"7 天" ✅;点「最近 90d」→ 选中"90 天" ✅。
 
+### 重构(0.5.37.4)
+
+- **每页侧栏改成真正的页内 sub-nav:侧栏只放"视图状态",badge 全部真实派生**(6 页一次改完):
+
+  0.5.37.3 解决了"点了不联动",但侧栏里还留着**没有数据支撑的假分组**(操作 / 分类 / 通知 / 客户端 UA / 历史 / 最近使用 / 平台)—— 点了要么什么都没发生,要么跟页头的操作按钮重复。本轮定下三条总纲:
+
+  1. **侧栏 = 页内 sub-nav**:只承载视图状态(过滤 / 切换 / 锚点跳转)
+  2. **有副作用的操作统一归页头**:侧栏不再出现"扫描清单 / 运行 GC / 备份"这类动作
+  3. **同一状态只出现一次;badge 一律真实数据**:没有数据支撑的分组直接删,不编数字
+
+  各页最终分组(**badge 全部取自当前接口返回的真实数据**):
+
+  | 页面 | 侧栏分组 | 数据口径 |
+  | --- | --- | --- |
+  | 镜像列表 | 仓库(按命名空间) | 按仓库名第一段路径聚合;badge = 该命名空间下的仓库数;「全部」badge = 仓库总数;数量降序 |
+  | 热度统计 | 时间窗 | 7d / 30d / 90d;**页头重复的 Segmented 已删**(同一状态只留侧栏一处) |
+  | 拉取队列 | 状态 + 来源 | 状态:全部 / 进行中(queued + running 合并)/ 成功 / 失败 / 已取消;来源:按 `URL(sourceUrl).host` 分桶,解析失败或为空归「未知」 |
+  | 凭据 | 主机 + 密码状态 | 主机:按去 scheme 的 `host[:port]` 分桶;密码状态:全部 / 已保存 / 未保存 |
+  | 代理 | 协议 + 探测状态 | 协议:按 URL scheme 分桶(label 大写);探测状态:成功 / 失败 / 未探测(**只认已落库的 `lastProbeStatus`**,不在前端猜) |
+  | 设置 | 快速跳转(anchor 模式) | 仓库连接 / 功能开关 / 拉取平台 / 热度记录;滚动跳转 + scroll-spy 高亮当前区块 |
+
+  - **`web/src/components/page-sidebar.tsx` 改成纯 props 驱动**:导出 `PageKey` / `SidebarItem` / `SidebarGroup` / `SidebarSelection` / `PageSidebarProps`;`SidebarGroup.mode` 支持 `'filter'`(过滤,默认)与 `'anchor'`(滚动跳转)。组件内部**不再内置任何分组表** —— 分组与 badge 全部由各页 `useMemo` 派生后上浮,数据从哪来就在哪算
+  - **anchor 模式**:`item.key` 即目标 DOM id,点击走 `scrollIntoView({behavior:'smooth', block:'start'})`;scroll-spy 用 `IntersectionObserver`(`rootMargin: '-20% 0px -60% 0px'`)高亮当前区块;目标节点最多重试 6 次 × 250ms,仍找不到就静默降级(不动画、不报错)
+  - **footer 版本号改读运行时 `config.version`**:原来写死字面量,发版后侧栏会跟实际跑的版本漂移
+  - **`web/src/App.tsx`**:`pageFilter` 从 `string | null` 改成 `Record<PageKey, SidebarSelection>`(一页可有多组,跨组 AND);`'all'` 是保留 key,App 侧统一存 `null`(点「全部」= 清掉该组过滤);点已选中项是 no-op(不做 toggle-off,避免"再点一下反而全放开"的意外);新增 `pageGroups` state + `publishGroups`(带身份守卫 `prev[key] === groups ? prev : {...}`,防止页面重复发布把 App 拽进自激循环)+ `publishHandlers`(`useMemo` 稳定引用,6 个 bind)
+  - **可见行集是唯一派生点**:images 的 `rows` / pull 的 `visibleJobs` / credentials 的 `visibleCredentials` / proxies 的 `visibleProxies` —— 过滤只在这一个点叠加(跨组 AND),表格直接读它;images 的 KPI 指标派生自同一行集,所以自然跟着过滤走。过滤是**按字段精确匹配**,不是拼字符串模糊搜。过滤后为空时给差异化 `emptyText`,让用户分得清"是筛掉了"和"本来就没有"
+  - **不影响后台行为**:过滤只作用于展示层 —— pull 页的 auto-expand / `hasActive` / `runningJob` / `queuedJobs` 仍读全量(`jobs`),不会因为用户筛掉"进行中"就把轮询停掉
+  - **镜像列表不再污染搜索框**:0.5.37.3 是"点侧栏 → 把关键词写进搜索框",会覆盖用户自己输的词;本轮改成独立的 `repo` 过滤维度,与搜索框正交(可以同时用)
+  - **`web/src/app.css`**:新增 `.page-sidebar-empty`(侧栏无可用筛选项时的占位文案)与 `.settings-anchor`(`scroll-margin-top: 12px`,锚点跳转补偿;`.app-content` 内没有 sticky 元素叠加,所以只用小值)
+  - **各页无数据时发空组**:拉取队列 `jobs.length === 0`、凭据 `allowCredentials === false`、热度统计 `statsEnabled === false`、设置 `config` 未加载 —— 都发空数组,侧栏显示空态而不是"点不动的假分组"
+
+- **设置页:锚点导航 + DOM 顺序调整 + 过时文案修正**:
+
+  - **DOM 顺序**:「拉取平台白名单」与「热度保留天数」换序,让 4 个锚点块的顺序和侧栏一致(仓库连接 → 功能开关 → 拉取平台 → 热度记录)。`<Form>` 语义不动,只在外面包 `<div id="settings-xxx" className="settings-anchor">`;「热度记录」块只包「热度保留天数」(忽略规则表与清空热度紧随其下,不并入锚点)
+  - **过时文案修正**(0.5.9 起业务配置全部走 UI → SQLite,`REGISTRY_*` env 与 `registry.config.json` 已不再被读,设了等于没设):
+    - 信息条标题 `如何修改要管理的镜像仓库` → `改这些参数不用碰环境变量`,正文改成"都存在本机 SQLite,面板里点『编辑』改、保存即刻生效",并说明只剩 `HOST_PORT` / `HOST_DATA_DIR` 这类基础设施映射要走容器;**删掉教人配 env 与 `registry.config.json` 的整个代码块**(那是 0.5.9 之前的老办法)
+    - 只读模式信息条:「允许删除」为关闭时不再讲 `allowDelete: false` / `REGISTRY_ALLOW_DELETE=false` / 重启,改成"把上面的『允许删除』开关切到『只读』并保存,立即生效,无需重启"
+    - 「仓库地址」说明里的 markdown 星号(`**这里只填 host:port**`)在 JSX 里会原样显示,改成 `<strong>`
+  - **`sidebarFilter` 只声明不使用**:App 强制传该 prop,设置页没有可过滤的数据(唯一表格「热度忽略规则」的条目数由规则数决定,过滤维度没有意义),锚点组点击不写 `pageFilter`
+
+- **本轮不动版本常量**:纯前端语义重构,不引新功能,`internal/version/version.go` 保持 `0.5.37`;`0.6.0` 留给 registry 同步。
+
+**影响范围(升级须知)**:侧栏从"装饰性 UI"变成"实际控制内容区"的唯一入口 —— 时间窗等控件的位置变了(从页头移到侧栏),操作按钮位置全部保留在页头不变。**没有 API / 数据 / 后端逻辑改动,升级无需迁移**。
+
 ## [0.5.36] - 2026-09-29
 
 本轮主题:**统一 SQLite DB 文件名 `cairn.db` → `cairn.db`(与产品名对齐,v0.5.21 起的「image / container / service = cairn」命名一致)+ 顶部导航 Tab 顺序按「查/操作 → 观测 → 管理」重排**。
