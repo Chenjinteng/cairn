@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   App as AntdApp,
@@ -40,11 +40,18 @@ import type {
   CredentialPatch,
 } from '../types';
 import { formatDateTime } from '../utils';
+import type { SidebarGroup, SidebarItem, SidebarSelection } from '../components/page-sidebar';
 
 interface Props {
   config: AppConfig | null;
-  /** v0.5.37.3:侧栏 filter;暂未联动 page 内容(凭据 schema 无 group / source 字段,后续 0.5.x 加)。 */
-  sidebarFilter?: string | null;
+  /**
+   * v0.5.37.4：侧栏选择状态。两组，跨组 AND：
+   *   - host：按 registryUrl 的 host[:port] 分桶（去 scheme）
+   *   - password：按密码是否已保存（hasPassword）
+   */
+  sidebarFilter: SidebarSelection;
+  /** v0.5.37.4：把真实分组（含真实计数 badge）上浮给 App，由 App 统一下发到侧栏。 */
+  onPublishGroups: (groups: SidebarGroup[]) => void;
 }
 
 interface FormValues {
@@ -55,7 +62,23 @@ interface FormValues {
   note?: string;
 }
 
-export default function CredentialsPage({ config }: Props) {
+/**
+ * v0.5.37.4：从凭据的 registryUrl 取 host（含端口、去掉 scheme），作为侧栏「主机」分组的
+ * 分桶键。表单已强校验 http(s):// 开头，这里再兜一层老数据：解析失败就退化成
+ * 「去掉 scheme 后的第一段」。只用于展示与过滤，不改凭据本身。
+ */
+function registryHostOf(registryUrl: string | undefined): string {
+  const raw = String(registryUrl ?? '').trim();
+  if (!raw) return '未知';
+  try {
+    return new URL(raw).host || '未知';
+  } catch {
+    const host = raw.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').split('/')[0];
+    return host || '未知';
+  }
+}
+
+export default function CredentialsPage({ config, sidebarFilter, onPublishGroups }: Props) {
   const { message, modal } = AntdApp.useApp();
   const [credentials, setCredentials] = useState<Credential[]>([]);
   const [editing, setEditing] = useState<Credential | null>(null);
@@ -88,6 +111,65 @@ export default function CredentialsPage({ config }: Props) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  /**
+   * v0.5.37.4：侧栏分组 —— 两组都只放**视图状态**（过滤），有副作用的操作留在页头。
+   * badge 全部来自真实凭据列表，侧栏数字与表格行永远同源：
+   *   - 主机：registryUrl 的 host[:port] 分桶（去 scheme；解析失败归「未知」）
+   *   - 密码状态：已保存 / 未保存（按 hasPassword 派生）
+   * 凭据列表为空时下发空组，侧栏显示占位文案而不是空壳。
+   * 注意：本部署禁止管凭据时 refresh 会提前返回、列表恒为空，这里自然下发空组。
+   */
+  const sidebarGroups = useMemo<SidebarGroup[]>(() => {
+    if (credentials.length === 0) return [];
+
+    const hostCounts = new Map<string, number>();
+    credentials.forEach((c) => {
+      const host = registryHostOf(c.registryUrl);
+      hostCounts.set(host, (hostCounts.get(host) ?? 0) + 1);
+    });
+    const hostItems: SidebarItem[] = Array.from(hostCounts.entries())
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([host, count]) => ({ key: host, label: host, badge: count }));
+
+    const withPassword = credentials.filter((c) => c.hasPassword).length;
+
+    return [
+      {
+        key: 'host',
+        label: '主机',
+        items: [{ key: 'all', label: '全部', badge: credentials.length }, ...hostItems],
+      },
+      {
+        key: 'password',
+        label: '密码状态',
+        // 「全部」必须留在组内：否则选中后无法回到不过滤状态（点已选项是 no-op）。
+        items: [
+          { key: 'all', label: '全部', badge: credentials.length },
+          { key: 'set', label: '已保存', badge: withPassword },
+          { key: 'empty', label: '未保存', badge: credentials.length - withPassword },
+        ],
+      },
+    ];
+  }, [credentials]);
+
+  useEffect(() => {
+    onPublishGroups(sidebarGroups);
+  }, [onPublishGroups, sidebarGroups]);
+
+  /** 表格数据 = 全量凭据按侧栏两组选择做 AND 过滤。 */
+  const visibleCredentials = useMemo(() => {
+    const host = sidebarFilter.host ?? null;
+    const password = sidebarFilter.password ?? null;
+    return credentials.filter((c) => {
+      if (host && host !== 'all' && registryHostOf(c.registryUrl) !== host) {
+        return false;
+      }
+      if (password === 'set' && !c.hasPassword) return false;
+      if (password === 'empty' && c.hasPassword) return false;
+      return true;
+    });
+  }, [credentials, sidebarFilter]);
 
   const handleOpenCreate = () => {
     setEditing(null);
@@ -374,9 +456,14 @@ export default function CredentialsPage({ config }: Props) {
               rowKey="id"
               size="middle"
               columns={columns}
-              dataSource={credentials}
+              dataSource={visibleCredentials}
               pagination={false}
-              locale={{ emptyText: '还没有凭据，点击右上「新增凭据」' }}
+              locale={{
+                emptyText:
+                  credentials.length > 0
+                    ? '当前筛选下没有凭据，换个筛选条件试试'
+                    : '还没有凭据，点击右上「新增凭据」',
+              }}
             />
           </div>
         </>
