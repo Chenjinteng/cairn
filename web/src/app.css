@@ -142,6 +142,9 @@
   min-height: 0;
   min-width: 0;
   max-width: 100%;
+  /* v0.5.37：与 docs/design/demo-A-*.html § .content 对齐（24px 上 / 28px 左右）。
+     修：右侧 actions（搜索 / 时间窗 / 按钮）此前紧贴 .app-body 顶部没有 padding。 */
+  padding: 24px 28px;
   overflow: auto;
 }
 
@@ -163,11 +166,28 @@
 }
 
 .app-page-sidebar {
+  display: flex;
+  flex-direction: column;
   border-right: 1px solid var(--color-border);
-  padding: 16px 12px;
   background: var(--color-side-nav-bg);
-  overflow-y: auto;
+  overflow: hidden;
   font-size: 13px;
+}
+
+.page-sidebar-content {
+  flex: 1;
+  padding: 16px 12px;
+  overflow-y: auto;
+}
+
+.page-sidebar-footer {
+  flex: 0 0 auto;
+  padding: 12px;
+  border-top: 1px solid var(--color-border-warm);
+  font-size: 11px;
+  color: var(--color-text-3);
+  text-align: center;
+  letter-spacing: 0.04em;
 }
 
 .page-sidebar-group + .page-sidebar-group {
@@ -298,6 +318,9 @@
   justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
+  /* v0.5.37：与 docs/design/demo-A-*.html § .page-head 对齐（margin-bottom: 20px）。
+     修：此前 page-header 跟下面的 KPI cards / panel head 紧贴没有间距。 */
+  margin-bottom: 20px;
 }
 
 .page-title {
