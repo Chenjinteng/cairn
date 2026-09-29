@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -248,23 +249,80 @@ func (c *Client) FetchConfig(ctx context.Context, repo string, configDigest stri
 
 // Probe checks registry reachability and V2 conformance.
 //
-// The V2 spec says any registry MUST answer GET /v2/ with 200 and a
-// Link header pointing at the documentation. We just check status == 200;
-// a stricter conformance check can be added later.
+// v0.5.47: GET /v2/ 有两种「活着」的应答(OCI Distribution Spec,
+// containers/image 的 Ping 同样把两者都视为成功):
+//
+//	200 OK                          —— 无需认证(内网 registry / mcr / registry.k8s.io)
+//	401 + WWW-Authenticate: Bearer  —— 公网 Bearer 型 registry 对匿名请求的标准应答
+//	                                   (quay.io / ghcr.io / Docker Hub 都是)
+//
+// 旧实现只认 200,并把 401 全权交给 doRequest 的 401→token 升级:Docker Hub 的
+// auth.docker.io 无 scope 也发匿名 token,升级能走通;但 quay.io 的 /v2/auth
+// 对「无 scope + 无凭据」**直接 401**(/v2/ 的 ping challenge 不带 scope ——
+// 见 AGENTS.md §认证),升级失败,匿名预检整个报 TOKEN_FETCH_FAILED。
+//
+// 新语义:
+//   - 匿名(未配 username):200 或 401+可解析 Bearer challenge = 成功。
+//     真实资源能否匿名拉,由调用方再取一次 manifest 决定(拉取预检接口
+//     v0.5.17 起就会这么做);ping 层不下结论,也就不需要碰 token 端点。
+//   - 带凭据:保持原有升级链(401 → basic 换 token → Bearer 重试 → 200)。
+//     token 换取失败 = 凭据不被 token 端点接受,照旧报错 —— 凭据测试
+//     要的就是这个结论。
 func (c *Client) Probe(ctx context.Context) error {
-	resp, _, err := c.doRequest(ctx, http.MethodGet, "/v2/", "", nil)
-	if err != nil {
-		return err
+	if c.user != "" {
+		resp, _, err := c.doRequest(ctx, http.MethodGet, "/v2/", "", nil)
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode != http.StatusOK {
+			return &Error{
+				Status:  resp.StatusCode,
+				Code:    "PROBE_FAILED",
+				Message: fmt.Sprintf("GET /v2/ returned %d, expected 200", resp.StatusCode),
+				URL:     "/v2/",
+			}
+		}
+		return nil
 	}
-	if resp.StatusCode != http.StatusOK {
+
+	// 匿名:裸 ping,不做 401→token 升级(原因见上)。
+	full := *c.baseURL
+	full.Path = strings.TrimRight(full.Path, "/") + "/v2/"
+	full.RawQuery = ""
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, full.String(), nil)
+	if err != nil {
+		return fmt.Errorf("registry: build request: %w", err)
+	}
+	req.Header.Set("User-Agent", UserAgent)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("registry: GET /v2/: %w", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+
+	switch {
+	case resp.StatusCode == http.StatusOK:
+		return nil
+	case resp.StatusCode == http.StatusUnauthorized:
+		if _, ok := parseChallenge(resp.Header.Get("WWW-Authenticate")); ok {
+			// 401 + Bearer challenge = 对面确实在跑 V2 registry,匿名 ping 到此为止。
+			return nil
+		}
 		return &Error{
 			Status:  resp.StatusCode,
 			Code:    "PROBE_FAILED",
-			Message: fmt.Sprintf("GET /v2/ returned %d, expected 200", resp.StatusCode),
+			Message: "GET /v2/ returned 401 without a parseable Bearer challenge",
+			URL:     "/v2/",
+		}
+	default:
+		return &Error{
+			Status:  resp.StatusCode,
+			Code:    "PROBE_FAILED",
+			Message: fmt.Sprintf("GET /v2/ returned %d, expected 200 or 401+Bearer challenge", resp.StatusCode),
 			URL:     "/v2/",
 		}
 	}
-	return nil
 }
 
 // ScanInventory builds a full Inventory: every repo, every tag, plus a
