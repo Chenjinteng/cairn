@@ -89,6 +89,20 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
   - **page-header 跟下面 KPI cards 紧贴**:修 `.page-header` 加 `margin-bottom: 20px`(原 0)
   - **左红框违和**(sidebar 内容集中顶部 ~200px + 底部 ~300px 空白):修 `web/src/components/page-sidebar.tsx` 加 `.page-sidebar-footer`(`v0.5.37 · © Cairn`),让 sidebar 看起来是"完整结构"而不是"上短下空"。grid 撑满是 sidebar 内容少时的预期表现;设计稿 demo 没有 footer(因为 demo 写死了 height: 240px),cairn 用 100vh + 内容稀疏,所以**加 footer 块是 cairn 侧的必要补全**。
 
+### 重构(0.5.37.3)
+
+- **PageSidebar 改成受控 + 联动真生效**(commit `8e27671`):
+
+  之前 0.5.37.2 sidebar item 点击只是 `setActive` 改本地高亮,内容区不响应。本轮改成受控:
+
+  - `web/src/components/page-sidebar.tsx`:移除内部 `useState`,改成接受 `selected: string | null` + `onSelect: (itemKey) => void`
+  - `web/src/App.tsx`:加 `pageFilter` state(`Record<PageKey, string | null>`),按 page 维度持有当前选中的 item key;切页时不重置 filter(浏览器表单持久化语义)
+  - **ImagesPage 联动**(完整生效):`仓库` group item → 联动 search 框 ——「仓库:library」→ search=`"library"`;「仓库:registry-manager」→ search=`"registry-manager"`;「仓库:全部」→ 清空 search;「操作」group item 不联动(扫描清单 / 运行 GC / 备份 已在 page header actions)
+  - **StatsPage 联动**(完整生效):`时间窗` group item → 联动 `setDays` ——「最近 7d」→ 7;「最近 30d」→ 30;「最近 90d」→ 90;「全部」→ 90(`StatsWindow` 类型严格 7/30/90,90 近似"全部")
+  - **4 个 page 加 sidebarFilter prop 占位**:PullPage / CredentialsPage / ProxiesPage / SettingsPage 接口通了,联动逻辑留 0.5.x 后续优化 —— `pull-page` 按 registryUrl 过滤;`credentials-page` 需要 schema 加 group / source 字段;`proxies-page` 可按 url 前缀(http/https/socks5) + lastProbeStatus 过滤;`settings-page` 可 anchor 跳转到对应 section
+
+  **实测**(53 chromium):点 sidebar「library」→ search 输入框值 `"library"` ✅;点「全部」→ search 清空 ✅;切到 stats 页面,点「最近 7d」→ 时间窗 segmented 选中"7 天" ✅;点「最近 90d」→ 选中"90 天" ✅。
+
 ## [0.5.36] - 2026-09-29
 
 本轮主题:**统一 SQLite DB 文件名 `cairn.db` → `cairn.db`(与产品名对齐,v0.5.21 起的「image / container / service = cairn」命名一致)+ 顶部导航 Tab 顺序按「查/操作 → 观测 → 管理」重排**。
