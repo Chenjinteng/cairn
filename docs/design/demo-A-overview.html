@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Cairn · teal 配色 · 6 页全览</title>
+<style>
+body { margin:0; padding:40px 24px; font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif; background: #f7f8fa; color: #14171e; }
+.wrap { max-width: 1200px; margin: 0 auto; }
+h1 { font-size: 28px; margin: 0 0 4px; font-weight: 700; }
+.sub { color: #6b7280; margin-bottom: 32px; font-size: 14px; }
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+.card { background: #fff; border: 1px solid #e5e7eb; border-radius: 14px; overflow: hidden; text-decoration: none; color: inherit; transition: transform .15s, box-shadow .15s; }
+.card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.08); }
+.preview { height: 160px; background: #fff; border-bottom: 1px solid #f0f1f3; padding: 16px; overflow: hidden; position: relative; }
+.mini { transform: scale(0.5); transform-origin: top left; width: 200%; }
+.body-text { padding: 16px 20px; }
+.tab-label { font-size: 11px; color: #0d9488; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }
+.title { font-size: 16px; font-weight: 600; margin-bottom: 6px; }
+.desc { font-size: 12px; color: #4b5563; line-height: 1.5; }
+.note { margin-top: 36px; padding: 16px 20px; background: #fff; border: 1px dashed #d1d5db; border-radius: 10px; font-size: 12px; color: #4b5563; line-height: 1.7; }
+strong { color: #14171e; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Cairn · teal 配色 · 6 页全览</h1>
+  <div class="sub">// 当前 cairn web 主题 · 浅色 + 深色 切换 · 所有假数据贴合 158 实测</div>
+
+  <div class="grid">
+
+    <a class="card" href="demo-A-images.html">
+      <div class="preview"><div class="mini">
+        <div style="background:#0d9488;display:inline-block;width:80px;height:80px;border-radius:8px;color:#fff;font-weight:800;display:flex;align-items:center;justify-content:center;font-size:40px">C</div>
+        <div style="margin-top:20px;display:flex;gap:8px"><span style="padding:6px 14px;background:#f4f5f8;border-radius:6px;font-size:13px;color:#6b7280">镜像列表</span><span style="padding:6px 14px;background:#fff;border-radius:6px;font-size:13px;font-weight:500;border:1px solid #e5e7eb;box-shadow:0 1px 2px rgba(0,0,0,0.06)">镜像拉取</span></div>
+        <div style="margin-top:30px;display:grid;grid-template-columns:repeat(4,1fr);gap:14px">
+          <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:16px"><div style="font-size:11px;color:#6b7280">仓库</div><div style="font-size:24px;font-weight:600;margin-top:4px">4</div></div>
+          <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:16px"><div style="font-size:11px;color:#6b7280">Tag</div><div style="font-size:24px;font-weight:600;margin-top:4px">5</div></div>
+          <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:16px"><div style="font-size:11px;color:#6b7280">存储</div><div style="font-size:24px;font-weight:600;margin-top:4px">75 MB</div></div>
+          <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:16px"><div style="font-size:11px;color:#6b7280">孤儿 blob</div><div style="font-size:24px;font-weight:600;margin-top:4px">3</div></div>
+        </div>
+      </div></div>
+      <div class="body-text">
+        <div class="tab-label">page 1 / 6</div>
+        <div class="title">镜像列表</div>
+        <div class="desc">4 个仓库 · 5 个 tag · KPI 卡 + 仓库列表 + tag/digest/arch/layers 行</div>
+      </div>
+    </a>
+
+    <a class="card" href="demo-A-pull.html">
+      <div class="preview"><div class="mini">
+        <div style="background:#0d9488;display:inline-flex;width:80px;height:80px;border-radius:8px;color:#fff;font-weight:800;align-items:center;justify-content:center;font-size:40px">C</div>
+        <div style="margin-top:20px;display:flex;gap:8px"><span style="padding:6px 14px;background:#f4f5f8;border-radius:6px;font-size:13px;color:#6b7280">镜像列表</span><span style="padding:6px 14px;background:#fff;border-radius:6px;font-size:13px;font-weight:500;border:1px solid #e5e7eb;box-shadow:0 1px 2px rgba(0,0,0,0.06)">镜像拉取</span></div>
+        <div style="margin-top:30px;background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:20px">
+          <div style="font-size:12px;color:#6b7280;margin-bottom:10px">源镜像 · 目标镜像 · 源 registry · 凭据 · 代理 · 平台</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+            <div style="height:28px;background:#fafbfc;border:1px solid #e5e7eb;border-radius:6px"></div>
+            <div style="height:28px;background:#fafbfc;border:1px solid #e5e7eb;border-radius:6px"></div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end"><span style="padding:5px 12px;background:#0d9488;color:#fff;border-radius:6px;font-size:12px">+ 加入队列</span></div>
+        </div>
+      </div></div>
+      <div class="body-text">
+        <div class="tab-label">page 2 / 6</div>
+        <div class="title">镜像拉取</div>
+        <div class="desc">新建任务表单（7 字段 + 3 toggle） + 拉取队列（8 行）含 progress bar + status</div>
+      </div>
+    </a>
+
+    <a class="card" href="demo-A-stats.html">
+      <div class="preview"><div class="mini">
+        <div style="background:#0d9488;display:inline-flex;width:80px;height:80px;border-radius:8px;color:#fff;font-weight:800;align-items:center;justify-content:center;font-size:40px">C</div>
+        <div style="margin-top:20px;display:flex;gap:8px"><span style="padding:6px 14px;background:#f4f5f8;border-radius:6px;font-size:13px;color:#6b7280">镜像列表</span><span style="padding:6px 14px;background:#f4f5f8;border-radius:6px;font-size:13px;color:#6b7280">镜像拉取</span><span style="padding:6px 14px;background:#fff;border-radius:6px;font-size:13px;font-weight:500;border:1px solid #e5e7eb;box-shadow:0 1px 2px rgba(0,0,0,0.06)">镜像热度</span></div>
+        <div style="margin-top:30px;display:grid;grid-template-columns:repeat(7,1fr);gap:3px">
+          <div style="aspect-ratio:1;background:#ccfbf1;border-radius:2px"></div><div style="aspect-ratio:1;background:#e5e7eb;border-radius:2px"></div><div style="aspect-ratio:1;background:#0d9488;border-radius:2px"></div><div style="aspect-ratio:1;background:rgba(13,148,136,0.32);border-radius:2px"></div><div style="aspect-ratio:1;background:rgba(13,148,136,0.58);border-radius:2px"></div><div style="aspect-ratio:1;background:#0d9488;border-radius:2px"></div><div style="aspect-ratio:1;background:rgba(13,148,136,0.32);border-radius:2px"></div>
+          <div style="aspect-ratio:1;background:#e5e7eb;border-radius:2px"></div><div style="aspect-ratio:1;background:rgba(13,148,136,0.12);border-radius:2px"></div><div style="aspect-ratio:1;background:rgba(13,148,136,0.32);border-radius:2px"></div><div style="aspect-ratio:1;background:rgba(13,148,136,0.58);border-radius:2px"></div><div style="aspect-ratio:1;background:#0d9488;border-radius:2px"></div><div style="aspect-ratio:1;background:rgba(13,148,136,0.58);border-radius:2px"></div><div style="aspect-ratio:1;background:rgba(13,148,136,0.12);border-radius:2px"></div>
+          <div style="aspect-ratio:1;background:rgba(13,148,136,0.32);border-radius:2px"></div><div style="aspect-ratio:1;background:#0d9488;border-radius:2px"></div><div style="aspect-ratio:1;background:#0d9488;border-radius:2px"></div><div style="aspect-ratio:1;background:rgba(13,148,136,0.32);border-radius:2px"></div><div style="aspect-ratio:1;background:rgba(13,148,136,0.58);border-radius:2px"></div><div style="aspect-ratio:1;background:rgba(13,148,136,0.12);border-radius:2px"></div><div style="aspect-ratio:1;background:#e5e7eb;border-radius:2px"></div>
+        </div>
+      </div></div>
+      <div class="body-text">
+        <div class="tab-label">page 3 / 6</div>
+        <div class="title">镜像热度</div>
+        <div class="desc">时间热力图（24×6 单元格）+ top 8 镜像趋势 sparkline + 客户端 top 6</div>
+      </div>
+    </a>
+
+    <a class="card" href="demo-A-credentials.html">
+      <div class="preview"><div class="mini">
+        <div style="background:#0d9488;display:inline-flex;width:80px;height:80px;border-radius:8px;color:#fff;font-weight:800;align-items:center;justify-content:center;font-size:40px">C</div>
+        <div style="margin-top:20px;display:flex;gap:8px"><span style="padding:6px 14px;background:#f4f5f8;border-radius:6px;font-size:13px;color:#6b7280">镜像列表</span><span style="padding:6px 14px;background:#f4f5f8;border-radius:6px;font-size:13px;color:#6b7280">镜像拉取</span><span style="padding:6px 14px;background:#f4f5f8;border-radius:6px;font-size:13px;color:#6b7280">镜像热度</span><span style="padding:6px 14px;background:#fff;border-radius:6px;font-size:13px;font-weight:500;border:1px solid #e5e7eb;box-shadow:0 1px 2px rgba(0,0,0,0.06)">凭据管理</span></div>
+      </div></div>
+      <div class="body-text">
+        <div class="tab-label">page 4 / 6</div>
+        <div class="title">凭据管理</div>
+        <div class="desc">5 条凭据 · 含 401 失败 / 从未测试 / 连通正常 三种状态 · 测试按钮 + 安全提示</div>
+      </div>
+    </a>
+
+    <a class="card" href="demo-A-proxies.html">
+      <div class="preview"><div class="mini">
+        <div style="background:#0d9488;display:inline-flex;width:80px;height:80px;border-radius:8px;color:#fff;font-weight:800;align-items:center;justify-content:center;font-size:40px">C</div>
+        <div style="margin-top:20px;display:flex;gap:8px"><span style="padding:6px 14px;background:#f4f5f8;border-radius:6px;font-size:13px;color:#6b7280">镜像列表</span><span style="padding:6px 14px;background:#f4f5f8;border-radius:6px;font-size:13px;color:#6b7280">镜像拉取</span><span style="padding:6px 14px;background:#f4f5f8;border-radius:6px;font-size:13px;color:#6b7280">镜像热度</span><span style="padding:6px 14px;background:#f4f5f8;border-radius:6px;font-size:13px;color:#6b7280">凭据管理</span><span style="padding:6px 14px;background:#fff;border-radius:6px;font-size:13px;font-weight:500;border:1px solid #e5e7eb;box-shadow:0 1px 2px rgba(0,0,0,0.06)">代理管理</span></div>
+      </div></div>
+      <div class="body-text">
+        <div class="tab-label">page 5 / 6</div>
+        <div class="title">代理管理</div>
+        <div class="desc">4 条代理 · http/https/socks5 三协议 · 含连通 / 慢 / 失败 / 从未测试 四状态</div>
+      </div>
+    </a>
+
+    <a class="card" href="demo-A-settings.html">
+      <div class="preview"><div class="mini">
+        <div style="background:#0d9488;display:inline-flex;width:80px;height:80px;border-radius:8px;color:#fff;font-weight:800;align-items:center;justify-content:center;font-size:40px">C</div>
+        <div style="margin-top:20px;display:flex;gap:8px"><span style="padding:6px 14px;background:#f4f5f8;border-radius:6px;font-size:13px;color:#6b7280">...</span><span style="padding:6px 14px;background:#fff;border-radius:6px;font-size:13px;font-weight:500;border:1px solid #e5e7eb;box-shadow:0 1px 2px rgba(0,0,0,0.06)">设置</span></div>
+        <div style="margin-top:30px;background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:16px">
+          <div style="font-size:12px;color:#6b7280">仓库地址 / 认证 / 监听端口(只读) / 危险区</div>
+          <div style="height:6px;background:#0d9488;width:50%;border-radius:3px;margin-top:10px"></div>
+        </div>
+      </div></div>
+      <div class="body-text">
+        <div class="tab-label">page 6 / 6</div>
+        <div class="title">设置</div>
+        <div class="desc">仓库地址 / 认证 / 监听端口只读（v0.5.34）/ 运行时开关（v0.5.36） / 高级危险区 / UA 忽略规则</div>
+      </div>
+    </a>
+
+  </div>
+
+  <div class="note">
+    <strong>布局统一</strong>：6 页共享同一布局：56px 顶栏 + 220px 侧栏 + 内容区 + 4 KPI 卡 + Panel。<br>
+    <strong>假数据统一</strong>：来自 158 上 4 个仓库 · 5 个 tag · 75.2 MB · 凭据/代理/热度数据也是合理的合成。<br>
+    <strong>主题切换</strong>：每页右下角有「浅色 / 深色」切换按钮，所有 token 都有深色对应值。<br>
+    <strong>当前配色就是 cairn web 现状</strong> —— 选 A 意味着不动源码；选 B/C 才需要改 token（详见上一轮回复）。
+  </div>
+</div>
+</body>
+</html>

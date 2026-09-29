@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Cairn · 设置 (teal)</title>
+<style>
+:root {
+  --primary:#0d9488; --primary-fg:#fff; --primary-bg-active:#ccfbf1;
+  --secondary:#f2f4f7; --bg:#fff; --bg-hover:#f2f4f7; --bg-1:#fff; --bg-soft:#f4f5f8;
+  --ink:#1f2937; --ink-soft:#6b7280; --line:#e5e7eb;
+  --warning:#faad14; --info:#0d9488; --fail:#f43b2c; --success:#16a34a;
+}
+:root[data-theme="dark"] {
+  --primary:#2dd4bf; --primary-fg:#042f2e; --primary-bg-active:#2dd4bf26;
+  --secondary:#1f2430; --bg:#171b24; --bg-hover:#1f2530; --bg-1:#171b24; --bg-soft:#1b202a;
+  --ink:#e5e7eb; --ink-soft:#9ca3af; --line:#2d3340;
+  --warning:#ffc53d; --info:#2dd4bf; --fail:#ff6b5e; --success:#4ade80;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { background: var(--bg); color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif; font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+.app { display: grid; grid-template-rows: 56px 1fr; height: 100vh; }
+.header { display: grid; grid-template-columns: 220px 1fr auto; align-items: center; padding: 0 24px; border-bottom: 1px solid var(--line); background: var(--bg-1); }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 16px; }
+.brand-mark { width: 26px; height: 26px; background: var(--primary); border-radius: 6px; display: grid; place-items: center; color: var(--primary-fg); font-weight: 800; font-size: 14px; }
+.brand-version { font-size: 11px; color: var(--ink-soft); margin-left: 6px; }
+.nav { display: flex; gap: 4px; background: var(--bg-soft); padding: 3px; border-radius: 8px; }
+.nav-item { padding: 6px 14px; font-size: 13px; color: var(--ink-soft); border-radius: 6px; cursor: pointer; }
+.nav-item:hover { background: var(--bg-hover); }
+.nav-item.active { background: var(--bg-1); color: var(--ink); font-weight: 500; box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
+.user { font-size: 12px; color: var(--ink-soft); }
+
+.body { display: grid; grid-template-columns: 220px 1fr; overflow: hidden; }
+.sidebar { border-right: 1px solid var(--line); padding: 16px 12px; background: var(--bg-1); overflow-y: auto; }
+.side-group { font-size: 11px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.06em; padding: 12px 12px 6px; font-weight: 600; }
+.side-item { padding: 7px 12px; font-size: 13px; color: var(--ink-soft); border-radius: 6px; cursor: pointer; }
+.side-item:hover { background: var(--bg-hover); color: var(--ink); }
+.side-item.active { background: var(--primary-bg-active); color: var(--primary); font-weight: 500; }
+
+.content { padding: 24px 28px; overflow-y: auto; }
+.page-head { margin-bottom: 20px; display: flex; justify-content: space-between; align-items: flex-end; }
+.page-title { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; }
+.page-sub { font-size: 12px; color: var(--ink-soft); margin-top: 2px; }
+.actions { display: flex; gap: 8px; }
+
+/* ──── Sub tabs ──── */
+.subtabs { display: flex; gap: 4px; background: var(--bg-soft); padding: 3px; border-radius: 8px; margin-bottom: 18px; }
+.subtab { padding: 6px 14px; font-size: 13px; color: var(--ink-soft); border-radius: 6px; cursor: pointer; }
+.subtab:hover { background: var(--bg-hover); }
+.subtab.active { background: var(--bg-1); color: var(--ink); font-weight: 500; box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
+
+/* ──── Settings form ──── */
+.section { background: var(--bg-1); border: 1px solid var(--line); border-radius: 12px; padding: 20px 24px; margin-bottom: 16px; }
+.section-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+.section-sub { font-size: 12px; color: var(--ink-soft); margin-bottom: 18px; }
+.form-row { display: grid; grid-template-columns: 200px 1fr; gap: 16px 20px; padding: 14px 0; border-bottom: 1px dashed var(--line); align-items: start; }
+.form-row:last-child { border-bottom: none; }
+.form-label { font-size: 13px; font-weight: 500; color: var(--ink); padding-top: 8px; }
+.form-label .hint { display: block; font-size: 11px; color: var(--ink-soft); font-weight: 400; margin-top: 2px; }
+.form-input {
+  border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px 12px; font-size: 13px; background: var(--bg-1); color: var(--ink);
+  font-family: 'JetBrains Mono', monospace; width: 100%;
+}
+.form-input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-bg-active); }
+.form-input[readonly] { background: var(--bg-soft); color: var(--ink-soft); cursor: not-allowed; }
+.form-help { font-size: 11px; color: var(--ink-soft); margin-top: 6px; }
+.form-mono { font-family: 'JetBrains Mono', monospace; font-size: 12px; padding: 8px 12px; background: var(--bg-soft); border-radius: 6px; border: 1px solid var(--line); display: inline-block; }
+
+.btn { font-size: 13px; padding: 7px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg-1); color: var(--ink); cursor: pointer; font-family: inherit; }
+.btn.primary { background: var(--primary); color: var(--primary-fg); border-color: var(--primary); }
+.btn.danger { color: var(--fail); border-color: var(--fail); }
+.btn.danger:hover { background: var(--fail); color: var(--primary-fg); }
+.btn:hover { border-color: var(--ink-soft); }
+.btn.primary:hover { filter: brightness(1.05); }
+
+.toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 14px 0; border-bottom: 1px dashed var(--line); }
+.toggle-row:last-child { border-bottom: none; }
+.toggle-text .label { font-size: 13px; font-weight: 500; }
+.toggle-text .hint { font-size: 11px; color: var(--ink-soft); margin-top: 2px; }
+.toggle input { display: none; }
+.toggle { display: flex; align-items: center; gap: 8px; }
+.toggle-track { width: 32px; height: 18px; background: var(--line); border-radius: 999px; position: relative; cursor: pointer; transition: background .15s; }
+.toggle-track::after { content: ''; position: absolute; width: 14px; height: 14px; background: var(--bg-1); border-radius: 50%; top: 2px; left: 2px; transition: transform .15s; box-shadow: 0 1px 2px rgba(0,0,0,0.2); }
+.toggle input:checked + .toggle-track { background: var(--primary); }
+.toggle input:checked + .toggle-track::after { transform: translateX(14px); }
+
+/* Stats purge */
+.danger-card { background: #f43b2c08; border-color: var(--fail); }
+.danger-card .section-title { color: var(--fail); }
+
+/* User-agent table */
+.ua-list { background: var(--bg-1); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin-top: 12px; }
+.ua-row { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.ua-row:last-child { border-bottom: none; }
+.ua-pattern { font-family: 'JetBrains Mono', monospace; color: var(--ink); }
+.ua-note { font-size: 10px; color: var(--ink-soft); margin-top: 2px; }
+
+.theme-switcher { position: fixed; bottom: 16px; right: 16px; background: var(--bg-1); border: 1px solid var(--line); border-radius: 999px; padding: 4px; font-size: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+.theme-switcher button { border: none; background: transparent; padding: 6px 12px; border-radius: 999px; cursor: pointer; color: var(--ink-soft); }
+.theme-switcher button.active { background: var(--primary); color: var(--primary-fg); }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="header">
+    <div class="brand"><div class="brand-mark">C</div><span>Cairn</span><span class="brand-version">v0.5.36</span></div>
+    <div class="nav">
+      <div class="nav-item">镜像列表</div>
+      <div class="nav-item">镜像拉取</div>
+      <div class="nav-item">镜像热度</div>
+      <div class="nav-item">凭据管理</div>
+      <div class="nav-item">代理管理</div>
+      <div class="nav-item active">设置</div>
+    </div>
+    <div class="user">admin · registry.example.com</div>
+  </header>
+
+  <div class="body">
+    <aside class="sidebar">
+      <div class="side-group">设置分组</div>
+      <div class="side-item active">仓库地址 & 认证</div>
+      <div class="side-item">拉取配置</div>
+      <div class="side-item">热度 & 日志</div>
+      <div class="side-item">忽略规则</div>
+      <div class="side-item">高级 / 危险区</div>
+      <div class="side-group">运行时</div>
+      <div class="side-item">端口 8787</div>
+      <div class="side-item">env=prod</div>
+    </aside>
+
+    <main class="content">
+      <div class="page-head">
+        <div>
+          <div class="page-title">设置</div>
+          <div class="page-sub">运行时配置 · 改动立即生效(热替换)· 不需要重启容器</div>
+        </div>
+        <div class="actions">
+          <button class="btn">↻ 探测远端</button>
+          <button class="btn primary">保存所有修改</button>
+        </div>
+      </div>
+
+      <div class="subtabs">
+        <div class="subtab active">仓库地址 & 认证</div>
+        <div class="subtab">拉取配置</div>
+        <div class="subtab">热度 & 日志</div>
+        <div class="subtab">忽略规则</div>
+        <div class="subtab">高级</div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">仓库地址</div>
+        <div class="section-sub">Cairn 自身对外暴露的地址 · 留空时拉取任务回退到 Docker Hub</div>
+
+        <div class="form-row">
+          <div class="form-label">仓库地址<span class="hint">host:port 形式</span></div>
+          <div>
+            <input class="form-input" value="registry.example.com:8787">
+            <div class="form-help">示例：<code>registry.example.com:8787</code>（不带 http:// 前缀）</div>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-label">展示名称<span class="hint">顶部右上角显示</span></div>
+          <div>
+            <input class="form-input" value="Carin Dev 环境" style="font-family:inherit">
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-label">监听端口<span class="hint">只读 — 容器内 cairn 进程</span></div>
+          <div>
+            <div class="form-mono">8787</div>
+            <div class="form-help">容器内 cairn 进程监听 8787；宿主机→容器映射在 <code>docker-compose.yml</code> 的 <code>HOST_PORT</code>，改完需要 <code>docker compose up -d</code> 重建容器。</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">Registry 认证</div>
+        <div class="section-sub">管理 <code>/v2/*</code> 端点的 Basic 认证 · 留空 = 允许匿名访问</div>
+
+        <div class="form-row">
+          <div class="form-label">用户名</div>
+          <div><input class="form-input" value="admin"></div>
+        </div>
+        <div class="form-row">
+          <div class="form-label">密码<span class="hint">输入即覆盖；留空 = 不动；清空 = 关闭认证</span></div>
+          <div>
+            <input class="form-input" type="password" value="••••••••••">
+            <div class="form-help">密码以密文形式存于 SQLite settings 表的 <code>registry.password</code> 键 · AES-256-GCM 加密</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">运行时行为</div>
+        <div class="section-sub">控制 destructive ops 与 ingress 端点</div>
+
+        <div class="toggle-row">
+          <div class="toggle-text">
+            <div class="label">允许删除操作</div>
+            <div class="hint">关掉后 tag 删除 / 仓库删除 / GC 全部 403(v0.5.36)</div>
+          </div>
+          <label class="toggle"><input type="checkbox" checked><div class="toggle-track"></div></label>
+        </div>
+        <div class="toggle-row">
+          <div class="toggle-text">
+            <div class="label">允许拉取任务</div>
+            <div class="hint">关掉后 <code>POST /api/pull/jobs</code> 返回 403</div>
+          </div>
+          <label class="toggle"><input type="checkbox" checked><div class="toggle-track"></div></label>
+        </div>
+        <div class="toggle-row">
+          <div class="toggle-text">
+            <div class="label">接收 Registry 事件</div>
+            <div class="hint">关闭 <code>/api/events</code> ingest,会停掉热度记录</div>
+          </div>
+          <label class="toggle"><input type="checkbox" checked><div class="toggle-track"></div></label>
+        </div>
+      </div>
+
+      <div class="section danger-card">
+        <div class="section-title">高级 / 危险区</div>
+        <div class="section-sub">清空热度数据 · 不可逆 · 测试阶段授权</div>
+
+        <div class="toggle-row">
+          <div class="toggle-text">
+            <div class="label">清理热度历史</div>
+            <div class="hint">删除 <code>activity_daily</code> 表全部数据 · 下次通知</div>
+          </div>
+          <button class="btn danger">清空热度</button>
+        </div>
+        <div class="toggle-row">
+          <div class="toggle-text">
+            <div class="label">删除测试事件</div>
+            <div class="hint">按 User-Agent 删除最近 24h 内的事件 · 用于调试验证</div>
+          </div>
+          <button class="btn danger">删除测试事件</button>
+        </div>
+        <div class="toggle-row">
+          <div class="toggle-text">
+            <div class="label">忽略的 User-Agent</div>
+            <div class="hint">这些源匹配不计入热度 · 可加通配 <code>*</code></div>
+          </div>
+          <button class="btn">+ 添加规则</button>
+        </div>
+
+        <div class="ua-list">
+          <div class="ua-row">
+            <div>
+              <div class="ua-pattern">ci-*</div>
+              <div class="ua-note">本地 CI runner · 4 条子模式</div>
+            </div>
+            <button class="btn">×</button>
+          </div>
+          <div class="ua-row">
+            <div>
+              <div class="ua-pattern">docker-compose-*</div>
+              <div class="ua-note">容器内自检 · 防止回环污染热度</div>
+            </div>
+            <button class="btn">×</button>
+          </div>
+          <div class="ua-row">
+            <div>
+              <div class="ua-pattern">kubernetes-probe*</div>
+              <div class="ua-note">K8s liveness/readiness 探针</div>
+            </div>
+            <button class="btn">×</button>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+<div class="theme-switcher" id="ts">
+  <button class="active" data-t="light">浅色</button><button data-t="dark">深色</button>
+</div>
+<script>
+document.querySelectorAll('#ts button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#ts button').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  if (b.dataset.t === 'dark') document.documentElement.dataset.theme = 'dark';
+  else delete document.documentElement.dataset.theme;
+});
+</script>
+</body>
+</html>

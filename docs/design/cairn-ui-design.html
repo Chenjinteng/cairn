@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cairn — UI Design Spec / UI 设计稿</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    /* Cairn tokens — 与 web/src/theme.css + web/src/main.tsx 一致 */
+    --bg: #f7f5f0;
+    --surface: #ffffff;
+    --line: #e9e3d6;
+    --line-soft: #f0ead9;
+    --ink: #14171e;
+    --ink-mid: #3a4256;
+    --ink-soft: #7c7a72;
+    --primary: #0d9488;
+    --primary-deep: #0f766e;
+    --primary-tint: #ccfbf1;
+    --accent: #f59e0b;
+    --accent-deep: #d97706;
+    --success: #16a34a;
+    --warning: #faad14;
+    --fail: #f43b2c;
+    --info: #0d9488;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 15px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    background-image:
+      radial-gradient(at 8% 0%, rgba(13, 148, 136, 0.04) 0px, transparent 50%),
+      radial-gradient(at 100% 100%, rgba(245, 158, 11, 0.05) 0px, transparent 50%);
+    min-height: 100dvh;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 80px 32px 100px; }
+
+  /* ── Hero ── */
+  .hero { display: flex; align-items: center; gap: 48px; padding-bottom: 72px; border-bottom: 1px solid var(--line); }
+  .hero-mark { flex: 0 0 180px; }
+  .hero-mark svg { width: 180px; height: 180px; display: block; }
+  .hero-text { flex: 1; }
+  .eyebrow {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.18em;
+    color: var(--primary-deep); text-transform: uppercase; margin-bottom: 14px;
+  }
+  h1.wordmark {
+    font-family: 'Outfit', sans-serif; font-weight: 600;
+    font-size: 72px; line-height: 1; letter-spacing: -0.03em;
+    color: var(--ink); margin-bottom: 18px;
+  }
+  h1.wordmark .dot { color: var(--accent); }
+  .tagline { font-size: 17px; color: var(--ink-mid); margin-bottom: 6px; font-weight: 400; letter-spacing: -0.005em; }
+  .tagline-cn { font-size: 14px; color: var(--ink-soft); letter-spacing: 0.02em; }
+  .version-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    margin-top: 22px; padding: 4px 12px; background: var(--surface);
+    border: 1px solid var(--line); border-radius: 999px;
+    font-size: 12px; color: var(--ink-soft); font-family: 'JetBrains Mono', monospace;
+  }
+  .version-badge .dot-sep { width: 3px; height: 3px; border-radius: 50%; background: var(--ink-soft); }
+
+  /* ── Section ── */
+  section { padding: 64px 0; border-bottom: 1px solid var(--line-soft); }
+  section:last-of-type { border-bottom: none; }
+  h2 {
+    font-family: 'DM Serif Display', serif;
+    font-size: 38px; font-weight: 400; line-height: 1.1;
+    letter-spacing: -0.025em; color: var(--ink);
+    margin-bottom: 8px;
+  }
+  .h-sub {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px; color: var(--ink-soft);
+    margin-bottom: 28px;
+  }
+  .body {
+    font-size: 15px; color: var(--ink-mid);
+    margin-bottom: 18px; max-width: 720px;
+  }
+
+  /* ── Color swatch grid ── */
+  .swatch-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 8px; }
+  .swatch {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 10px; overflow: hidden;
+  }
+  .swatch-color { height: 88px; }
+  .swatch-meta { padding: 12px 14px; }
+  .swatch-name { font-size: 13px; font-weight: 600; color: var(--ink); margin-bottom: 2px; }
+  .swatch-value { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-soft); }
+  .swatch-tint { display: inline-block; margin-top: 4px; font-size: 10px; color: var(--ink-soft); }
+
+  /* ── Typography samples ── */
+  .type-spec { display: grid; gap: 16px; }
+  .type-row {
+    display: grid; grid-template-columns: 200px 1fr 120px;
+    align-items: baseline; gap: 24px; padding: 18px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .type-row:last-child { border-bottom: none; }
+  .type-key { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--ink-soft); }
+  .type-meta { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-soft); text-align: right; }
+  .type-display { font-family: 'DM Serif Display', serif; font-size: 44px; line-height: 1.1; letter-spacing: -0.02em; color: var(--ink); }
+  .type-h1 { font-family: 'Outfit', sans-serif; font-weight: 600; font-size: 28px; line-height: 1.2; letter-spacing: -0.02em; }
+  .type-h2 { font-family: 'Outfit', sans-serif; font-weight: 600; font-size: 20px; line-height: 1.25; letter-spacing: -0.015em; }
+  .type-h3 { font-family: 'Outfit', sans-serif; font-weight: 500; font-size: 16px; line-height: 1.3; }
+  .type-body { font-size: 15px; color: var(--ink-mid); }
+  .type-mono { font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--ink); }
+  .type-caption { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.06em; }
+
+  /* ── Spacing scale ── */
+  .scale { display: flex; align-items: flex-end; gap: 16px; padding: 16px 0; }
+  .scale-bar { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .scale-bar .bar { background: var(--primary); border-radius: 3px; }
+  .scale-bar .lbl { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-soft); }
+
+  /* ── Surface / component playground ── */
+  .playground {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 12px; padding: 32px; margin-bottom: 16px;
+  }
+  .playground-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; color: var(--ink-soft);
+    text-transform: uppercase; letter-spacing: 0.06em;
+    margin-bottom: 18px;
+  }
+
+  /* Buttons */
+  .btn-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: 'Outfit', sans-serif; font-weight: 500;
+    font-size: 14px; padding: 9px 16px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--surface);
+    color: var(--ink); cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  .btn:hover { border-color: var(--ink-soft); }
+  .btn.primary { background: var(--primary); color: var(--surface); border-color: var(--primary); }
+  .btn.primary:hover { background: var(--primary-deep); }
+  .btn.accent { background: var(--accent); color: var(--surface); border-color: var(--accent); }
+  .btn.ghost { background: transparent; border: none; color: var(--primary-deep); padding: 9px 12px; }
+  .btn.danger { color: var(--fail); border-color: var(--fail); }
+  .btn.sm { font-size: 13px; padding: 6px 12px; }
+  .btn.lg { font-size: 15px; padding: 12px 20px; }
+  .btn.icon { padding: 8px; }
+
+  /* Tags */
+  .tag {
+    display: inline-flex; align-items: center;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px; font-weight: 500;
+    padding: 3px 9px; border-radius: 4px;
+    background: var(--line-soft); color: var(--ink-mid);
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .tag.live { background: var(--primary-tint); color: var(--primary-deep); }
+  .tag.ok { background: rgba(22, 163, 74, 0.12); color: var(--success); }
+  .tag.fail { background: rgba(244, 59, 44, 0.10); color: var(--fail); }
+  .tag.warn { background: rgba(245, 158, 11, 0.14); color: var(--accent-deep); }
+
+  /* Inputs */
+  .input {
+    border: 1px solid var(--line); border-radius: 8px;
+    padding: 9px 12px; font-size: 14px;
+    background: var(--surface); color: var(--ink);
+    font-family: 'JetBrains Mono', monospace;
+    min-width: 240px;
+  }
+  .input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-tint); }
+  .input.readonly { background: var(--line-soft); color: var(--ink-soft); cursor: not-allowed; }
+  .input-row { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+
+  /* Toggle */
+  .toggle input { display: none; }
+  .toggle { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; }
+  .toggle-track {
+    width: 36px; height: 20px; background: var(--line);
+    border-radius: 999px; position: relative; transition: background .15s;
+  }
+  .toggle-track::after {
+    content: ''; position: absolute; width: 16px; height: 16px;
+    background: var(--surface); border-radius: 50%;
+    top: 2px; left: 2px; transition: transform .15s;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+  }
+  .toggle input:checked + .toggle-track { background: var(--primary); }
+  .toggle input:checked + .toggle-track::after { transform: translateX(16px); }
+  .toggle-label { font-size: 13px; color: var(--ink-mid); }
+
+  /* Progress */
+  .progress {
+    height: 6px; background: var(--line-soft);
+    border-radius: 3px; overflow: hidden; min-width: 200px;
+  }
+  .progress-bar {
+    height: 100%; background: var(--primary); border-radius: 3px;
+  }
+  .progress-bar.fail { background: var(--fail); }
+
+  /* Surface demo cards */
+  .surface-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .surface-card {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 12px; padding: 18px 20px;
+  }
+  .surface-card.elev { box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
+  .surface-card.outline { background: transparent; }
+  .surface-card.tint { background: var(--primary-tint); border-color: transparent; }
+  .surface-label { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-soft); margin-bottom: 8px; }
+
+  /* KPI */
+  .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .kpi {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 10px; padding: 16px 18px;
+  }
+  .kpi-label { font-size: 11px; color: var(--ink-soft); margin-bottom: 6px; }
+  .kpi-value { font-size: 24px; font-weight: 600; letter-spacing: -0.02em; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .kpi-trend { font-size: 11px; color: var(--ink-soft); margin-top: 6px; font-variant-numeric: tabular-nums; }
+
+  /* Heatmap */
+  .heat-grid {
+    display: grid; grid-template-columns: repeat(24, 1fr); gap: 3px;
+  }
+  .heat-cell { aspect-ratio: 1; border-radius: 3px; background: var(--line-soft); }
+  .heat-cell.l1 { background: rgba(13, 148, 136, 0.12); }
+  .heat-cell.l2 { background: rgba(13, 148, 136, 0.32); }
+  .heat-cell.l3 { background: rgba(13, 148, 136, 0.58); }
+  .heat-cell.l4 { background: var(--primary); }
+
+  /* Page links */
+  .page-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .page-link {
+    display: block; background: var(--surface); border: 1px solid var(--line);
+    border-radius: 12px; padding: 18px 20px; text-decoration: none;
+    color: inherit; transition: transform .15s, box-shadow .15s;
+  }
+  .page-link:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,0,0,0.06); }
+  .page-link .num { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--primary-deep); text-transform: uppercase; letter-spacing: 0.08em; }
+  .page-link .title { font-size: 15px; font-weight: 600; margin: 6px 0; }
+  .page-link .desc { font-size: 12px; color: var(--ink-soft); line-height: 1.5; }
+
+  /* States gallery */
+  .states { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+  .state-card {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 12px; padding: 18px 20px;
+  }
+  .state-card .label { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-soft); margin-bottom: 10px; }
+  .empty {
+    text-align: center; padding: 40px 20px; color: var(--ink-soft);
+  }
+  .empty .icon { font-size: 32px; margin-bottom: 8px; opacity: 0.5; }
+
+  /* Footer */
+  footer {
+    margin-top: 60px; padding-top: 32px;
+    border-top: 1px solid var(--line);
+    font-size: 11px; color: var(--ink-soft);
+    font-family: 'JetBrains Mono', monospace;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+
+  @media (max-width: 800px) {
+    .hero { flex-direction: column; align-items: flex-start; gap: 28px; padding-bottom: 48px; }
+    .hero-mark { flex: 0 0 auto; }
+    .hero-mark svg { width: 120px; height: 120px; }
+    h1.wordmark { font-size: 52px; }
+    .swatch-grid { grid-template-columns: repeat(2, 1fr); }
+    .surface-grid, .page-grid, .states, .kpi-grid { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ═══════════ HERO ═══════════ -->
+  <div class="hero">
+    <div class="hero-mark">
+      <!-- Logo: 3 stacked rounded rectangles + amber dot (与 cairn-brand.html 一致) -->
+      <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-label="Cairn mark">
+        <rect x="6" y="46" width="52" height="12" rx="3" fill="#0d9488"/>
+        <rect x="14" y="32" width="36" height="10" rx="2.5" fill="#0d9488"/>
+        <rect x="22" y="20" width="20" height="9" rx="2" fill="#0d9488"/>
+        <circle cx="32" cy="10" r="3.5" fill="#f59e0b"/>
+      </svg>
+    </div>
+    <div class="hero-text">
+      <div class="eyebrow">UI Design Spec · v1.0</div>
+      <h1 class="wordmark">Cairn<span class="dot">.</span> UI</h1>
+      <div class="tagline">Lightweight Container Image Infrastructure — Interface Tokens</div>
+      <div class="tagline-cn">轻量级容器镜像基础设施平台 · 界面设计稿</div>
+      <div class="version-badge">
+        <span style="color:var(--primary-deep);font-weight:600">Cairn 0.5.36</span>
+        <span class="dot-sep"></span>
+        <span>与 web/src/theme.css + main.tsx 同步</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ §1 COLOR ═══════════ -->
+  <section>
+    <h2>Color</h2>
+    <div class="h-sub">// 调色板 · 4 色锚定 + 中性灰阶</div>
+    <p class="body">
+      Cairn 用 4 个语义色作为系统锚点:<strong style="color:var(--ink)">teal (主)</strong>、
+      <strong style="color:var(--accent-deep)">amber (强调)</strong>、
+      success / fail 用于状态。
+      中性灰阶走 cool gray(蓝调),不偏暖。
+      主色 / 深色版对照见底部 Variants 一节。
+    </p>
+
+    <div class="swatch-grid">
+      <div class="swatch"><div class="swatch-color" style="background:#0d9488"></div><div class="swatch-meta">
+        <div class="swatch-name">primary</div><div class="swatch-value">#0d9488</div>
+        <div class="swatch-tint">teal-600 · cairn mark 塔身</div>
+      </div></div>
+      <div class="swatch"><div class="swatch-color" style="background:#0f766e"></div><div class="swatch-meta">
+        <div class="swatch-name">primary-deep</div><div class="swatch-value">#0f766e</div>
+        <div class="swatch-tint">teal-700 · hover / pressed</div>
+      </div></div>
+      <div class="swatch"><div class="swatch-color" style="background:#ccfbf1"></div><div class="swatch-meta">
+        <div class="swatch-name">primary-tint</div><div class="swatch-value">#ccfbf1</div>
+        <div class="swatch-tint">teal-100 · active 底块</div>
+      </div></div>
+      <div class="swatch"><div class="swatch-color" style="background:#f59e0b"></div><div class="swatch-meta">
+        <div class="swatch-name">accent</div><div class="swatch-value">#f59e0b</div>
+        <div class="swatch-tint">amber-500 · 标记点</div>
+      </div></div>
+    </div>
+
+    <div class="swatch-grid" style="margin-top:14px">
+      <div class="swatch"><div class="swatch-color" style="background:#16a34a"></div><div class="swatch-meta">
+        <div class="swatch-name">success</div><div class="swatch-value">#16a34a</div>
+        <div class="swatch-tint">green-600 · success 状态</div>
+      </div></div>
+      <div class="swatch"><div class="swatch-color" style="background:#faad14"></div><div class="swatch-meta">
+        <div class="swatch-name">warning</div><div class="swatch-value">#faad14</div>
+        <div class="swatch-tint">amber-600 · 提示</div>
+      </div></div>
+      <div class="swatch"><div class="swatch-color" style="background:#f43b2c"></div><div class="swatch-meta">
+        <div class="swatch-name">fail</div><div class="swatch-value">#f43b2c</div>
+        <div class="swatch-tint">red-500 · 错误 / 失败</div>
+      </div></div>
+      <div class="swatch"><div class="swatch-color" style="background:#14171e"></div><div class="swatch-meta">
+        <div class="swatch-name">ink</div><div class="swatch-value">#14171e</div>
+        <div class="swatch-tint">near-black · 主色文字</div>
+      </div></div>
+    </div>
+
+    <div class="swatch-grid" style="margin-top:14px">
+      <div class="swatch"><div class="swatch-color" style="background:#f7f5f0"></div><div class="swatch-meta">
+        <div class="swatch-name">bg (warm)</div><div class="swatch-value">#f7f5f0</div>
+        <div class="swatch-tint">米色页底 · 与品牌稿一致</div>
+      </div></div>
+      <div class="swatch"><div class="swatch-color" style="background:#ffffff;border:1px solid var(--line)"></div><div class="swatch-meta">
+        <div class="swatch-name">surface</div><div class="swatch-value">#ffffff</div>
+        <div class="swatch-tint">卡片 / 面板</div>
+      </div></div>
+      <div class="swatch"><div class="swatch-color" style="background:#e9e3d6"></div><div class="swatch-meta">
+        <div class="swatch-name">line</div><div class="swatch-value">#e9e3d6</div>
+        <div class="swatch-tint">暖灰边线</div>
+      </div></div>
+      <div class="swatch"><div class="swatch-color" style="background:#7c7a72"></div><div class="swatch-meta">
+        <div class="swatch-name">ink-soft</div><div class="swatch-value">#7c7a72</div>
+        <div class="swatch-tint">辅助文字 · 时间戳</div>
+      </div></div>
+    </div>
+  </section>
+
+  <!-- ═══════════ §2 TYPOGRAPHY ═══════════ -->
+  <section>
+    <h2>Typography</h2>
+    <div class="h-sub">// 三字体系统 · Display / UI / Mono</div>
+    <p class="body">
+      <strong style="color:var(--ink)">DM Serif Display</strong> 用于大标题与品牌字 — 标题与正文之间形成"编辑型"对比;
+      <strong style="color:var(--ink)">Outfit</strong> 是 UI 主字体 — sans-serif 几何感,信息密集时仍清晰;
+      <strong style="color:var(--ink)">JetBrains Mono</strong> 用于 hash / digest / 时间戳 / 字段 key —
+      monospace 让技术信息天然对齐。
+    </p>
+
+    <div class="type-spec">
+      <div class="type-row">
+        <span class="type-key">display-xl</span>
+        <span class="type-display">Registry · at a glance.</span>
+        <span class="type-meta">44 px · DM Serif</span>
+      </div>
+      <div class="type-row">
+        <span class="type-key">h1 / page-title</span>
+        <span class="type-h1">镜像列表 / 22 字符 · Outfit 600</span>
+        <span class="type-meta">28 px · Outfit 600</span>
+      </div>
+      <div class="type-row">
+        <span class="type-key">h2 / panel-title</span>
+        <span class="type-h2">最近镜像 · 4 行</span>
+        <span class="type-meta">20 px · Outfit 600</span>
+      </div>
+      <div class="type-row">
+        <span class="type-key">h3 / section</span>
+        <span class="type-h3">仓库地址 / 认证 / 监听端口</span>
+        <span class="type-meta">16 px · Outfit 500</span>
+      </div>
+      <div class="type-row">
+        <span class="type-key">body</span>
+        <span class="type-body">普通正文 · 描述 / 副标题 · 来自 drone-1/proxies/pull 等页面</span>
+        <span class="type-meta">15 px · Outfit 400</span>
+      </div>
+      <div class="type-row">
+        <span class="type-key">mono / digest</span>
+        <span class="type-mono">sha256:503d7fcdb85042831d60a166f93db24fcdb815449cab5edff2fdb7d157f288c7</span>
+        <span class="type-meta">13 px · JetBrains Mono</span>
+      </div>
+      <div class="type-row">
+        <span class="type-key">caption</span>
+        <span class="type-caption">// BY CREATED_AT DESC · LAST_REFRESH 2.1MS</span>
+        <span class="type-meta">11 px · JetBrains Mono 600 · 0.06em</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ §3 SPACING & LAYOUT ═══════════ -->
+  <section>
+    <h2>Spacing &amp; Layout</h2>
+    <div class="h-sub">// 8px 基线网格 · 4 / 8 / 12 / 16 / 24 / 32 / 48 / 64</div>
+    <p class="body">
+      所有 spacing / padding / gap 都走 4 或 8 的倍数 — 与 Ant Design 默认一致,
+      便于后续接入组件库时直接复用 grid 系统。
+    </p>
+
+    <div class="playground">
+      <div class="playground-label">// 4-px scale · 实际像素 / 视觉对比</div>
+      <div class="scale">
+        <div class="scale-bar"><div class="bar" style="width:4px;height:24px"></div><span class="lbl">4</span></div>
+        <div class="scale-bar"><div class="bar" style="width:8px;height:24px"></div><span class="lbl">8</span></div>
+        <div class="scale-bar"><div class="bar" style="width:12px;height:24px"></div><span class="lbl">12</span></div>
+        <div class="scale-bar"><div class="bar" style="width:16px;height:24px"></div><span class="lbl">16</span></div>
+        <div class="scale-bar"><div class="bar" style="width:24px;height:24px"></div><span class="lbl">24</span></div>
+        <div class="scale-bar"><div class="bar" style="width:32px;height:24px"></div><span class="lbl">32</span></div>
+        <div class="scale-bar"><div class="bar" style="width:48px;height:24px"></div><span class="lbl">48</span></div>
+        <div class="scale-bar"><div class="bar" style="width:64px;height:24px"></div><span class="lbl">64</span></div>
+      </div>
+    </div>
+
+    <div class="playground">
+      <div class="playground-label">// Layout grid · 顶栏 / 侧栏 / 内容区</div>
+      <div style="display:grid;grid-template-rows:56px 1fr;border:1px solid var(--line);border-radius:8px;overflow:hidden;height:240px;font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--ink-soft)">
+        <div style="display:grid;grid-template-columns:200px 1fr auto;align-items:center;padding:0 16px;background:var(--surface);border-bottom:1px solid var(--line);gap:14px">
+          <span style="color:var(--primary-deep);font-weight:600">CAIRN.</span>
+          <span style="text-align:center">nav · 6 tabs</span>
+          <span>user</span>
+        </div>
+        <div style="display:grid;grid-template-columns:200px 1fr">
+          <div style="border-right:1px solid var(--line);padding:12px 14px;background:var(--surface)">sidebar · 220px</div>
+          <div style="padding:18px 22px">content · 24 / 28 px gutter</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ §4 SURFACES ═══════════ -->
+  <section>
+    <h2>Surfaces</h2>
+    <div class="h-sub">// 4 种表面 · 与 Ant Design 卡片语义对齐</div>
+
+    <div class="surface-grid">
+      <div class="surface-card">
+        <div class="surface-label">// card · default</div>
+        <strong>卡片</strong> · 白底 · 1px 暖灰边 · 12px 圆角
+      </div>
+      <div class="surface-card elev">
+        <div class="surface-label">// card · elevated</div>
+        <strong>浮起卡片</strong> · 加 0 1px 2px 阴影 · 用于 modal / popover
+      </div>
+      <div class="surface-card outline">
+        <div class="surface-label">// card · outline</div>
+        <strong>透明卡片</strong> · 无背景 · 用于嵌套层
+      </div>
+      <div class="surface-card tint">
+        <div class="surface-label">// card · tint</div>
+        <strong>tint 卡片</strong> · primary-tint 底 · 选中态 / 高亮
+      </div>
+      <div class="surface-card">
+        <div class="surface-label">// panel · with header</div>
+        <strong>面板</strong> · 14px 头部 + 表体 · 表格容器
+      </div>
+      <div class="surface-card" style="background:var(--bg);border-color:transparent">
+        <div class="surface-label">// surface · page bg</div>
+        <strong>页底</strong> · 暖米色 #f7f5f0 · 全页背景
+      </div>
+    </div>
+
+    <div class="playground" style="margin-top:18px">
+      <div class="playground-label">// KPI cards · 标准 4 列布局</div>
+      <div class="kpi-grid">
+        <div class="kpi"><div class="kpi-label">仓库总数</div><div class="kpi-value">4</div><div class="kpi-trend">+1 较昨日</div></div>
+        <div class="kpi"><div class="kpi-label">Tag 总数</div><div class="kpi-value">5</div><div class="kpi-trend">+1 较昨日</div></div>
+        <div class="kpi"><div class="kpi-label">占用空间</div><div class="kpi-value">75.2 MB</div><div class="kpi-trend">-12% post-gc</div></div>
+        <div class="kpi"><div class="kpi-label">孤儿 blob</div><div class="kpi-value">3</div><div class="kpi-trend">-2 已 GC</div></div>
+      </div>
+    </div>
+
+    <div class="playground">
+      <div class="playground-label">// Heatmap · 4 档色阶</div>
+      <div class="heat-grid">
+        <div class="heat-cell l1"></div><div class="heat-cell"></div><div class="heat-cell l2"></div><div class="heat-cell l1"></div>
+        <div class="heat-cell"></div><div class="heat-cell l1"></div><div class="heat-cell l3"></div><div class="heat-cell l2"></div>
+        <div class="heat-cell l1"></div><div class="heat-cell l2"></div><div class="heat-cell l4"></div><div class="heat-cell l3"></div>
+        <div class="heat-cell l2"></div><div class="heat-cell l1"></div><div class="heat-cell"></div><div class="heat-cell l1"></div>
+        <div class="heat-cell"></div><div class="heat-cell"></div><div class="heat-cell l1"></div><div class="heat-cell l2"></div>
+        <div class="heat-cell l1"></div><div class="heat-cell"></div><div class="heat-cell"></div><div class="heat-cell"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ §5 COMPONENTS ═══════════ -->
+  <section>
+    <h2>Components</h2>
+    <div class="h-sub">// 按钮 / 输入 / 标签 / Toggle / Progress</div>
+
+    <div class="playground">
+      <div class="playground-label">// Buttons · 5 变体 × 3 尺寸</div>
+      <div class="btn-row" style="margin-bottom: 12px">
+        <button class="btn">default</button>
+        <button class="btn primary">primary · 加入队列</button>
+        <button class="btn accent">accent · 添加仓库</button>
+        <button class="btn danger">danger · 清空热度</button>
+        <button class="btn ghost">ghost</button>
+      </div>
+      <div class="btn-row" style="margin-bottom: 12px">
+        <button class="btn sm">sm</button>
+        <button class="btn sm primary">sm primary</button>
+        <button class="btn">default</button>
+        <button class="btn lg">lg</button>
+        <button class="btn lg primary">lg primary</button>
+      </div>
+      <div class="btn-row">
+        <button class="btn icon">⌕</button>
+        <button class="btn icon">×</button>
+        <button class="btn icon">↻</button>
+        <button class="btn icon">+</button>
+      </div>
+    </div>
+
+    <div class="playground">
+      <div class="playground-label">// Inputs · text / readonly</div>
+      <div class="input-row">
+        <input class="input" value="library/nginx:1.27-alpine">
+        <input class="input" value="registry.example.com:8787">
+        <input class="input readonly" value="8787" disabled>
+      </div>
+      <div style="margin-top:14px;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--ink-soft)">
+        // focus 状态:border → primary + 3px primary-tint shadow ring(看 input:first-child)
+      </div>
+    </div>
+
+    <div class="playground">
+      <div class="playground-label">// Tags · 5 状态</div>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center">
+        <span class="tag">default</span>
+        <span class="tag live">live · v1</span>
+        <span class="tag ok">success</span>
+        <span class="tag warn">warning</span>
+        <span class="tag fail">failed</span>
+        <span class="tag">linux/amd64</span>
+        <span class="tag">3 layers</span>
+      </div>
+    </div>
+
+    <div class="playground">
+      <div class="playground-label">// Toggle · 3 状态</div>
+      <div style="display:flex;gap:24px;flex-wrap:wrap">
+        <label class="toggle"><input type="checkbox"><div class="toggle-track"></div></label>
+        <label class="toggle"><input type="checkbox" checked><div class="toggle-track"></div></label>
+        <label class="toggle"><input type="checkbox" disabled><div class="toggle-track"></div></label>
+        <span style="font-size:12px;color:var(--ink-soft);align-self:center">off / on / disabled</span>
+      </div>
+    </div>
+
+    <div class="playground">
+      <div class="playground-label">// Progress · 拉取队列进度条</div>
+      <div style="display:flex;flex-direction:column;gap:14px">
+        <div style="display:flex;align-items:center;gap:14px">
+          <div class="progress"><div class="progress-bar" style="width:67%"></div></div>
+          <span style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--ink-soft)">67%</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:14px">
+          <div class="progress"><div class="progress-bar fail" style="width:42%"></div></div>
+          <span style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--fail)">failed 42%</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ §6 NAVIGATION ═══════════ -->
+  <section>
+    <h2>Navigation</h2>
+    <div class="h-sub">// 顶栏 / 侧栏 / Segmented Tab</div>
+
+    <div class="playground">
+      <div class="playground-label">// Header · 220 / 1fr / auto</div>
+      <div style="display:grid;grid-template-columns:220px 1fr auto;align-items:center;padding:0 24px;height:56px;border:1px solid var(--line);border-radius:8px;background:var(--surface);font-family:'Outfit',sans-serif">
+        <div style="display:flex;align-items:center;gap:10px;font-weight:600">
+          <div style="width:26px;height:26px;background:var(--primary);border-radius:6px;display:grid;place-items:center;color:var(--surface);font-weight:800;font-size:14px">C</div>
+          Cairn
+          <span style="font-size:11px;color:var(--ink-soft);margin-left:6px">v0.5.36</span>
+        </div>
+        <div style="justify-self:center;display:flex;gap:4px;background:var(--line-soft);padding:3px;border-radius:8px">
+          <span style="padding:6px 14px;font-size:13px;color:var(--ink-soft);border-radius:6px">镜像列表</span>
+          <span style="padding:6px 14px;font-size:13px;color:var(--ink);font-weight:500;background:var(--surface);border-radius:6px;box-shadow:0 1px 2px rgba(0,0,0,0.06)">镜像拉取</span>
+          <span style="padding:6px 14px;font-size:13px;color:var(--ink-soft);border-radius:6px">镜像热度</span>
+        </div>
+        <div style="font-size:12px;color:var(--ink-soft)">admin · registry.example.com</div>
+      </div>
+    </div>
+
+    <div class="playground">
+      <div class="playground-label">// Sidebar · 220 px · 三段分组</div>
+      <div style="display:grid;grid-template-columns:220px 1fr;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--surface);height:240px;font-family:'Outfit',sans-serif">
+        <aside style="border-right:1px solid var(--line);padding:14px 12px;font-size:13px">
+          <div style="font-size:11px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:0.06em;padding:12px;font-weight:600">仓库</div>
+          <div style="padding:7px 12px;background:var(--primary-tint);color:var(--primary-deep);border-radius:6px;display:flex;justify-content:space-between;font-weight:500"><span>全部</span><span>4</span></div>
+          <div style="padding:7px 12px;color:var(--ink-soft);border-radius:6px;display:flex;justify-content:space-between"><span>library</span><span>1</span></div>
+          <div style="font-size:11px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:0.06em;padding:18px 12px 6px;font-weight:600">操作</div>
+          <div style="padding:7px 12px;color:var(--ink-soft);border-radius:6px">扫描清单</div>
+          <div style="padding:7px 12px;color:var(--ink-soft);border-radius:6px">运行 GC</div>
+        </aside>
+        <div style="padding:18px 22px;color:var(--ink-soft);font-size:13px">content · 主区</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ §7 PAGES ═══════════ -->
+  <section>
+    <h2>Pages</h2>
+    <div class="h-sub">// 6 个页面 · 全部用 demo-A-* 静态原型可看</div>
+    <p class="body">
+      6 个 Tab 的设计稿都在 <code>demo-A-*.html</code>(本目录)。每个 demo 都有
+      <strong style="color:var(--ink)">浅色 / 深色切换</strong> 按钮(右下角)。Token 与
+      <code>web/src/theme.css</code> + <code>web/src/main.tsx</code> 完全一致 —
+      改 demo 同步改源码即可。
+    </p>
+
+    <div class="page-grid">
+      <a class="page-link" href="demo-A-images.html">
+        <div class="num">page 1 / 6</div>
+        <div class="title">镜像列表</div>
+        <div class="desc">4 仓库 · 5 tag · KPI 4 + 列表 panel · 镜像仓库与 tag 的查看页</div>
+      </a>
+      <a class="page-link" href="demo-A-pull.html">
+        <div class="num">page 2 / 6</div>
+        <div class="title">镜像拉取</div>
+        <div class="desc">7 字段表单 + 3 toggle · 拉取队列 8 行带 progress bar · 从远端拉镜像落本地</div>
+      </a>
+      <a class="page-link" href="demo-A-stats.html">
+        <div class="num">page 3 / 6</div>
+        <div class="title">镜像热度</div>
+        <div class="desc">24×6 热力图 + top 8 镜像 sparkline + 客户端 top 6 · 镜像热度观测</div>
+      </a>
+      <a class="page-link" href="demo-A-credentials.html">
+        <div class="num">page 4 / 6</div>
+        <div class="title">凭据管理</div>
+        <div class="desc">5 条凭据 · 连通 / 失败 / 从未测试 三态 · 私有 registry 认证</div>
+      </a>
+      <a class="page-link" href="demo-A-proxies.html">
+        <div class="num">page 5 / 6</div>
+        <div class="title">代理管理</div>
+        <div class="desc">4 条代理 · http/https/socks5 三协议 · 4 状态 · 出网代理配置</div>
+      </a>
+      <a class="page-link" href="demo-A-settings.html">
+        <div class="num">page 6 / 6</div>
+        <div class="title">设置</div>
+        <div class="desc">仓库地址 / 认证 / 监听端口只读（v0.5.34）/ 运行时（v0.5.36 三个 toggle）/ UA 忽略</div>
+      </a>
+    </div>
+
+    <div class="page-link" href="demo-A-overview.html" style="margin-top:14px;display:block;text-align:center">
+      <div class="title" style="color:var(--primary-deep)">→ 看 6 页缩略索引 (demo-A-overview.html)</div>
+    </div>
+  </section>
+
+  <!-- ═══════════ §8 FEEDBACK STATES ═══════════ -->
+  <section>
+    <h2>States &amp; Feedback</h2>
+    <div class="h-sub">// loading / empty / error / success</div>
+
+    <div class="states">
+      <div class="state-card">
+        <div class="label">// loading · inline</div>
+        <div style="display:flex;align-items:center;gap:10px;padding:8px 0">
+          <div style="width:14px;height:14px;border:2px solid var(--primary);border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite"></div>
+          <span style="font-size:13px;color:var(--ink)">扫描中 · 2.1 ms</span>
+        </div>
+        <div style="height:6px;background:var(--line-soft);border-radius:3px;overflow:hidden">
+          <div style="width:67%;height:100%;background:var(--primary);border-radius:3px"></div>
+        </div>
+      </div>
+
+      <div class="state-card">
+        <div class="label">// empty</div>
+        <div class="empty">
+          <div class="icon">∅</div>
+          <div style="font-size:14px;color:var(--ink)">暂无数据</div>
+          <div style="font-size:12px;margin-top:6px">点「扫描清单」开始第一次 inventory</div>
+        </div>
+      </div>
+
+      <div class="state-card" style="background:rgba(244,59,44,0.04);border-color:var(--fail)">
+        <div class="label" style="color:var(--fail)">// error · inline</div>
+        <div style="display:flex;align-items:center;gap:10px;padding:8px 0;color:var(--fail);font-size:13px">
+          <span style="font-weight:600">!</span>
+          <span>Docker Hub 401 unauthorized · 请检查凭据</span>
+        </div>
+        <button class="btn danger sm">重新测试</button>
+      </div>
+
+      <div class="state-card" style="background:rgba(22,163,74,0.04);border-color:var(--success)">
+        <div class="label" style="color:var(--success)">// success · toast</div>
+        <div style="display:flex;align-items:center;gap:10px;padding:8px 0;color:var(--success);font-size:13px">
+          <span style="font-weight:600">✓</span>
+          <span>已删除 tag latest</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <span>Cairn UI Design Spec · v1.0 · 2026-09-29 · 与 cairn-brand.html 同源</span>
+    <span>Internal reference · not for redistribution</span>
+  </footer>
+
+</div>
+<style>
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</body>
+</html>
