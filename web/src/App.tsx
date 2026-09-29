@@ -20,6 +20,7 @@ import ProxiesPage from './pages/proxies-page';
 import SettingsPage from './pages/settings-page';
 import StatsPage from './pages/stats-page';
 import CairnMark from './components/cairn-mark';
+import PageSidebar from './components/page-sidebar';
 import type { Inventory } from './types';
 
 type PageKey = 'images' | 'stats' | 'pull' | 'credentials' | 'proxies' | 'settings';
@@ -28,9 +29,14 @@ type PageKey = 'images' | 'stats' | 'pull' | 'credentials' | 'proxies' | 'settin
 export type ThemeMode = 'light' | 'dark';
 
 /**
- * 整体布局：
- *   header（顶栏）→ main（p-4）→ 顶部横向 Segmented 导航 → 页面内容
- * 应用内导航放在顶部，而不是左侧栏。
+ * v0.5.37：整体布局
+ *   header（顶栏 56px；brand + 顶部 Segmented 6 Tab 导航 + user）→
+ *   main（p-4）→ body（grid: 220px 侧栏 + 1fr 内容区）→ 页面内容
+ *
+ * 顶栏 Segmented 6 Tab 仍是顶级导航，不动；
+ * 220px 侧栏是**每页内部**的 sub-nav（仓库筛选 / 凭据分组 / 时间窗 / 协议分类 等），
+ * 由 `PageSidebar` 组件按 page 类型渲染对应 group + item（仅 UI 占位 + active 高亮，
+ * v0.5.37 范围内不联动内容过滤，留给后续 0.5.x 优化）。
  */
 const NAV_ITEMS: { key: PageKey; label: string; icon: ReactNode }[] = [
   { key: 'images', label: '镜像列表', icon: <DockerOutlined /> },
@@ -150,29 +156,32 @@ export default function App({
               onChange={(value) => setPage(value as PageKey)}
             />
           </div>
-          <div className="app-content">
-            {page === 'images' ? (
-              <ImagesPage
-                config={config}
-                inventory={inventory}
-                onInventoryChange={setInventory}
-                onGoSettings={() => setPage('settings')}
-              />
-            ) : page === 'pull' ? (
-              <PullPage config={config} />
-            ) : page === 'stats' ? (
-              <StatsPage config={config} onConfigChange={publishConfig} />
-            ) : page === 'credentials' ? (
-              <CredentialsPage config={config} />
-            ) : page === 'proxies' ? (
-              <ProxiesPage config={config} />
-            ) : (
-              <SettingsPage
-                config={config}
-                onConfigChange={publishConfig}
-                onInventoryChange={setInventory}
-              />
-            )}
+          <div className="app-body">
+            <PageSidebar page={page} />
+            <div className="app-content">
+              {page === 'images' ? (
+                <ImagesPage
+                  config={config}
+                  inventory={inventory}
+                  onInventoryChange={setInventory}
+                  onGoSettings={() => setPage('settings')}
+                />
+              ) : page === 'pull' ? (
+                <PullPage config={config} />
+              ) : page === 'stats' ? (
+                <StatsPage config={config} onConfigChange={publishConfig} />
+              ) : page === 'credentials' ? (
+                <CredentialsPage config={config} />
+              ) : page === 'proxies' ? (
+                <ProxiesPage config={config} />
+              ) : (
+                <SettingsPage
+                  config={config}
+                  onConfigChange={publishConfig}
+                  onInventoryChange={setInventory}
+                />
+              )}
+            </div>
           </div>
         </main>
       </div>
