@@ -36,6 +36,12 @@ interface Props {
   inventory: Inventory | null;
   onInventoryChange: (inventory: Inventory) => void;
   onGoSettings: () => void;
+  /**
+   * v0.5.37.3:从侧栏传入的 filter(item key,格式 `groupLabel:itemLabel`)。
+   * 联动:「仓库」group 里点某仓库 → 把仓库名塞进 search 框;
+   * 「操作」group item 当前不联动内容(扫描清单 / 运行 GC 已是 page header actions)。
+   */
+  sidebarFilter?: string | null;
 }
 
 /** 热度时间窗，与「镜像热度」页保持同样的三档。 */
@@ -50,7 +56,21 @@ export default function ImagesPage({
   inventory,
   onInventoryChange,
   onGoSettings,
+  sidebarFilter,
 }: Props) {
+  // v0.5.37.3:从侧栏拿到 item key 后,提取 item label 作为仓库名 search 关键词。
+  // 「仓库:全部」= 清空 search;「仓库:library」= search="library";以此类推。
+  // 「操作:扫描清单」/「操作:运行 GC」/「操作:备份」暂不联动内容(已有 page header actions)。
+  const sidebarSearch = useMemo(() => {
+    if (!sidebarFilter) return '';
+    const idx = sidebarFilter.indexOf(':');
+    if (idx < 0) return '';
+    const group = sidebarFilter.slice(0, idx);
+    const item = sidebarFilter.slice(idx + 1);
+    if (group !== '仓库') return '';
+    if (item === '全部') return '';
+    return item;
+  }, [sidebarFilter]);
   /**
    * v0.5.18（F8）：loading 语义统一为「本轮清单请求在途」。首屏用 !inventory 做初值
    * 只为避免配置到手前先闪一帧空表；之后一律由 load() 自己开关，不再掺 inventory 条件。
@@ -69,6 +89,13 @@ export default function ImagesPage({
    */
   const tableWrapRef = useRef<HTMLDivElement>(null);
   const [search, setSearch] = useState('');
+  // v0.5.37.3:侧栏 → search 框联动。sidebarSearch 变化时同步进 search state,
+  // 让「仓库:library」之类点击直接显示 library 仓库。但不在 sidebar 变化以外
+  // 的场合强制覆盖 —— 用户在 search 框里继续手动输入不会被侧栏反向清空。
+  useEffect(() => {
+    setSearch(sidebarSearch);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sidebarSearch]);
   const [detailName, setDetailName] = useState<string | null>(null);
   /** 热度时间窗；与热度页的三档一致。 */
   const [statsDays, setStatsDays] = useState<StatsWindow>(30);

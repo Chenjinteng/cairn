@@ -25,6 +25,13 @@ import type { Inventory } from './types';
 
 type PageKey = 'images' | 'stats' | 'pull' | 'credentials' | 'proxies' | 'settings';
 
+/**
+ * v0.5.37.3：每页 sidebar 选择的 filter 值（`groupLabel:itemLabel`）。
+ * 切页时不重置 —— 比如「在镜像列表选 registry-manager 后切到凭据管理再切回来」，
+ * filter 仍是 `仓库:registry-manager`，跟浏览器表单持久化语义一致。
+ */
+type PageFilter = Record<PageKey, string | null>;
+
 /** 界面主题。持久化与首屏应用都在 main.tsx / index.html 里，这里只负责展示与切换。 */
 export type ThemeMode = 'light' | 'dark';
 
@@ -57,6 +64,16 @@ export default function App({
   // 两个页面共享同一份清单：切换页面不该重新抓取 registry。
   const [page, setPage] = useState<PageKey>('images');
   const [inventory, setInventory] = useState<Inventory | null>(null);
+  // v0.5.37.3：每页 sidebar 的当前 filter（item key: `groupLabel:itemLabel`）。
+  const [pageFilter, setPageFilter] = useState<PageFilter>({
+    images: null,
+    stats: null,
+    pull: null,
+    credentials: null,
+    proxies: null,
+    settings: null,
+  });
+  const currentFilter = pageFilter[page];
   /**
    * v0.5.18（F6）：服务配置收在模块级 store 里（/api/config 单一入口，带缓存 +
    * 单飞）。过去 5 个页面各自拉一遍，除了重复请求，还各存一份失败态。
@@ -157,7 +174,13 @@ export default function App({
             />
           </div>
           <div className="app-body">
-            <PageSidebar page={page} />
+            <PageSidebar
+              page={page}
+              selected={currentFilter}
+              onSelect={(itemKey) =>
+                setPageFilter((prev) => ({ ...prev, [page]: itemKey }))
+              }
+            />
             <div className="app-content">
               {page === 'images' ? (
                 <ImagesPage
@@ -165,20 +188,22 @@ export default function App({
                   inventory={inventory}
                   onInventoryChange={setInventory}
                   onGoSettings={() => setPage('settings')}
+                  sidebarFilter={currentFilter}
                 />
               ) : page === 'pull' ? (
-                <PullPage config={config} />
+                <PullPage config={config} sidebarFilter={currentFilter} />
               ) : page === 'stats' ? (
-                <StatsPage config={config} onConfigChange={publishConfig} />
+                <StatsPage config={config} onConfigChange={publishConfig} sidebarFilter={currentFilter} />
               ) : page === 'credentials' ? (
-                <CredentialsPage config={config} />
+                <CredentialsPage config={config} sidebarFilter={currentFilter} />
               ) : page === 'proxies' ? (
-                <ProxiesPage config={config} />
+                <ProxiesPage config={config} sidebarFilter={currentFilter} />
               ) : (
                 <SettingsPage
                   config={config}
                   onConfigChange={publishConfig}
                   onInventoryChange={setInventory}
+                  sidebarFilter={currentFilter}
                 />
               )}
             </div>
