@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Cairn · Design Index</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #f7f5f0;
+  --surface: #ffffff;
+  --line: #e9e3d6;
+  --ink: #14171e;
+  --ink-mid: #3a4256;
+  --ink-soft: #7c7a72;
+  --primary: #0d9488;
+  --primary-deep: #0f766e;
+  --primary-tint: #ccfbf1;
+  --accent: #f59e0b;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  background: var(--bg); color: var(--ink);
+  font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 15px; line-height: 1.6; -webkit-font-smoothing: antialiased;
+  background-image:
+    radial-gradient(at 8% 0%, rgba(13, 148, 136, 0.04) 0px, transparent 50%),
+    radial-gradient(at 100% 100%, rgba(245, 158, 11, 0.05) 0px, transparent 50%);
+  min-height: 100dvh;
+}
+.wrap { max-width: 1080px; margin: 0 auto; padding: 80px 32px 100px; }
+.hero { display: flex; align-items: center; gap: 48px; padding-bottom: 56px; border-bottom: 1px solid var(--line); }
+.hero-mark { flex: 0 0 140px; }
+.hero-mark svg { width: 140px; height: 140px; display: block; }
+.hero-text { flex: 1; }
+.eyebrow { font-size: 11px; font-weight: 600; letter-spacing: 0.18em; color: var(--primary-deep); text-transform: uppercase; margin-bottom: 12px; }
+h1.wordmark {
+  font-family: 'Outfit', sans-serif; font-weight: 600;
+  font-size: 64px; line-height: 1; letter-spacing: -0.03em;
+  color: var(--ink); margin-bottom: 14px;
+}
+h1.wordmark .dot { color: var(--accent); }
+.tagline { font-size: 17px; color: var(--ink-mid); margin-bottom: 4px; }
+.tagline-cn { font-size: 14px; color: var(--ink-soft); }
+.lede {
+  font-size: 16px; color: var(--ink-mid);
+  max-width: 720px; margin-top: 28px;
+}
+.section { padding: 56px 0; border-bottom: 1px solid var(--line); }
+.section:last-of-type { border-bottom: none; }
+h2 {
+  font-family: 'DM Serif Display', serif;
+  font-size: 32px; font-weight: 400; line-height: 1.1;
+  letter-spacing: -0.02em; color: var(--ink); margin-bottom: 6px;
+}
+.h-sub {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px; color: var(--ink-soft); margin-bottom: 28px;
+}
+.card-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+.card {
+  display: block; background: var(--surface); border: 1px solid var(--line);
+  border-radius: 12px; padding: 22px 24px;
+  text-decoration: none; color: inherit;
+  transition: transform .15s, box-shadow .15s;
+}
+.card:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,0,0,0.06); }
+.card .kind { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--primary-deep); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 4px; }
+.card .title { font-size: 17px; font-weight: 600; margin-bottom: 6px; color: var(--ink); }
+.card .desc { font-size: 13px; color: var(--ink-mid); line-height: 1.5; margin-bottom: 10px; }
+.card .meta { display: flex; gap: 12px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-soft); padding-top: 10px; border-top: 1px dashed var(--line); }
+.card .meta span { display: inline-flex; align-items: center; gap: 4px; }
+.card .meta b { color: var(--ink); font-weight: 600; }
+.card.overview-link { background: var(--primary-tint); border-color: transparent; }
+footer {
+  margin-top: 60px; padding-top: 28px; border-top: 1px solid var(--line);
+  font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-soft);
+  display: flex; justify-content: space-between; align-items: center;
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hero">
+    <div class="hero-mark">
+      <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-label="Cairn mark">
+        <rect x="6" y="46" width="52" height="12" rx="3" fill="#0d9488"/>
+        <rect x="14" y="32" width="36" height="10" rx="2.5" fill="#0d9488"/>
+        <rect x="22" y="20" width="20" height="9" rx="2" fill="#0d9488"/>
+        <circle cx="32" cy="10" r="3.5" fill="#f59e0b"/>
+      </svg>
+    </div>
+    <div class="hero-text">
+      <div class="eyebrow">Cairn · Design · 2026-09-29</div>
+      <h1 class="wordmark">Cairn<span class="dot">.</span> Design</h1>
+      <div class="tagline">Lightweight Container Image Infrastructure</div>
+      <div class="tagline-cn">轻量级容器镜像基础设施平台 · 设计资产索引</div>
+    </div>
+  </div>
+
+  <div class="lede">
+    本目录是 Cairn 的品牌与界面设计资产 — 全部为静态 HTML,无构建依赖,可直接用浏览器打开。
+    两个核心文档对仗:品牌稿说明 logo / 色彩 / 字体是什么,UI 设计稿说明 token / 组件 / 页面 / 状态怎么用。
+    6 个 demo-A 静态原型是当前 cairn web(0.5.36)的实际样子,token 与源码完全一致。
+  </div>
+
+  <div class="section">
+    <h2>规格文档</h2>
+    <div class="h-sub">// specifications · 长期参考</div>
+    <div class="card-grid">
+      <a class="card" href="cairn-brand.html">
+        <div class="kind">brand · spec</div>
+        <div class="title">Cairn 品牌识别稿</div>
+        <div class="desc">Logo 几何构成 / 调色板 / Variants(浅色·深色·反白)/ Lockup / Typography / favicon → hero 全套尺度。</div>
+        <div class="meta">
+          <span>cairn-brand.html</span>
+          <span><b>25 KB</b></span>
+          <span><b>745</b> 行</span>
+        </div>
+      </a>
+
+      <a class="card" href="cairn-ui-design.html">
+        <div class="kind">ui · spec</div>
+        <div class="title">Cairn UI 设计稿</div>
+        <div class="desc">Color · Typography · Spacing · Surfaces · Components · Navigation · Pages · States 共 8 段,与品牌稿对仗。</div>
+        <div class="meta">
+          <span>cairn-ui-design.html</span>
+          <span><b>38 KB</b></span>
+          <span><b>747</b> 行</span>
+        </div>
+      </a>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>页面原型</h2>
+    <div class="h-sub">// teal · 当前 cairn web 主题</div>
+    <p class="lede" style="margin-top:-12px;margin-bottom:24px;font-size:13px">
+      <code>demo-A-*.html</code> — 6 个 Tab 的实际样子 + 1 个缩略索引。
+      每个 demo 都有<strong style="color:var(--ink)">浅色 / 深色</strong>切换按钮(右下角),配色与 cairn 当前 web(0.5.36)生产色完全一致。
+    </p>
+    <div class="card-grid">
+      <a class="card overview-link" href="demo-A-overview.html">
+        <div class="kind">index</div>
+        <div class="title">6 页缩略索引 →</div>
+        <div class="desc">6 个页面的缩略预览 + 跳转大图 · 推荐从这里开始。</div>
+        <div class="meta">
+          <span>demo-A-overview.html</span>
+          <span><b>12 KB</b></span>
+        </div>
+      </a>
+      <div></div>
+    </div>
+    <div class="card-grid" style="margin-top:16px">
+      <a class="card" href="demo-A-images.html">
+        <div class="kind">page 1 / 6 · images</div>
+        <div class="title">镜像列表</div>
+        <div class="desc">4 仓库 · 5 tag · KPI 4 + 列表 panel · 镜像仓库与 tag 的查看页。</div>
+        <div class="meta"><span>demo-A-images.html</span><span><b>11 KB</b></span></div>
+      </a>
+      <a class="card" href="demo-A-pull.html">
+        <div class="kind">page 2 / 6 · pull</div>
+        <div class="title">镜像拉取</div>
+        <div class="desc">7 字段表单 + 3 toggle · 拉取队列 8 行带 progress bar · 从远端拉镜像落本地。</div>
+        <div class="meta"><span>demo-A-pull.html</span><span><b>18 KB</b></span></div>
+      </a>
+      <a class="card" href="demo-A-stats.html">
+        <div class="kind">page 3 / 6 · stats</div>
+        <div class="title">镜像热度</div>
+        <div class="desc">24×6 热力图 + top 8 镜像 sparkline + 客户端 top 6 · 镜像热度观测。</div>
+        <div class="meta"><span>demo-A-stats.html</span><span><b>24 KB</b></span></div>
+      </a>
+      <a class="card" href="demo-A-credentials.html">
+        <div class="kind">page 4 / 6 · credentials</div>
+        <div class="title">凭据管理</div>
+        <div class="desc">5 条凭据 · 连通 / 失败 / 从未测试 三态 · 私有 registry 认证。</div>
+        <div class="meta"><span>demo-A-credentials.html</span><span><b>12 KB</b></span></div>
+      </a>
+      <a class="card" href="demo-A-proxies.html">
+        <div class="kind">page 5 / 6 · proxies</div>
+        <div class="title">代理管理</div>
+        <div class="desc">4 条代理 · http/https/socks5 三协议 · 4 状态 · 出网代理配置。</div>
+        <div class="meta"><span>demo-A-proxies.html</span><span><b>12 KB</b></span></div>
+      </a>
+      <a class="card" href="demo-A-settings.html">
+        <div class="kind">page 6 / 6 · settings</div>
+        <div class="title">设置</div>
+        <div class="desc">仓库地址 / 认证 / 监听端口只读（v0.5.34） / 运行时（v0.5.36 三个 toggle） / UA 忽略。</div>
+        <div class="meta"><span>demo-A-settings.html</span><span><b>15 KB</b></span></div>
+      </a>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>与源码的对应关系</h2>
+    <div class="h-sub">// design ↔ code · 同步关系</div>
+    <p class="lede" style="margin-top:-12px;font-size:13px">
+      UI 设计稿与 cairn 实际 web 是<strong style="color:var(--ink)">单一来源双向同步</strong>:
+    </p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px;font-size:13px">
+      <div style="background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:18px 22px">
+        <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--primary-deep);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px">// design → code</div>
+        <div style="color:var(--ink)">改 demo → 同步</div>
+        <ul style="margin:0;padding-left:18px;color:var(--ink-mid);line-height:1.8">
+          <li><code>theme.css</code> 的颜色 token</li>
+          <li><code>main.tsx</code> 的 antd theme config</li>
+          <li><code>cairn-mark.tsx</code> 的 SVG fill</li>
+        </ul>
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:18px 22px">
+        <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--primary-deep);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px">// code → design</div>
+        <div style="color:var(--ink)">改源码 → 同步</div>
+        <ul style="margin:0;padding-left:18px;color:var(--ink-mid);line-height:1.8">
+          <li>任何 token 改名 / 新增</li>
+          <li>任何组件样式大调(圆角 / 阴影 / 字号)</li>
+          <li>任何新页面 / 新区块</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    <span>Cairn Design · 2026-09-29 · 与 cairn 0.5.36 web 同步</span>
+    <span>Internal reference · not for redistribution</span>
+  </footer>
+</div>
+</body>
+</html>

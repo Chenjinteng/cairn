@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Cairn · 镜像热度 (teal)</title>
+<style>
+:root {
+  --primary:#0d9488; --primary-fg:#fff; --primary-bg-active:#ccfbf1;
+  --secondary:#f2f4f7; --bg:#fff; --bg-hover:#f2f4f7; --bg-1:#fff; --bg-soft:#f4f5f8;
+  --ink:#1f2937; --ink-soft:#6b7280; --line:#e5e7eb;
+  --warning:#faad14; --info:#0d9488; --fail:#f43b2c; --success:#16a34a;
+  --heat-1:rgba(13,148,136,0.12); --heat-2:rgba(13,148,136,0.32);
+  --heat-3:rgba(13,148,136,0.58); --heat-4:#0d9488;
+}
+:root[data-theme="dark"] {
+  --primary:#2dd4bf; --primary-fg:#042f2e; --primary-bg-active:#2dd4bf26;
+  --secondary:#1f2430; --bg:#171b24; --bg-hover:#1f2530; --bg-1:#171b24; --bg-soft:#1b202a;
+  --ink:#e5e7eb; --ink-soft:#9ca3af; --line:#2d3340;
+  --warning:#ffc53d; --info:#2dd4bf; --fail:#ff6b5e; --success:#4ade80;
+  --heat-1:rgba(45,212,191,0.12); --heat-2:rgba(45,212,191,0.32);
+  --heat-3:rgba(45,212,191,0.58); --heat-4:#2dd4bf;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body {
+  background: var(--bg); color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif;
+  font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased;
+}
+.app { display: grid; grid-template-rows: 56px 1fr; height: 100vh; }
+.header { display: grid; grid-template-columns: 220px 1fr auto; align-items: center; padding: 0 24px; border-bottom: 1px solid var(--line); background: var(--bg-1); }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 16px; }
+.brand-mark { width: 26px; height: 26px; background: var(--primary); border-radius: 6px; display: grid; place-items: center; color: var(--primary-fg); font-weight: 800; font-size: 14px; }
+.brand-version { font-size: 11px; color: var(--ink-soft); margin-left: 6px; }
+.nav { display: flex; gap: 4px; background: var(--bg-soft); padding: 3px; border-radius: 8px; }
+.nav-item { padding: 6px 14px; font-size: 13px; color: var(--ink-soft); border-radius: 6px; cursor: pointer; }
+.nav-item:hover { background: var(--bg-hover); }
+.nav-item.active { background: var(--bg-1); color: var(--ink); font-weight: 500; box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
+.user { font-size: 12px; color: var(--ink-soft); }
+
+.body { display: grid; grid-template-columns: 220px 1fr; overflow: hidden; }
+.sidebar { border-right: 1px solid var(--line); padding: 16px 12px; background: var(--bg-1); overflow-y: auto; }
+.side-group { font-size: 11px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.06em; padding: 12px 12px 6px; font-weight: 600; }
+.side-item { padding: 7px 12px; font-size: 13px; color: var(--ink-soft); border-radius: 6px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+.side-item:hover { background: var(--bg-hover); color: var(--ink); }
+.side-item.active { background: var(--primary-bg-active); color: var(--primary); font-weight: 500; }
+.side-item .badge { font-size: 11px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.side-item.active .badge { color: var(--primary); }
+
+.content { padding: 24px 28px; overflow-y: auto; }
+.page-head { margin-bottom: 20px; display: flex; justify-content: space-between; align-items: flex-end; }
+.page-title { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; }
+.page-sub { font-size: 12px; color: var(--ink-soft); margin-top: 2px; }
+.actions { display: flex; gap: 8px; }
+.btn { font-size: 13px; padding: 7px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg-1); color: var(--ink); cursor: pointer; font-family: inherit; }
+.btn:hover { border-color: var(--ink-soft); }
+
+.seg { display: flex; gap: 4px; background: var(--bg-soft); padding: 3px; border-radius: 8px; }
+.seg-item { padding: 6px 14px; font-size: 13px; color: var(--ink-soft); border-radius: 6px; cursor: pointer; }
+.seg-item:hover { background: var(--bg-hover); }
+.seg-item.active { background: var(--bg-1); color: var(--ink); font-weight: 500; box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
+
+.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 20px; }
+.kpi { background: var(--bg-1); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+.kpi-label { font-size: 12px; color: var(--ink-soft); margin-bottom: 6px; }
+.kpi-value { font-size: 24px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; color: var(--ink); }
+.kpi-trend { font-size: 11px; color: var(--ink-soft); margin-top: 6px; font-variant-numeric: tabular-nums; }
+.kpi-trend.up { color: var(--success); }
+.kpi-trend.warn { color: var(--warning); }
+
+.panel { background: var(--bg-1); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; margin-bottom: 20px; }
+.panel-head { padding: 14px 18px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; font-size: 14px; font-weight: 600; }
+.panel-head .sub { font-size: 11px; color: var(--ink-soft); font-weight: 400; }
+
+/* Heatmap */
+.heatmap-wrap { padding: 18px 22px; }
+.heatmap-meta { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; font-size: 11px; color: var(--ink-soft); font-family: 'JetBrains Mono', monospace; }
+.heatmap-grid { display: grid; grid-template-columns: 60px repeat(24, 1fr); gap: 3px; }
+.heatmap-grid .label { font-size: 10px; color: var(--ink-soft); text-align: right; padding-right: 6px; align-self: center; font-family: 'JetBrains Mono', monospace; }
+.heatmap-cell { aspect-ratio: 1; border-radius: 3px; background: var(--bg-soft); }
+.heatmap-cell.l1 { background: var(--heat-1); }
+.heatmap-cell.l2 { background: var(--heat-2); }
+.heatmap-cell.l3 { background: var(--heat-3); }
+.heatmap-cell.l4 { background: var(--heat-4); }
+.heat-legend { display: flex; align-items: center; gap: 10px; margin-top: 12px; font-size: 11px; color: var(--ink-soft); font-family: 'JetBrains Mono', monospace; }
+.heat-legend-scale { display: flex; gap: 3px; }
+.heat-legend-scale span { width: 14px; height: 14px; border-radius: 2px; background: var(--bg-soft); }
+
+/* Trend chart (sparkline) */
+.trend-chart { padding: 16px 22px; }
+.trend-grid { display: grid; grid-template-columns: 1fr; gap: 14px; }
+.trend-row { display: grid; grid-template-columns: 180px 1fr 90px; align-items: center; gap: 14px; padding: 10px 0; border-bottom: 1px dashed var(--line); }
+.trend-row:last-child { border-bottom: none; }
+.trend-name { font-size: 13px; font-weight: 500; }
+.trend-name .repo-tag { font-size: 10px; font-family: 'JetBrains Mono', monospace; color: var(--ink-soft); margin-left: 6px; }
+.trend-bars { display: flex; align-items: end; gap: 2px; height: 28px; }
+.trend-bars .bar { width: 6px; border-radius: 1.5px; background: var(--primary); opacity: 0.5; transition: opacity .15s; }
+.trend-bars .bar:hover { opacity: 1; }
+.trend-totals { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--ink); text-align: right; font-variant-numeric: tabular-nums; }
+.trend-totals .sub { color: var(--ink-soft); font-size: 10px; display: block; }
+
+/* Top clients list */
+.top-list { padding: 4px 0; }
+.top-row { display: grid; grid-template-columns: 24px 1fr auto auto; gap: 14px; align-items: center; padding: 10px 18px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.top-row:last-child { border-bottom: none; }
+.top-rank { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-soft); }
+.top-ua { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--ink); }
+.top-bar-wrap { width: 100px; height: 6px; background: var(--bg-soft); border-radius: 3px; }
+.top-bar { height: 100%; background: var(--primary); border-radius: 3px; }
+.top-num { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--ink); font-variant-numeric: tabular-nums; }
+
+.theme-switcher { position: fixed; bottom: 16px; right: 16px; background: var(--bg-1); border: 1px solid var(--line); border-radius: 999px; padding: 4px; font-size: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+.theme-switcher button { border: none; background: transparent; padding: 6px 12px; border-radius: 999px; cursor: pointer; color: var(--ink-soft); }
+.theme-switcher button.active { background: var(--primary); color: var(--primary-fg); }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="header">
+    <div class="brand"><div class="brand-mark">C</div><span>Cairn</span><span class="brand-version">v0.5.36</span></div>
+    <div class="nav">
+      <div class="nav-item">镜像列表</div>
+      <div class="nav-item">镜像拉取</div>
+      <div class="nav-item active">镜像热度</div>
+      <div class="nav-item">凭据管理</div>
+      <div class="nav-item">代理管理</div>
+      <div class="nav-item">设置</div>
+    </div>
+    <div class="user">admin · registry.example.com</div>
+  </header>
+
+  <div class="body">
+    <aside class="sidebar">
+      <div class="side-group">时间窗口</div>
+      <div class="side-item">最近 24 小时</div>
+      <div class="side-item active"><span>最近 7 天</span></div>
+      <div class="side-item">最近 30 天</div>
+      <div class="side-item">最近 90 天</div>
+      <div class="side-item">自定义</div>
+      <div class="side-group">维度</div>
+      <div class="side-item active">镜像仓库</div>
+      <div class="side-item">tag</div>
+      <div class="side-item">客户端 IP</div>
+      <div class="side-group">过滤器</div>
+      <div class="side-item">排除本地回环</div>
+      <div class="side-item">排除 CI 用户代理</div>
+    </aside>
+
+    <main class="content">
+      <div class="page-head">
+        <div>
+          <div class="page-title">镜像热度</div>
+          <div class="page-sub">2026-09-22 → 2026-09-29 (7 天) · 共 247 次请求</div>
+        </div>
+        <div class="actions">
+          <button class="btn">导出 CSV</button>
+          <button class="btn">↻ 刷新</button>
+        </div>
+      </div>
+
+      <div class="kpis">
+        <div class="kpi"><div class="kpi-label">总拉取次数</div><div class="kpi-value">247</div><div class="kpi-trend up">+34% vs 上周</div></div>
+        <div class="kpi"><div class="kpi-label">独立客户端</div><div class="kpi-value">12</div><div class="kpi-trend up">+3</div></div>
+        <div class="kpi"><div class="kpi-label">最热镜像</div><div class="kpi-value">alpine</div><div class="kpi-trend">89 次 / 7d</div></div>
+        <div class="kpi"><div class="kpi-label">回环占比</div><div class="kpi-value">14%</div><div class="kpi-trend warn">本地 CI 多 · 排除后可降至 4%</div></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <span>时间热力图</span>
+          <div class="seg">
+            <div class="seg-item active">按天</div>
+            <div class="seg-item">按小时</div>
+          </div>
+        </div>
+        <div class="heatmap-wrap">
+          <div class="heatmap-meta">
+            <span>最近 7 天 · 按 UTC+8 · 每格 1 小时</span>
+            <span>峰值 09-29 14:00 (23 req)</span>
+          </div>
+          <div class="heatmap-grid">
+            <div class="label">00</div>
+            <div class="heatmap-cell l1"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div>
+            <div class="heatmap-cell l1"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell l1"></div>
+            <div class="heatmap-cell l1"></div><div class="heatmap-cell l2"></div><div class="heatmap-cell l1"></div><div class="heatmap-cell l2"></div>
+            <div class="heatmap-cell l2"></div><div class="heatmap-cell l3"></div><div class="heatmap-cell l2"></div><div class="heatmap-cell l3"></div>
+            <div class="heatmap-cell l3"></div><div class="heatmap-cell l2"></div><div class="heatmap-cell l3"></div><div class="heatmap-cell l2"></div>
+            <div class="heatmap-cell l1"></div><div class="heatmap-cell l2"></div><div class="heatmap-cell l1"></div><div class="heatmap-cell l1"></div>
+
+            <div class="label">04</div>
+            <div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div>
+            <div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell l1"></div><div class="heatmap-cell l1"></div>
+            <div class="heatmap-cell l1"></div><div class="heatmap-cell l2"></div><div class="heatmap-cell l2"></div><div class="heatmap-cell l2"></div>
+            <div class="heatmap-cell l3"></div><div class="heatmap-cell l2"></div><div class="heatmap-cell l3"></div><div class="heatmap-cell l2"></div>
+            <div class="heatmap-cell l2"></div><div class="heatmap-cell l1"></div><div class="heatmap-cell l1"></div><div class="heatmap-cell"></div>
+
+            <div class="label">08</div>
+            <div class="heatmap-cell"></div><div class="heatmap-cell l1"></div><div class="heatmap-cell l2"></div><div class="heatmap-cell l3"></div>
+            <div class="heatmap-cell l4"></div><div class="heatmap-cell l4"></div><div class="heatmap-cell l3"></div><div class="heatmap-cell l2"></div>
+            <div class="heatmap-cell l2"></div><div class="heatmap-cell l3"></div><div class="heatmap-cell l3"></div><div class="heatmap-cell l4"></div>
+            <div class="heatmap-cell l3"></div><div class="heatmap-cell l2"></div><div class="heatmap-cell l2"></div><div class="heatmap-cell l1"></div>
+            <div class="heatmap-cell l1"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div>
+
+            <div class="label">12</div>
+            <div class="heatmap-cell"></div><div class="heatmap-cell l1"></div><div class="heatmap-cell l2"></div><div class="heatmap-cell l3"></div>
+            <div class="heatmap-cell l4"></div><div class="heatmap-cell l4"></div><div class="heatmap-cell l4"></div><div class="heatmap-cell l3"></div>
+            <div class="heatmap-cell l2"></div><div class="heatmap-cell l3"></div><div class="heatmap-cell l4"></div><div class="heatmap-cell l3"></div>
+            <div class="heatmap-cell l2"></div><div class="heatmap-cell l2"></div><div class="heatmap-cell l1"></div><div class="heatmap-cell l1"></div>
+            <div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div>
+
+            <div class="label">16</div>
+            <div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell l1"></div><div class="heatmap-cell l2"></div>
+            <div class="heatmap-cell l2"></div><div class="heatmap-cell l3"></div><div class="heatmap-cell l2"></div><div class="heatmap-cell l2"></div>
+            <div class="heatmap-cell l1"></div><div class="heatmap-cell l2"></div><div class="heatmap-cell l1"></div><div class="heatmap-cell l1"></div>
+            <div class="heatmap-cell"></div><div class="heatmap-cell l1"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div>
+            <div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div>
+
+            <div class="label">20</div>
+            <div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell l1"></div>
+            <div class="heatmap-cell l1"></div><div class="heatmap-cell l2"></div><div class="heatmap-cell l1"></div><div class="heatmap-cell l1"></div>
+            <div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div>
+            <div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div>
+            <div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div>
+          </div>
+          <div class="heat-legend">
+            <span>少</span>
+            <div class="heat-legend-scale">
+              <span></span><span style="background:var(--heat-1)"></span><span style="background:var(--heat-2)"></span>
+              <span style="background:var(--heat-3)"></span><span style="background:var(--heat-4)"></span>
+            </div>
+            <span>多</span>
+            <span style="margin-left:auto">本窗口 247 次 · 峰值 23/h</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <span>镜像仓库拉取趋势</span>
+          <span class="sub">// top 8 by pulls</span>
+        </div>
+        <div class="trend-chart">
+          <div class="trend-row">
+            <div class="trend-name">library/alpine<span class="repo-tag">:3.19</span></div>
+            <div class="trend-bars">
+              <div class="bar" style="height:30%"></div><div class="bar" style="height:45%"></div><div class="bar" style="height:60%"></div>
+              <div class="bar" style="height:80%"></div><div class="bar" style="height:100%"></div><div class="bar" style="height:85%"></div>
+              <div class="bar" style="height:95%"></div>
+            </div>
+            <div class="trend-totals">89<span class="sub">次 / 7d</span></div>
+          </div>
+          <div class="trend-row">
+            <div class="trend-name">library/nginx<span class="repo-tag">:1.27-alpine</span></div>
+            <div class="trend-bars">
+              <div class="bar" style="height:25%"></div><div class="bar" style="height:30%"></div><div class="bar" style="height:55%"></div>
+              <div class="bar" style="height:65%"></div><div class="bar" style="height:75%"></div><div class="bar" style="height:90%"></div>
+              <div class="bar" style="height:100%"></div>
+            </div>
+            <div class="trend-totals">67<span class="sub">次 / 7d</span></div>
+          </div>
+          <div class="trend-row">
+            <div class="trend-name">library/postgres<span class="repo-tag">:16-alpine</span></div>
+            <div class="trend-bars">
+              <div class="bar" style="height:20%"></div><div class="bar" style="height:25%"></div><div class="bar" style="height:30%"></div>
+              <div class="bar" style="height:35%"></div><div class="bar" style="height:42%"></div><div class="bar" style="height:38%"></div>
+              <div class="bar" style="height:40%"></div>
+            </div>
+            <div class="trend-totals">34<span class="sub">次 / 7d</span></div>
+          </div>
+          <div class="trend-row">
+            <div class="trend-name">library/redis<span class="repo-tag">:7-alpine</span></div>
+            <div class="trend-bars">
+              <div class="bar" style="height:18%"></div><div class="bar" style="height:22%"></div><div class class="bar" style="height:28%"></div>
+              <div class="bar" style="height:30%"></div><div class="bar" style="height:35%"></div><div class="bar" style="height:30%"></div>
+              <div class="bar" style="height:32%"></div>
+            </div>
+            <div class="trend-totals">26<span class="sub">次 / 7d</span></div>
+          </div>
+          <div class="trend-row">
+            <div class="trend-name">registry-manager<span class="repo-tag">:0.5.0</span></div>
+            <div class="trend-bars">
+              <div class="bar" style="height:10%"></div><div class="bar" style="height:8%"></div><div class="bar" style="height:12%"></div>
+              <div class="bar" style="height:14%"></div><div class="bar" style="height:18%"></div><div class="bar" style="height:16%"></div>
+              <div class="bar" style="height:22%"></div>
+            </div>
+            <div class="trend-totals">14<span class="sub">次 / 7d</span></div>
+          </div>
+          <div class="trend-row">
+            <div class="trend-name">registry.k8s.io/pause<span class="repo-tag">:3.10</span></div>
+            <div class="trend-bars">
+              <div class="bar" style="height:8%"></div><div class="bar" style="height:6%"></div><div class="bar" style="height:10%"></div>
+              <div class="bar" style="height:12%"></div><div class="bar" style="height:14%"></div><div class="bar" style="height:12%"></div>
+              <div class="bar" style="height:16%"></div>
+            </div>
+            <div class="trend-totals">9<span class="sub">次 / 7d</span></div>
+          </div>
+          <div class="trend-row">
+            <div class="trend-name">ghcr.io/dexidp/dex<span class="repo-tag">:v2.41.1</span></div>
+            <div class="trend-bars">
+              <div class="bar" style="height:6%"></div><div class="bar" style="height:8%"></div><div class="bar" style="height:5%"></div>
+              <div class="bar" style="height:6%"></div><div class="bar" style="height:8%"></div><div class="bar" style="height:5%"></div>
+              <div class="bar" style="height:5%"></div>
+            </div>
+            <div class="trend-totals">5<span class="sub">次 / 7d</span></div>
+          </div>
+          <div class="trend-row">
+            <div class="trend-name">quay.io/jetstack/cert-manager<span class="repo-tag">:v1.16.1</span></div>
+            <div class="trend-bars">
+              <div class="bar" style="height:2%"></div><div class="bar" style="height:4%"></div><div class="bar" style="height:3%"></div>
+              <div class="bar" style="height:5%"></div><div class="bar" style="height:6%"></div><div class="bar" style="height:4%"></div>
+              <div class="bar" style="height:4%"></div>
+            </div>
+            <div class="trend-totals">3<span class="sub">次 / 7d</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <span>客户端 Top</span>
+          <span class="sub">// by User-Agent · exclude local-loop & CI</span>
+        </div>
+        <div class="top-list">
+          <div class="top-row">
+            <div class="top-rank">1</div>
+            <div class="top-ua">docker/26.1.3 (linux; amd64)</div>
+            <div class="top-bar-wrap"><div class="top-bar" style="width:95%"></div></div>
+            <div class="top-num">142</div>
+          </div>
+          <div class="top-row">
+            <div class="top-rank">2</div>
+            <div class="top-ua">containerd/1.7.13+unknown</div>
+            <div class="top-bar-wrap"><div class="top-bar" style="width:62%"></div></div>
+            <div class="top-num">93</div>
+          </div>
+          <div class="top-row">
+            <div class="top-rank">3</div>
+            <div class="top-ua">buildkit/0.13.1</div>
+            <div class="top-bar-wrap"><div class="top-bar" style="width:38%"></div></div>
+            <div class="top-num">57</div>
+          </div>
+          <div class="top-row">
+            <div class="top-rank">4</div>
+            <div class="top-ua">kubernetes/v1.30.0 (linux/amd64) kuber...</div>
+            <div class="top-bar-wrap"><div class="top-bar" style="width:28%"></div></div>
+            <div class="top-num">42</div>
+          </div>
+          <div class="top-row">
+            <div class="top-rank">5</div>
+            <div class="top-ua">skopeo/1.14.2</div>
+            <div class="top-bar-wrap"><div class="top-bar" style="width:14%"></div></div>
+            <div class="top-num">21</div>
+          </div>
+          <div class="top-row">
+            <div class="top-rank">6</div>
+            <div class="top-ua">docker/24.0.7 (linux; arm64)</div>
+            <div class="top-bar-wrap"><div class="top-bar" style="width:10%"></div></div>
+            <div class="top-num">15</div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+<div class="theme-switcher" id="ts">
+  <button class="active" data-t="light">浅色</button><button data-t="dark">深色</button>
+</div>
+<script>
+document.querySelectorAll('#ts button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#ts button').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  if (b.dataset.t === 'dark') document.documentElement.dataset.theme = 'dark';
+  else delete document.documentElement.dataset.theme;
+});
+</script>
+</body>
+</html>

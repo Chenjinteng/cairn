@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>配色 A · Cairn 当前 (teal)</title>
+<style>
+/* ============================================================
+   配色 A — 当前 Cairn (teal #0d9488 / #2dd4bf)
+   浅色 + 深色对照，保留 cairn 当前 web 布局
+   ============================================================ */
+
+/* === 浅色 === */
+:root {
+  --primary:           #0d9488;
+  --primary-fg:         #ffffff;
+  --primary-bg-active: #ccfbf1;
+  --secondary:         #f2f4f7;
+  --bg:                #ffffff;
+  --bg-hover:          #f2f4f7;
+  --bg-1:              #ffffff;
+  --bg-soft:           #f4f5f8;
+  --ink:               #1f2937;
+  --ink-soft:          #6b7280;
+  --line:              #e5e7eb;
+  --warning:           #faad14;
+  --info:              #0d9488;
+  --fail:              #f43b2c;
+  --success:           #16a34a;
+}
+
+/* === 深色（用 media query 也行，本 demo 单一对照） === */
+/* 想要深色版直接取消下面注释 + 把 :root 改名 theme-dark */
+:root[data-theme="dark"] {
+  --primary:           #2dd4bf;
+  --primary-fg:        #042f2e;
+  --primary-bg-active: #2dd4bf26;
+  --secondary:         #1f2430;
+  --bg:                #171b24;
+  --bg-hover:          #1f2530;
+  --bg-1:              #171b24;
+  --bg-soft:           #1b202a;
+  --ink:               #e5e7eb;
+  --ink-soft:          #9ca3af;
+  --line:              #2d3340;
+  --warning:           #ffc53d;
+  --info:              #2dd4bf;
+  --fail:              #ff6b5e;
+  --success:           #4ade80;
+}
+
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+.app { display: grid; grid-template-rows: 56px 1fr; height: 100vh; }
+
+/* ──── Header ──── */
+.header {
+  display: grid;
+  grid-template-columns: 220px 1fr auto;
+  align-items: center;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-1);
+}
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 16px; }
+.brand-mark {
+  width: 26px; height: 26px;
+  background: var(--primary);
+  border-radius: 6px;
+  display: grid; place-items: center;
+  color: var(--primary-fg); font-weight: 800; font-size: 14px;
+}
+.brand-version { font-size: 11px; color: var(--ink-soft); margin-left: 6px; }
+.nav { display: flex; gap: 4px; background: var(--bg-soft); padding: 3px; border-radius: 8px; }
+.nav-item {
+  padding: 6px 14px; font-size: 13px; color: var(--ink-soft);
+  border-radius: 6px; cursor: pointer; user-select: none;
+}
+.nav-item:hover { background: var(--bg-hover); }
+.nav-item.active {
+  background: var(--bg-1); color: var(--ink); font-weight: 500;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+}
+.user { font-size: 12px; color: var(--ink-soft); }
+
+/* ──── Body ──── */
+.body { display: grid; grid-template-columns: 220px 1fr; overflow: hidden; }
+.sidebar {
+  border-right: 1px solid var(--line);
+  padding: 16px 12px;
+  background: var(--bg-1);
+  overflow-y: auto;
+}
+.side-group {
+  font-size: 11px;
+  color: var(--ink-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 12px 12px 6px;
+  font-weight: 600;
+}
+.side-item {
+  padding: 7px 12px;
+  font-size: 13px;
+  color: var(--ink-soft);
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.side-item:hover { background: var(--bg-hover); color: var(--ink); }
+.side-item.active {
+  background: var(--primary-bg-active);
+  color: var(--primary);
+  font-weight: 500;
+}
+.side-item .badge {
+  font-size: 11px;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+.side-item.active .badge { color: var(--primary); }
+
+.content { padding: 24px 28px; overflow-y: auto; }
+
+/* ──── Page header ──── */
+.page-head { margin-bottom: 20px; display: flex; justify-content: space-between; align-items: flex-end; }
+.page-title { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; }
+.page-sub { font-size: 12px; color: var(--ink-soft); margin-top: 2px; }
+.actions { display: flex; gap: 8px; }
+.btn {
+  font-size: 13px; padding: 7px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--bg-1); color: var(--ink);
+  cursor: pointer;
+}
+.btn.primary {
+  background: var(--primary); color: var(--primary-fg); border-color: var(--primary);
+}
+.btn:hover { border-color: var(--ink-soft); }
+.btn.primary:hover { filter: brightness(1.05); }
+
+/* ──── KPI cards ──── */
+.kpis {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 14px; margin-bottom: 24px;
+}
+.kpi {
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px 18px;
+}
+.kpi-label { font-size: 12px; color: var(--ink-soft); margin-bottom: 6px; }
+.kpi-value {
+  font-size: 24px; font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.kpi-trend {
+  font-size: 11px; color: var(--success); margin-top: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ──── Panel / Table ──── */
+.panel {
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.panel-head {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 14px; font-weight: 600;
+}
+.panel-head .sub { font-size: 11px; color: var(--ink-soft); font-weight: 400; }
+
+.row {
+  display: grid;
+  grid-template-columns: 1.6fr 1.4fr auto auto auto;
+  gap: 16px;
+  align-items: center;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+.row:last-child { border-bottom: none; }
+.row:hover { background: var(--bg-hover); }
+.repo-name { font-weight: 500; color: var(--ink); }
+.repo-digest { font-size: 11px; color: var(--ink-soft); font-family: 'JetBrains Mono', monospace; margin-top: 2px; }
+.repo-size { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.tag {
+  font-size: 10px; font-weight: 500;
+  padding: 2px 8px; border-radius: 4px;
+  background: var(--bg-soft); color: var(--ink-soft);
+  font-family: 'JetBrains Mono', monospace;
+}
+.tag.live { background: var(--primary-bg-active); color: var(--primary); }
+
+.theme-switcher {
+  position: fixed; bottom: 16px; right: 16px;
+  background: var(--bg-1); border: 1px solid var(--line);
+  border-radius: 999px; padding: 4px;
+  font-size: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+}
+.theme-switcher button {
+  border: none; background: transparent;
+  padding: 6px 12px; border-radius: 999px; cursor: pointer;
+  color: var(--ink-soft);
+}
+.theme-switcher button.active { background: var(--primary); color: var(--primary-fg); }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <header class="header">
+    <div class="brand">
+      <div class="brand-mark">C</div>
+      <span>Cairn</span>
+      <span class="brand-version">v0.5.36</span>
+    </div>
+    <div class="nav">
+      <div class="nav-item">镜像列表</div>
+      <div class="nav-item active">镜像拉取</div>
+      <div class="nav-item">镜像热度</div>
+      <div class="nav-item">凭据管理</div>
+      <div class="nav-item">代理管理</div>
+      <div class="nav-item">设置</div>
+    </div>
+    <div class="user">admin · registry.example.com</div>
+  </header>
+
+  <div class="body">
+    <aside class="sidebar">
+      <div class="side-group">仓库</div>
+      <div class="side-item active"><span>全部</span><span class="badge">4</span></div>
+      <div class="side-item"><span>library</span><span class="badge">1</span></div>
+      <div class="side-item"><span>registry-manager</span><span class="badge">1</span></div>
+      <div class="side-item"><span>webauto-push</span><span class="badge">2</span></div>
+      <div class="side-group">操作</div>
+      <div class="side-item"><span>扫描清单</span></div>
+      <div class="side-item"><span>运行 GC</span></div>
+      <div class="side-item"><span>备份</span></div>
+    </aside>
+
+    <main class="content">
+      <div class="page-head">
+        <div>
+          <div class="page-title">镜像列表</div>
+          <div class="page-sub">4 个仓库 · 5 个 tag · 75.2 MB</div>
+        </div>
+        <div class="actions">
+          <button class="btn">扫描</button>
+          <button class="btn">运行 GC</button>
+          <button class="btn primary">+ 添加仓库</button>
+        </div>
+      </div>
+
+      <div class="kpis">
+        <div class="kpi">
+          <div class="kpi-label">仓库总数</div>
+          <div class="kpi-value">4</div>
+          <div class="kpi-trend">+1 较昨日</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">Tag 总数</div>
+          <div class="kpi-value">5</div>
+          <div class="kpi-trend">+1 较昨日</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">占用空间</div>
+          <div class="kpi-value">75.2 MB</div>
+          <div class="kpi-trend">-12% post-gc</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">孤儿 blob</div>
+          <div class="kpi-value">3</div>
+          <div class="kpi-trend">-2 已 GC</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <span>最近镜像</span>
+          <span class="sub">按创建时间 ↓ · last_refresh 2.1ms ago</span>
+        </div>
+        <div class="row">
+          <div>
+            <div class="repo-name">webauto-push/accept-0535</div>
+            <div class="repo-digest">sha256:503d7fcd…f288c7</div>
+          </div>
+          <div class="repo-size">5.61 MB</div>
+          <div><span class="tag live">v1</span></div>
+          <div><span class="tag">linux/amd64</span></div>
+          <div><span class="tag">3 layers</span></div>
+        </div>
+        <div class="row">
+          <div>
+            <div class="repo-name">webauto-push/accept-0534</div>
+            <div class="repo-digest">sha256:26a7878c…f07164</div>
+          </div>
+          <div class="repo-size">5.61 MB</div>
+          <div><span class="tag live">v1</span></div>
+          <div><span class="tag">linux/amd64</span></div>
+          <div><span class="tag">3 layers</span></div>
+        </div>
+        <div class="row">
+          <div>
+            <div class="repo-name">registry-manager</div>
+            <div class="repo-digest">sha256:b9d297d7…3089dfc</div>
+          </div>
+          <div class="repo-size">59.8 MB</div>
+          <div><span class="tag">0.5.0</span></div>
+          <div><span class="tag">linux/amd64</span></div>
+          <div><span class="tag">11 layers</span></div>
+        </div>
+        <div class="row">
+          <div>
+            <div class="repo-name">library/alpine</div>
+            <div class="repo-digest">sha256:b58899f0…b9c2171</div>
+          </div>
+          <div class="repo-size">3.26 MB</div>
+          <div><span class="tag live">3.19</span></div>
+          <div><span class="tag">linux/amd64</span></div>
+          <div><span class="tag">1 layer</span></div>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<div class="theme-switcher" id="ts">
+  <button class="active" data-t="light">浅色</button>
+  <button data-t="dark">深色</button>
+</div>
+<script>
+document.querySelectorAll('#ts button').forEach(b => {
+  b.onclick = () => {
+    document.querySelectorAll('#ts button').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    if (b.dataset.t === 'dark') document.documentElement.dataset.theme = 'dark';
+    else delete document.documentElement.dataset.theme;
+  };
+});
+</script>
+</body>
+</html>
