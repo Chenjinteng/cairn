@@ -6,6 +6,64 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.35] - 2026-09-29
+
+本轮主题:**关掉 R-open-2 实际剩余项(`POST /api/gc` 补 `allowDelete` 门控,与 tag / 仓库删除同档)+ 清掉跨版本堆积的 8 个前端类型错误(`tsc --noEmit` 由 RC=2 转 RC=0,可纳入 PR 门禁)**。
+
+### 修复
+
+- **`POST /api/gc` 加 `AllowDelete` 门控**(`internal/api/handlers_extra.go` `RunGC`):
+
+  旧:`RunGC` 是仓库清理 / GC 扫描的总入口,但**不读 `allowDelete`**。后果:`allow.delete=false` 的部署仍可被 GC 删 blob / 删空仓库(默认不开 `cleanEmptyRepos=true` 时不会清空仓库,但 Pass 1 仍会动 blob),与"`DELETE /api/repositories/{repo}` 被 403 拦"自相矛盾。
+  新:函数体顶部加与 `DeleteRepository` / `DeleteManifestByDigest` 完全一致的范式:
+
+  ```go
+  if !e.allowDelete() {
+      writeError(w, r, http.StatusForbidden,
+          errors.New("gc is disabled (allow.delete=false)"))
+      return
+  }
+  ```
+
+  R-open-2 至此**完全关闭**:tag 删除 / 仓库删除 / GC 三条破坏性数据面路径全部受 `allowDelete` 门控,UI 改开关即时生效(每请求读值,与既有两条路径一致)。
+
+- **`web/src/api.ts` 补 3 个 `import type`**(`DeleteManifestPayload` / `DeleteRepositoryPayload` / `GCResult`):
+
+  旧:类型已在 `web/src/types.ts` 定义(分别对应 v0.5.0 的删除响应、v0.5.0 的 manifest 删除响应、v0.5.20 的 GC 响应),但 `api.ts` 没导入,`requestSlow<...>` 三处的泛型实参触发 TS2304(3 处)。
+  新:加进 `import type { … } from './types'` 的字母序位置。`runGC` / `deleteRepository` / `deleteManifestByDigest` 三函数体不变(均已被 UI 调用;`deleteRepository` 在 v0.5.29 后成死代码的判定见 P3-1)。
+
+- **`web/src/pages/settings-page.tsx` 清 5 个未使用声明** + 同步 `App.tsx`:
+
+  | 类型 | 原 | 处置 |
+  | --- | --- | --- |
+  | `Descriptions` (antd) | import 后未用 | 删 antd import 中的 `Descriptions` |
+  | `formatDateTime` (utils) | import 后未用 | 删 utils import 中的 `formatDateTime` |
+  | `inventory` (Props) | 解构后未用 | 从 Props 类型和解构中删;**保留** `onInventoryChange`(确实被 `handleRefresh` 调用) |
+  | `savingRegistryUrl` / `setSavingRegistryUrl` | state 声明后未用 | 删 state 行 |
+
+  `App.tsx` 调用侧同步:`<SettingsPage>` 去掉 `inventory={inventory}`,保留 `onInventoryChange={setInventory}`(这是真用的)。`App.tsx` 里 `inventory` 仍传给 `ImagesPage`,`setInventory` 仍同时供两页用 —— 无功能改动。
+
+### 变更
+
+- **版本号同步**(按 AGENTS.md「一次改动要同时更新这几处」):`internal/version/version.go`、`.env.example` 的 `IMAGE`、`docker-compose.yml` 的 `${IMAGE:-…}`、README 「当前状态」+ 「当前版本」、CHANGELOG 顶部节标题 全部 → `0.5.35`。
+- **`internal/api/handlers_extra.go` 增 9 行**:门控 + 文档注释(R-open-2 关闭原因,与 0.5.4 起的运行时开关语义一致)。
+- **`web/src/api.ts` 增 3 个 import 名**,函数体零改动。
+- **`web/src/pages/settings-page.tsx` 减 5 个未用声明**;`web/src/App.tsx` 减 1 个未用 prop(`inventory`)。
+
+### 影响范围(升级须知)
+
+- **行为变化**:UI 把 `allow.delete` 切到 `false` 时,`POST /api/gc` 也将返回 **403 + `gc is disabled (allow.delete=false)`**(原先静默放行并执行)。所有 GC 入口(镜像列表「运行 GC」按钮、热度页「清理过期热度」后的扫描按钮、若有调度任务触发 GC)均生效。
+- **行为不变**:`allow.delete=true`(默认)时,GC 行为完全不变 —— 既有 `gc-real` 场景的 24/24 断言全部继续成立。
+- **API 契约不变**:错误响应仅多一种"code 与 message",响应信封不变。
+- **前端**:0 类型错误 → 可正式把 `tsc --noEmit` 纳入 PR 门禁(此前一直 RC=2 阻塞)。
+- **无数据迁移**:不需要。
+
+### 验证
+
+本轮全量重跑 + 0.5.34 验收报告的全部 14 场景。验收报告见 `tests/web-auto/reports/acceptance-0.5.35-2026-09-29.md`。
+
+---
+
 ## [0.5.34] - 2026-09-28
 
 本轮主题:**设置页加「监听端口」只读显示 + README 加改端口指南 —— 解决 user「能不能在页面上改端口」的疑问**。
