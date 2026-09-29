@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"cairn/internal/registry"
+	"github.com/Chenjinteng/cairn/internal/registry"
 )
 
 // deleteRegistry tracks DELETE calls so tests can assert the right manifest

@@ -13,13 +13,13 @@ import (
 	"strings"
 	"time"
 
-	"cairn/internal/config"
-	"cairn/internal/credentials"
-	"cairn/internal/db"
-	"cairn/internal/events"
-	"cairn/internal/proxies"
-	"cairn/internal/storage"
-	"cairn/internal/version"
+	"github.com/Chenjinteng/cairn/internal/config"
+	"github.com/Chenjinteng/cairn/internal/credentials"
+	"github.com/Chenjinteng/cairn/internal/db"
+	"github.com/Chenjinteng/cairn/internal/events"
+	"github.com/Chenjinteng/cairn/internal/proxies"
+	"github.com/Chenjinteng/cairn/internal/storage"
+	"github.com/Chenjinteng/cairn/internal/version"
 )
 
 // Handlers bundles the dependencies every endpoint needs.
@@ -270,7 +270,7 @@ func (h *Handlers) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 				}
 				if !isValidHostPort(val) {
 					writeError(w, r, http.StatusBadRequest,
-						errors.New(key+" 必须是合法 host 或 host:port(字母数字 . _ - 加可选 :端口)"))
+						errors.New(key+" 必须是合法 host(字母数字 . _ -,只接受裸 host 不要带端口或协议;端口由 HOST_PORT env 决定)"))
 					return
 				}
 			}

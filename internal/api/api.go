@@ -9,9 +9,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
-	"cairn/internal/config"
-	"cairn/internal/registry"
-	"cairn/internal/webui"
+	"github.com/Chenjinteng/cairn/internal/config"
+	"github.com/Chenjinteng/cairn/internal/registry"
+	"github.com/Chenjinteng/cairn/internal/webui"
 )
 
 // chiURLParam is a tiny shim so handler code reads cleaner than chi.URLParam.

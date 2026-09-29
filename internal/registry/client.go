@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"cairn/internal/version"
+	"github.com/Chenjinteng/cairn/internal/version"
 )
 
 // UserAgent identifies cairn to upstream registries. Some allowlists in

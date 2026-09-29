@@ -3,6 +3,12 @@
 #   builder      拷贝前端产物后以 -tags webui 编译 Go 二进制（前端 //go:embed 进二进制）
 #   runtime      最终镜像，scratch + 二进制
 #
+# BuildKit:`--mount=type=cache` 等特性由 docker engine 内嵌 BuildKit 后端支持,
+#   不需要 `#syntax=` directive(那个会让 BuildKit 去 docker.io 拉 frontend 镜像,
+#   在公司受限网络下会卡)。Makefile 的 build / rebuild 显式 DOCKER_BUILDKIT=1 兜底,
+#   确保走 BuildKit 而非 legacy builder。若要 cross-build / registry cache 共享等
+#   高级特性,装 docker buildx CLI(`docker-buildx-plugin` 包或手动放二进制到
+#   `~/.docker/cli-plugins/docker-buildx`)。
 # 运行镜像只 ~15MB（10MB 二进制 + 5MB ca-certs + /etc/passwd），
 # 比 registry-manager 的 Node + antd 几十MB 还要小一个数量级。
 #
@@ -49,8 +55,14 @@ WORKDIR /web
 
 # 依赖清单先 COPY：package.json / lockfile 不变时这层缓存命中，pnpm install 从秒级起步。
 # package.json 的 packageManager 字段钉死 pnpm 版本，corepack 据此激活。
+#
+# BuildKit `--mount=type=cache` 把 pnpm store + corepack 缓存挂进 builder stage,
+# 跨 build 复用;`--no-cache` 不传时仍生效。注意 sharing=locked 避免并发 build 互踩。
 COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
-RUN if [ -n "$NPM_REGISTRY" ]; then \
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store,sharing=locked \
+    --mount=type=cache,target=/root/.cache/node/corepack,sharing=locked \
+    --mount=type=cache,target=/root/.npm,sharing=locked \
+    if [ -n "$NPM_REGISTRY" ]; then \
       export COREPACK_NPM_REGISTRY="$NPM_REGISTRY"; \
       corepack enable; \
       npm config set registry "$NPM_REGISTRY"; \
@@ -81,9 +93,14 @@ ENV GOPROXY=${GOPROXY} \
 
 WORKDIR /src
 
-# 依赖先 COPY：源码不变时这层缓存命中，构建从秒级起步
+# 依赖先 COPY：源码不变时这层缓存命中，构建从秒级起步。
+# BuildKit `--mount=type=cache` 把 Go module cache + build cache 挂进 builder stage,
+# 跨 build 复用;`--no-cache` 不传时仍生效。
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod,sharing=locked \
+    --mount=type=cache,target=/root/.cache/go-build,sharing=locked \
+    --mount=type=cache,target=/root/.cache,sharing=locked \
+    go mod download
 
 COPY . .
 

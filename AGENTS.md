@@ -70,7 +70,8 @@ registry-manager 明确"一次管理一个 registry"，cairn 沿用。**单进�
 2. `docker-compose.yml` 的 `image: ${IMAGE:-cairn:X.Y.Z}`（v0.5.23 起产品面对用户的 image tag 用 `cairn:` 前缀）
 3. `.env.example` 的 `IMAGE=`
 4. `README.md` 里所有 `docker build/tag/push` 示例（含"镜像推到内网"、"部署"等段落里的 tag 引用）
-5. `CHANGELOG.md` 新增一节
+5. `Makefile` 的 `IMAGE ?= cairn:X.Y.Z` 默认值（build / rebuild / rebuild-fresh 三个目标的 `-t $(IMAGE)` 都引用它 —— 不改这里，`make rebuild` 出来的 image 还是旧 tag，跟 `docker-compose.yml` 默认值打架）
+6. `CHANGELOG.md` 新增一节
 
 `CHANGELOG.md` 按 [Keep a Changelog](https://keepachangelog.com/) 的分组写（新增 / 变更 / 修复 / 文档），**新版本写在最上面**，条目要写"改了什么、为什么、表现是什么"，不要只写"修复 bug"。
 

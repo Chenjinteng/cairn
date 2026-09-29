@@ -1,0 +1,68 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# 与本地 make gates 等价 —— push / PR 都会触发;权限最小化,只读 checkout。
+permissions:
+  contents: read
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────────
+  # 本机门禁:tsc / go build (plain + webui) / go test -race
+  # 对应 Makefile 的 `make gates` 目标;GitHub Actions 跑同一组检查。
+  # ────────────────────────────────────────────────────────────────────────
+  gates:
+    name: make gates (tsc + go build + go test -race)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Dockerfile 的 GO_IMAGE 与 go.mod 的 go 指令保持一致(AGENTS.md §go 指令对齐)。
+          # 见 go.mod 第一行的 `go X.Y.0`;CI 用同主版本,具体 patch 由 setup-go 自己选。
+          go-version-file: go.mod
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          # Dockerfile 的 NODE_IMAGE 与 web 工具链对齐(目前 node:22-alpine)。
+          node-version: "22"
+
+      # pnpm 通过 corepack 自带(Go 工具链在 AGENTS.md §GOPROXY 校准),
+      # CI 这里固定 goproxy.io,跟 Makefile 默认一致,避免 proxy.golang.org 在受限网络下超时。
+      - name: Configure Go proxy
+        run: |
+          go env -w GOPROXY=https://goproxy.io,direct
+          go env -w GOSUMDB=sum.golang.org
+          go version
+
+      - name: Enable pnpm via corepack
+        run: corepack enable
+
+      - name: Install web dependencies
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      - name: tsc --noEmit
+        working-directory: web
+        run: npx tsc --noEmit
+
+      - name: go build ./...
+        run: go build ./...
+
+      - name: go build -tags webui
+        # webui 标签编译会 //go:embed 前端 dist;前端必须先 pnpm build。
+        run: |
+          cd web && pnpm build && cd ..
+          CGO_ENABLED=0 go build -tags webui -o /tmp/cairn-gate ./cmd/server
+
+      - name: go test -race ./...
+        run: go test -race ./...

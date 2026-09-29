@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"testing"
 
-	"cairn/internal/config"
-	"cairn/internal/registry"
+	"github.com/Chenjinteng/cairn/internal/config"
+	"github.com/Chenjinteng/cairn/internal/registry"
 )
 
 // fakeFetcher answers GetManifest by digest lookup. Anything not in the

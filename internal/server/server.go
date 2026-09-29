@@ -14,15 +14,15 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"cairn/internal/api"
-	"cairn/internal/config"
-	"cairn/internal/credentials"
-	"cairn/internal/db"
-	"cairn/internal/events"
-	"cairn/internal/proxies"
-	"cairn/internal/pull"
-	"cairn/internal/registryd"
-	"cairn/internal/storage"
+	"github.com/Chenjinteng/cairn/internal/api"
+	"github.com/Chenjinteng/cairn/internal/config"
+	"github.com/Chenjinteng/cairn/internal/credentials"
+	"github.com/Chenjinteng/cairn/internal/db"
+	"github.com/Chenjinteng/cairn/internal/events"
+	"github.com/Chenjinteng/cairn/internal/proxies"
+	"github.com/Chenjinteng/cairn/internal/pull"
+	"github.com/Chenjinteng/cairn/internal/registryd"
+	"github.com/Chenjinteng/cairn/internal/storage"
 )
 
 // Runtime bundles the long-lived dependencies.

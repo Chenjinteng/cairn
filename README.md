@@ -1,130 +1,180 @@
-# cairn
+# Cairn
 
-> **Cairn** —— 用 Go 重写的轻量级容器镜像基础设施平台（cairn 是项目代号，registry-manager 的 Go 版），前后端同源单进程部署。
+> 轻量级容器镜像基础设施平台 —— 单进程单二进制,自带管理控制台,实现 CNCF Distribution(Docker Registry HTTP API V2)。
+
+<p align="left"><img src="./docs/logo.svg" alt="Cairn logo" width="64" /></p>
+
+Cairn 是一个**可独立部署的容器镜像仓库**:完整实现 Docker Registry V2 协议,自带管理控制台。它只有**一个进程、一个二进制、一个 registry** —— 起在哪儿,镜像就存在哪儿;浏览器打开同一个端口,就是管理界面。
+
+> 📘 **想看完整产品介绍?** [README 下方「这是什么」段](#这是什么)给出"这是什么 / 设计目标 / 能力地图 / 单二进制架构 / 快速开始 / 配置 / 边界 / 从这里开始"8 节;运行实例上还自带一份[`/cairn-intro.html`](./web/public/cairn-intro.html)(随二进制分发,UI 上点 footer「产品介绍」可访问)。
 
 ## 这是什么
 
-一个独立的 CNCF Distribution（Docker Registry HTTP API V2）轻量级容器镜像基础设施平台，**Cairn**。
-
-**与 registry-manager 的关系**：
-
-- ✅ 行为 / API 兼容（registry-manager 是参考实现）
-- ✅ UI 视觉风格一致（前端 copy 自 registry-manager）
-- ❌ **不是 fork** —— Go 是从零写的，不绑定上游 Node 实现
-- ❌ 不追版本号同步 —— cairn 自己有版本号规则
-
-## 品牌资产
-
-产品面对用户时称 **Cairn**(轻量级容器镜像基础设施平台);`cairn` 仍是项目代号 / module path / 二进制名,两者并存。
-
-- Logo 设计稿:[`docs/design/cairn-brand.html`](./docs/design/cairn-brand.html) —— 几何构成、调色板、多尺寸 mock、in-app preview
-- UI 设计稿:[`docs/design/cairn-ui-design.html`](./docs/design/cairn-ui-design.html) —— token / 组件 / 导航 / 状态共 8 段,与品牌稿对仗
-- 6 个页面原型:[`docs/design/demo-A-overview.html`](./docs/design/demo-A-overview.html) —— 缩略索引 + 全套 demo-A-*.html
-- 产品介绍页:[`web/public/cairn-intro.html`](./web/public/cairn-intro.html) —— **随二进制分发**,运行实例上访问 [`/cairn-intro.html`](http://localhost:8787/cairn-intro.html)(也可从侧栏 footer 的「产品介绍」进);单文件自包含,基于品牌稿视觉,含定位 / 设计目标 / 能力地图 / 架构 / 快速开始 / 边界 / 从这里开始
-- 项目内 Logo 组件:`web/src/components/cairn-mark.tsx`(内联 SVG,接受 `size` / `variant` props)
-- 配色 token:`web/src/theme.css` 的 `--color-primary` / `--color-info` 同步 Logo 的 Teal 600
+Cairn 用 Go 从零实现 —— 单二进制、自带控制台、零外部依赖（数据库 / 消息队列 / Redis 全不要）。覆盖 docker push / pull / skopeo copy 的全 roundtrip,日常运维走 6 个内置页面（镜像列表 / 拉取 / 热度 / 凭据 / 代理 / 设置）即可。
 
 ## 设计目标
 
-1. **单进程单二进制**：编译后 ~10MB 静态二进制，运行时无外部依赖（SQLite 用 modernc 纯 Go 驱动，规划中）
-2. **前后端同源**：前端 dist 通过 `//go:embed` 嵌入二进制（v0.2+），部署只发一个文件
-3. **库式后端**：HTTP handler 通过 `cmd/server` 装配，业务逻辑在 `internal/` 下，方便后续挂到别人的服务里
-4. **可观测性**：自带 `/healthz` `/readyz`
+四条硬约束:
 
-## 当前状态:v0.5.50(2026-09-29) —— **修 regsync / 所有严格遵循 OCI 的客户端同步时撞 +1 字节 size mismatch:`uploadPatch` / `uploadGet` / `uploadStart` 三处响应 `Range` 头原写 `bytes 0-size`,RFC 7233 byte range 是 inclusive 双端 → 比磁盘真实字节数永远多 1,regsync 据此算下一 chunk 的 Content-Range start,所有 chunk 累积偏移 +1,与上游 manifest size 不匹配即报 `blob content size does not match descriptor, expected 7266, received 7267`。改成 `bytes 0-(size-1)`,空文件用 `bytes 0--1`(suffix range 零长)。skopeo / docker daemon 之所以不撞 —— 它们自己算「已写字节」用 body length,不读 server 的 Range 头,所以从来没暴露这个 bug,但任何严格读 Range 头的客户端(regclient / harbor 同步器 / crane 等)同步到 cairn 时都会炸。新增 5 个字节级单测覆盖整条 PATCH/PUT/HEAD 路径**
+1. **单进程单二进制**
+   运行时不依赖数据库、消息队列、Redis 这类需要运维的外部服务;只依赖 Go 标准库 + chi + `golang.org/x/sync`,最终二进制 ~10 MB。
+2. **前后端同源**
+   React 前端构建产物经 `//go:embed` 打进二进制;同一个端口同时提供 `/v2/*`、`/api/*` 与页面 —— 没有跨域,也没有第二套部署。
+3. **库式后端**
+   `cmd/server` 只做装配;能力都住在 `internal/` 各包(registry / pull / stats / credentials / proxies / webhook),行为修改有唯一落点。
+4. **可观测**
+   `/healthz` 存活、`/readyz` 就绪,日志走结构化 `slog`;compose 与 k8s 需要的探针端点开箱即用。
 
-## 历史
+## 能力地图
 
-## v0.5.49(2026-09-29) —— **修拉取页源镜像名校验双弹提示:空值时 `required: true` 和 validator 同时触发同一条「请填写镜像名」→ 红字叠两条;validator 加空值短路后由 required 独占空值提示,validator 只在有值时跑「缺 tag」检查。同时给「代理地址」「凭据 Registry URL」两处同类规则的 validator 也加空值短路(当前不重复但属同一类隐患,以后 message 一改就复发)**
+| 模块 | 状态 | 实现要点 |
+|---|---|---|
+| `/v2/*` Docker Registry V2 协议 | ✅ | catalog、tags/list、manifests(4 种 Accept)、blobs 与 uploads(4 MiB 分块 PATCH / PUT);docker push / pull 与 skopeo 直连均已 roundtrip 验证 |
+| 本地 FS 存储 | ✅ | registry 内容落文件系统:repos / blobs / uploads;digest 校验 + 原子写入;容器内固定 `/app/data/registry`,加一条 bind mount 即可让内容独占大盘 |
+| 清单浏览与删除 | ✅ | 按仓库 / tag 浏览 digest、架构、层数、体积与构建时间;删除按 digest 执行,执行前先列出同一 digest 的全部 tag 影响面 |
+| 拉取队列 | ✅ | 从上游 registry 拉取镜像:FIFO 队列、单并发执行、可协作式取消;进度用 ring buffer 限制内存占用 |
+| 凭据库(AES-256-GCM) | ✅ | 凭据加密落盘(密钥来自 `REGISTRY_CREDENTIAL_KEY`);支持 Docker Hub / ghcr.io / quay.io 等的 Bearer 令牌流程(含无 scope token) |
+| 代理库 | ✅ | 独立表,代理可达性纯 TCP 探测 + 延迟 |
+| 热度库(SQLite) | ✅ | `modernc.org/sqlite` 纯 Go,无 cgo;按镜像与时间窗聚合;数据同样在 `/app/data` 下 |
+| Webhook 通知 | ✅ | 事件出站 POST 带 HMAC-SHA256 签名,接收端走白名单校验 |
+| 控制台(React + AntD) | ✅ | 镜像列表 / 镜像拉取 / 镜像热度 / 凭据管理 / 代理管理 / 设置 —— 6 个页面覆盖日常运维 |
 
-## v0.5.48(2026-09-29) —— **知名拉取源预置 + 第三方拉取源可配置:知名公网源(Docker Hub / quay.io / ghcr.io / registry.k8s.io / mcr.microsoft.com / public.ecr.aws 等)预置进代码,设置页新增「第三方拉取源」(pull.known_hosts,UI 热改、后端归一化+校验,不走 .env);拉取页镜像名智能解析认自配主机——无点内网主机(`harbor/team/app`)与强制 http 的镜像站不再被误判成 Docker Hub 仓库路径;「来源 registry 地址」升级为 AutoComplete(知名源+自配源候选),并修复了该输入框一直缺 name 绑定、手动覆盖来源从未生效的老 bug**
+## 单二进制架构
 
-✅ 已实现（v0.1 – v0.4）：
+```
+                ┌───────────────────────────────────────────────┐
+  docker /      │                  :8787                       │
+  skopeo /      │  chi 路由 + slog 结构化日志                    │
+  curl / 浏览器 │  /v2/* 数据平面 + /api/* 管理平面 + Web UI    │
+                │  (//go:embed 嵌入二进制)                      │
+                └───────────────┬───────────────────────────────┘
+                                │
+                ┌───────────────▼───────────────────────────────┐
+                │  internal/                                    │
+                │  registry(协议与存储) · pull(拉取队列) ·      │
+                │  stats(热度) · credentials · proxies · webhook│
+                └───────────────┬───────────────────────────────┘
+                                │
+                ┌───────────────▼───────────────────────────────┐
+                │  /app/data                                    │
+                │  credentials.json · proxies.json · cairn.db · │
+                │  registry/(repos + blobs + uploads)           │
+                └───────────────────────────────────────────────┘
+```
 
-**数据平面**（v0.3 新增）
+容器内监听端口是编译期常量 8787;对外端口由 compose 的 `HOST_PORT` 决定(默认 8787)。
 
-- `/v2/*` OCI Distribution 协议完整路由：catalog / tags/list / manifests / blobs / uploads
-- 本地 FS 存储：repos/ + blobs/ + uploads/，digest 校验，原子写
-- 支持完整 push→pull roundtrip（docker / skopeo 可直连）
+## 快速开始
 
-**管理平面**（v0.1 + v0.2）
+```bash
+# 1. 准备宿主机数据目录(存放全部状态 —— 凭据 / SQLite / registry 内容)
+mkdir -p /data/cairn
 
-- chi 路由 + structured logging (slog)
-- 清单浏览、删除（走本地 storage）
-- 拉取队列（FIFO + 单并发 + cooperative cancel + ring buffer），从外部 registry 拉到本地
-- Blob 传输：4 MiB chunked PATCH + PUT commit
-- 凭据库（AES-256-GCM）+ 代理库
-- SQLite 热度库（modernc.org/sqlite 纯 Go）
-- webhook 接收（HMAC-SHA256 签名、manifest 白名单、HEAD/PUT 方法白名单、User-Agent 忽略）
-- API 响应包 `{success, code, message, data}` 信封
+# 2. 复制 .env.example 并填必填项
+cp .env.example .env
+# 然后编辑 .env,至少改这两项:
+#   REGISTRY_CREDENTIAL_KEY=<openssl rand -hex 32 输出>
+#   HOST_PORT=80           # 宿主机对外端口;不设回退 8787
 
-**前端**
+# 3. 启动
+docker compose up -d --build
 
-- React + AntD + Vite，从 registry-manager/web 复制（视觉 / 交互 100% 一致）
-- 前端 dist 通过 `//go:embed` 嵌入二进制（-tags webui），`/` 直接服务 UI，深路由 fallback index.html（v0.4 新增）
+# 4. 验证
+curl -s http://127.0.0.1:80/healthz
+# 期望:HTTP 200 + "OK"
 
-**工程化**
+# 5. 浏览器打开 http://<宿主机>:<HOST_PORT>
+```
 
-- 单版本号源（`internal/version/version.go` 5 处同步）
-- AGENTS.md 开发规范 + CHANGELOG.md（Keep a Changelog）
-- Dockerfile（多阶段 scratch 基础，运行镜像 ~15MB）+ docker-compose
-- `go test ./...` 全绿
+启动后容器内监听端口固定 8787;`HOST_PORT` 只决定宿主机侧的映射端口。
 
-⏳ 后续 TODO：
+## 配置在哪配
 
-- 鉴权（basic / Bearer token）—— 当前 `/v2/*` 匿名，靠 reverse proxy 守住
+**基础设施走 `.env`,业务配置走设置页。** 两边不重叠,`docker inspect` 里看不到业务 env(本来就不读)。
 
-- 多架构 index 拉取（registry-manager 也跳过，cairn 沿用）
-- v0.2 / v0.3 单元测试（v0.3 已有集成测试覆盖）
+| 配置项 | 在哪配 | 说明 |
+|---|---|---|
+| `REGISTRY_CREDENTIAL_KEY` | `.env` | **必填**。凭据库 AES-256-GCM 主密钥,**丢失则已存凭据永久不可恢复** |
+| `HOST_DATA_DIR` | `.env` | 宿主机数据目录,默认 `/data/cairn` |
+| `HOST_PORT` | `.env` | 宿主机映射端口,默认 8787 |
+| `CAIRN_ENV` | `.env` | `prod`(默认)/ `dev`,只影响日志详细度 |
+| `IMAGE` | `.env` | 运行镜像 tag,默认 `cairn:X.Y.Z` |
+| `NODE_IMAGE` / `NPM_REGISTRY` / `GOPROXY` / `BUILD_HTTP_PROXY` / `BUILD_HTTPS_PROXY` / `BUILD_NO_PROXY` | `.env` | 只在 `docker compose build` 时生效,运行时不读 |
+| 仓库地址 / 代理 / 认证 / 展示名 | 设置页 | 落 SQLite,热生效 |
+| 能力开关(`allow.delete` / `allow.pull` / `allow.registry_events`) | 设置页 | 落 SQLite,热生效 |
+| 通知 token / 各类保留天数 / 忽略 UA | 设置页 | 落 SQLite,热生效 |
 
-## 版本管理
+### 改监听端口(HOST_PORT)
 
-版本号 `主.中.小` 三位规则见 [AGENTS.md §版本号规则](./AGENTS.md#版本号规则)。
+Cairn 监听端口 = **宿主机映射端口** + **容器内 cairn 进程监听端口** 两层的组合。
 
-版本号 5 处同步（漏一处就漂移）：
+- **宿主机 → 容器映射**:`HOST_PORT`(默认 8787)。这是 docker 编排层的事,cairn 进程管不到。
+- **容器内 cairn 进程监听**:`PORT` 环境变量 → `cfg.Port`(默认 8787,`Dockerfile` `EXPOSE 8787`)。boot 期固定,改需要重启进程 + 改 env。
 
-1. `internal/version/version.go` 的 `Version` 常量
-2. `docker-compose.yml` 的 `image: ${IMAGE:-cairn:X.Y.Z}`（v0.5.23 起;`cairn:` 是历史前辍）
-3. `.env.example` 的 `IMAGE=`
-4. `README.md` 里所有 `docker build/tag/push` 示例
-5. `CHANGELOG.md` 新增一节
+**改端口步骤**:
 
-当前版本：`0.5.50`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
+1. 编辑 `.env`:`HOST_PORT=8888`(改 8787 为你想要的宿主机端口)
+2. `docker compose up -d` 重建容器(仅改 HOST_PORT 时 cairn 进程内部监听端口不变,仍是 8787;如果同时改了容器内监听端口需要重新构建镜像)
+3. 浏览器访问 `http://<host>:8888`,`docker pull <host>:8888/...`
+
+**为什么不暴露到设置页?** UI 改 `cfg.Port` 只能改容器内监听端口,**没法改 docker 端口映射** —— 浏览器 / docker daemon 还在走 80/8787,改了等于没改。设置页只读显示当前端口,改法在 `.env` + `docker-compose.yml`。
+
+## 边界
+
+以下功能**刻意不做**,而不是"还没做":
+
+- ❌ 登录 / 用户体系 / RBAC
+- ❌ 镜像扫描 / CVE 检测
+- ❌ 镜像签名 / cosign 集成
+- ❌ 多 registry 聚合
+- ❌ 配额 / 速率限制
+- ❌ Helm chart / OCI artifact 浏览(只管 Docker 镜像)
+
+数据平面(`/v2/*`)的鉴权现状:`/v2/*` 目前匿名可访问,鉴权仍在 TODO 列表里 —— 生产部署请把它放在内网或反向代理之后,不要裸暴露到公网。
+
+## 从这里开始
+
+1. 浏览器打开 `http://<宿主机>:<HOST_PORT>` —— 默认进「镜像列表」
+2. 如果镜像库是空的,先去「镜像拉取」配一条上游源(Docker Hub / ghcr.io / quay.io 等),拉一个镜像下来
+3. 凭据 / 代理 / 保留天数 / 通知 token 等业务配置在设置页保存即生效,不用改 env
+
+仓库里的 `docs/design/*.html` 是设计与品牌稿、`docs/ROADMAP.md` 是排期号位、`CHANGELOG.md` 是所有版本变更 —— 都在源里,不在运行实例内。
 
 ## 项目结构
 
 ```
 .
-├── cmd/server/                 # 主入口（main + 装配）
+├── cmd/server/                 # 主入口(main + 装配)
 ├── internal/
 │   ├── config/                 # env 配置加载
-│   ├── registry/               # V2 协议客户端（浏览 / 删除 / 拉取）
-│   │   ├── client.go             # HTTP 客户端 + basic auth + 代理
-│   │   ├── inventory.go          # 浏览：repos / tags / manifest
-│   │   ├── delete.go             # 删除：按 digest
-│   │   ├── registry.go           # Registry interface + TTL 缓存
-│   │   ├── types.go              # Manifest / Layer / Repository / TagInfo
-│   │   └── errors.go             # typed V2 errors
-│   ├── api/                    # HTTP handlers
-│   │   ├── api.go                # chi 路由装配 + middleware
-│   │   ├── handlers.go           # /api/* handler 实现
-│   │   └── errors.go             # ErrorBody shape（与 registry-manager 对齐）
-│   └── server/                 # Build(cfg) → *http.Server
-├── go.mod
-├── go.sum
-├── Dockerfile                  # 多阶段构建，scratch 基础
+│   ├── registry/               # V2 协议客户端(浏览 / 删除 / 拉取)
+│   ├── registryd/              # 内置 registry server(/v2/* 路由 + uploads)
+│   ├── pull/                   # 拉取队列
+│   ├── credentials/            # AES-256-GCM 凭据库
+│   ├── proxies/                # 代理库
+│   ├── events/                 # webhook + 热度统计
+│   ├── api/                    # HTTP handlers(/api/*)
+│   ├── storage/                # 文件系统原子写 + digest 校验
+│   ├── db/                     # SQLite 封装(modernc 纯 Go)
+│   ├── server/                 # Build(cfg) → *http.Server
+│   └── webui/                  # //go:embed 前端 dist
+├── web/                        # React + AntD + Vite 前端源码
+├── docs/
+│   ├── design/                 # 品牌 / UI / 页面原型
+│   └── ROADMAP.md              # 排期号位
+├── Dockerfile                  # 多阶段构建,scratch 基础
 ├── docker-compose.yml
-├── .env.example
-└── README.md
+├── Makefile                    # 从 0 部署 + 验收流水线
+└── .env.example
 ```
 
 ## 开发
 
 ```bash
-# 拉依赖（首次 / go.mod 改后）
+# 拉依赖(首次 / go.mod 改后)
 go mod download
 
-# 跑（需要 .env 或环境变量）
+# 跑(需要 .env 或环境变量)
 go run ./cmd/server
 
 # 编译
@@ -137,9 +187,9 @@ go test ./...
 docker build -t cairn:dev .
 ```
 
-### 网络受限环境的构建（Go proxy）
+### 网络受限环境的构建(Go proxy)
 
-`go build` / `go mod download` 默认走 `proxy.golang.org`。在受限网络下会 timeout，两种方式覆盖：
+`go build` / `go mod download` 默认走 `proxy.golang.org`。在受限网络下会 timeout,两种方式覆盖:
 
 ```bash
 # 1) 本地 go 命令直接覆盖(只影响当前 shell)
@@ -151,125 +201,11 @@ docker build --build-arg GOPROXY=https://goproxy.cn,direct -t cairn:dev .
 # 或:在 .env 里设 GOPROXY=https://goproxy.cn,direct 再 docker compose build --no-cache
 ```
 
-常用代理：`https://goproxy.cn,direct`（国内七牛）、`https://goproxy.io,direct`（国内官方推荐）、`https://mirrors.aliyun.com/goproxy/,direct`（阿里云）。
+常用代理:`https://goproxy.cn,direct`(国内七牛)、`https://goproxy.io,direct`(国内官方推荐)、`https://mirrors.aliyun.com/goproxy/,direct`(阿里云)。
 
-### 构建期通用 HTTP 代理（跟 GOPROXY 正交）
+## 让 registry 内容独占一块盘(可选)
 
-如果构建机**直连外网受限**（不只是 Go module，go / curl / git / apt 都不通），但内网有可用的 HTTP 代理（如 `proxy.example.com:7890`），可以给 web-builder / builder stage 配 HTTP 代理。`Dockerfile` 透传 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` build-arg：
-
-```bash
-# docker build 直接覆盖
-docker build \
-  --build-arg HTTP_PROXY=http://proxy.example.com:7890 \
-  --build-arg HTTPS_PROXY=http://proxy.example.com:7890 \
-  --build-arg NO_PROXY=localhost,127.0.0.1,.local \
-  -t cairn:dev .
-
-# docker compose:在 .env 里设 BUILD_HTTP_PROXY 等(避免跟运行时 REGISTRY_PROXY 混淆)
-cat >> .env <<'EOF'
-BUILD_HTTP_PROXY=http://proxy.example.com:7890
-BUILD_HTTPS_PROXY=http://proxy.example.com:7890
-BUILD_NO_PROXY=localhost,127.0.0.1,.local
-# 前端依赖走国内/内网 npm 镜像(可选)
-NPM_REGISTRY=https://registry.npmmirror.com
-EOF
-docker compose build --no-cache
-```
-
-**跟 GOPROXY 的关系**：GOPROXY 控制 Go module 协议本身（决定去哪个 module proxy 拉），HTTP_PROXY 控制底层 HTTP 客户端出口。两者独立可叠加 — 内网代理环境下一般两个都要配（Go module 协议层 + 实际网络层）。
-
-**留空 = 不设代理**：默认行为跟之前完全一致，普通 build 不需要任何额外配置。
-
-## 部署
-
-```bash
-mkdir -p /data/cairn      # 宿主机数据目录(bind mount 的目标,可改)
-cp .env.example .env       # 必填: REGISTRY_CREDENTIAL_KEY(随机 32 字节)
-                           # 数据目录:改 HOST_DATA_DIR(默认 /data/cairn)
-                           # 访问端口:改 HOST_PORT(示例 80 = http://<宿主机>:80;不设回退 8787)
-                           # 受限网络:把 GOPROXY 改成 https://goproxy.cn,direct
-                           # 内网代理:把 BUILD_HTTP_PROXY/HTTPS_PROXY 设成 http://proxy.example.com:7890
-                           # 前端依赖镜像:NPM_REGISTRY=https://registry.npmmirror.com(受限网络)
-docker compose up -d --build
-```
-
-启动后浏览器访问 `http://<宿主机>:<HOST_PORT>`（容器内固定监听 8787，`HOST_PORT` 只决定宿主机侧的映射端口）。
-
-`${HOST_DATA_DIR:-/data/cairn}` 会 bind mount 到容器内的 `/app/data` —— 凭据库、SQLite 库、registry 内容（blobs + manifests，在 `registry/` 子目录）全在里面。**必须落在持久盘上**，否则容器重建数据全丢（凭据永久不可恢复）。容器内的路径是编译期常量，不对外暴露：换个位置只需要改 `HOST_DATA_DIR` 或改 bind mount 左侧。
-
-## 配置在哪配
-
-**基础设施走 `.env`，业务配置走设置页。** 两边不重叠，`docker inspect` 里看不到业务 env（本来就不读）。
-
-| 配置项 | 在哪配 | 说明 |
-|---|---|---|
-| `REGISTRY_CREDENTIAL_KEY` | `.env` | **必填**。凭据库 AES-256-GCM 主密钥，**丢失则已存凭据永久不可恢复** |
-| `HOST_DATA_DIR` | `.env` | 宿主机数据目录，默认 `/data/cairn` |
-| `HOST_PORT` | `.env` | 宿主机映射端口，默认 8787 |
-| `CAIRN_ENV` | `.env` | `prod`（默认）/ `dev`，只影响日志详细度。v0.5.23 起;曾用名 `GO_HUB_ENV` |
-| `IMAGE` | `.env` | 运行镜像 tag,默认 `cairn:0.5.23`(v0.5.23 起) |
-| `NODE_IMAGE` / `NPM_REGISTRY` / `GOPROXY` / `BUILD_HTTP_PROXY` / `BUILD_HTTPS_PROXY` / `BUILD_NO_PROXY` | `.env` | 只在 `docker compose build` 时生效，运行时不读 |
-| registry 地址 / 代理 / 认证 / 展示名 | 设置页 | 落 SQLite，热生效 |
-| 能力开关（`allow.delete` / `allow.pull` / `allow.registry_events`） | 设置页 | 落 SQLite，热生效 |
-| 通知 token / 各类保留天数 / 忽略 UA | 设置页 | 落 SQLite，热生效 |
-
-### 改监听端口（HOST_PORT）
-
-Cairn 监听端口 = **宿主机映射端口** + **容器内 cairn 进程监听端口** 两层的组合。
-
-- **宿主机 → 容器映射**：`HOST_PORT`（默认 8787）。这是 docker 编排层的事，cairn 进程管不到。
-- **容器内 cairn 进程监听**：`PORT` 环境变量 → `cfg.Port`（默认 8787，Dockerfile `EXPOSE 8787`）。boot 期固定，改需要重启进程 + 改 env。
-
-**改端口步骤**：
-
-1. 编辑 `.env`：`HOST_PORT=8888`（改 8787 为你想要的宿主机端口）
-2. `docker compose up -d` 重建容器（仅改 HOST_PORT 时 cairn 进程内部监听端口不变，仍是 8787；如果同时改了容器内监听端口需要重新构建镜像）
-3. 浏览器访问 `http://<host>:8888`，`docker pull <host>:8888/...`
-
-**为什么不暴露到设置页？** UI 改 `cfg.Port` 只能改容器内监听端口，**没法改 docker 端口映射**——浏览器 / docker daemon 还在走 80/8787，改了等于没改。设置页只读显示当前端口，改法在 `.env` + `docker compose.yml`。
-
-<details>
-<summary>和 registry-manager 的对照（已分叉）</summary>
-
-字段语义对齐到 v0.5.8 为止。**从 v0.5.9 起 cairn 不再读业务 env**：`REGISTRY_URL` / `REGISTRY_PROXY` / `REGISTRY_USERNAME` / `REGISTRY_PASSWORD` / `REGISTRY_NAME` / `REGISTRY_NOTIFY_TOKEN` / `REGISTRY_ALLOW_*` / `REGISTRY_CACHE_TTL_SECONDS` / `REGISTRY_CREDENTIALS_DIR` / `REGISTRY_STORAGE_DIR` / `REGISTRY_PULL_*` / `REGISTRY_STATS_*` 写进 `.env` 都**不会生效**，一切以设置页（SQLite）为准。
-
-这么改是为了让部署幂等：改 `.env` 不会悄悄改变行为，只改基础设施。registry-manager 的老 `.env` 可以直接搬过来 —— 里面的业务字段会被安静忽略，不会打架。
-
-</details>
-
-## 从命名卷迁移（旧版 compose 部署的）
-
-旧 compose 用两个 named volume：`cairn-data` → `/app/data`、`cairn-registry` → `/app/registry`（**默认**布局；如果把 `REGISTRY_STORAGE_DIR` 改成了 `/app/data/registry`，那第二个卷是空的，内容在第一个卷的 `registry/` 子目录里）。新 compose 只挂一条 bind mount，容器内 registry 内容的固定位置是 **`/app/data/registry`**。
-
-两个卷都要看一眼 —— 只搬第一个会漏掉默认布局的镜像内容：
-
-```bash
-cd <部署目录>
-docker compose down                       # 先停,避免边搬边写
-git pull                                  # 拉新 compose
-
-VOLS=$(docker info -f '{{.DockerRootDir}}/volumes')
-ls -d "$VOLS"/*cairn*                    # 确认卷名,通常是 <项目名>_cairn-data / _cairn-registry
-
-mkdir -p /data/cairn /data/cairn/registry
-cp -a "$VOLS/<项目名>_cairn-data/_data/."     /data/cairn/            # 凭据库 / SQLite / 代理库(含 registry/ 子目录,若有)
-cp -a "$VOLS/<项目名>_cairn-registry/_data/." /data/cairn/registry/    # 旧默认布局的镜像内容;卷是空的无副作用
-
-ls -la /data/cairn/                      # 应看到 credentials.json / cairn.db / proxies.json / registry/
-docker compose up -d
-```
-
-`cp -a 源/.` 里的 `/.` 表示"复制目录内容而不是目录本身"，两边都用它才不会多套一层。
-
-**验证**：日志里 `config loaded` 正常、设置页里 registry 地址/代理还在、镜像列表能看到原仓库与 tag、`docker exec <容器> ls /app/data/registry` 有内容。
-
-**旧卷先别删** —— 确认无误后再 `docker volume rm` 回收。
-
-> 顺序很重要：**先 `down`、再搬、最后 `up`**。反过来的话新容器会在空的 `/data/cairn` 里生成全新的凭据库和 SQLite（旧数据没丢，但页面看起来像空的）。
-
-## 让 registry 内容独占一块盘（可选）
-
-默认不拆。想让 blobs/manifests 落在大盘上，在 `docker-compose.yml` 的 `volumes:` 加第二条 bind（**不新增变量**）：
+默认不拆。想让 blobs/manifests 落在大盘上,在 `docker-compose.yml` 的 `volumes:` 加第二条 bind(**不新增变量**):
 
 ```yaml
 volumes:
@@ -277,6 +213,45 @@ volumes:
   - /data2/cairn-registry:/app/data/registry
 ```
 
----
+## 版本管理
 
-详细的模块设计见 `docs/design.md`（待补）。
+版本号 `主.中.小` 三位规则见 [AGENTS.md §版本号规则](./AGENTS.md#版本号规则)。
+
+版本号 5 处同步(漏一处就漂移):
+
+1. `internal/version/version.go` 的 `Version` 常量
+2. `docker-compose.yml` 的 `image: ${IMAGE:-cairn:X.Y.Z}`
+3. `.env.example` 的 `IMAGE=`
+4. `README.md` 里所有 `docker build/tag/push` 示例
+5. `CHANGELOG.md` 新增一节
+
+当前版本:`0.5.51`(来自 `internal/version.Version`,运行时日志和 `/api/config` 都暴露)。
+
+## 文档索引
+
+- [`CHANGELOG.md`](./CHANGELOG.md) —— 所有版本的显著变更
+- [`AGENTS.md`](./AGENTS.md) —— 项目开发规范(版本规则 / env 约定 / 数据目录 / V2 协议事实)
+- [`CONTRIBUTING.md`](./CONTRIBUTING.md) —— 贡献指南(PR 流程 / `make gates` / commit message 规范)
+- [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md) —— 行为准则(Contributor Covenant 2.1)
+- [`docs/ROADMAP.md`](./docs/ROADMAP.md) —— 排期号位
+- [`docs/resilience.md`](./docs/resilience.md) —— v0.5.x 中段的并发 / 死锁 / 前端假死问题全貌(0.5.18 韧性轮计划文档)
+- [`.github/workflows/ci.yml`](./.github/workflows/ci.yml) —— GitHub Actions:push / PR 跑 `make gates`
+- [`.github/pull_request_template.md`](./.github/pull_request_template.md) —— PR 描述模板
+- [`.github/ISSUE_TEMPLATE/`](./.github/ISSUE_TEMPLATE/) —— bug 报告 / feature 提案模板
+- [`docs/design/cairn-brand.html`](./docs/design/cairn-brand.html) —— 品牌稿(Logo / 调色板)
+- [`docs/design/cairn-ui-design.html`](./docs/design/cairn-ui-design.html) —— UI 设计稿(token / 组件 / 状态)
+- [`docs/design/demo-A-*.html`](./docs/design/demo-A-overview.html) —— 6 个页面原型
+- [`web/public/cairn-intro.html`](./web/public/cairn-intro.html) —— 产品介绍页(随二进制分发,运行实例 `/cairn-intro.html` 可见)
+
+## 许可证
+
+本项目采用 [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0) —— 完整条款见 [`LICENSE`](./LICENSE)、第三方依赖归属见 [`NOTICE`](./NOTICE)。
+
+![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
+
+主要含义:
+- ✅ 可商用、可修改、可分发
+- ✅ 公司可以把 Cairn 二进制闭源嵌入自家产品
+- ✅ 含 explicit patent grant,降低专利诉讼风险
+- ❌ 不提供商标授权(「Cairn」名字需单独授权)
+- ❌ 不提供质量担保(自行评估)
