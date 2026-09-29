@@ -16,7 +16,7 @@
 #   make test                       # 跑本机门禁
 #
 # 环境变量(全部可覆盖,默认值见对应 target):
-#   IMAGE          cairn:0.5.50
+#   IMAGE          cairn:0.5.51
 #   PORT           8787(容器内监听)
 #   HOST_PORT      80(宿主机映射端口)
 #   DATA_DIR       /data/cairn(宿主机数据目录)
@@ -25,7 +25,7 @@
 #   NPM_REGISTRY   https://registry.npmmirror.com
 
 # ───────────────────────── 变量 ─────────────────────────
-IMAGE       ?= cairn:0.5.50
+IMAGE       ?= cairn:0.5.51
 PORT        ?= 8787
 HOST_PORT   ?= 80
 DATA_DIR    ?= /data/cairn
@@ -33,7 +33,7 @@ REGISTRY_URL ?= registry.example.com
 GOPROXY     ?= https://goproxy.io,direct
 NPM_REGISTRY ?= https://registry.npmmirror.com
 
-# 运行时构造 (从镜像 tag 解析版本号, 例: cairn:0.5.50 → 0.5.50)
+# 运行时构造 (从镜像 tag 解析版本号, 例: cairn:0.5.51 → 0.5.51)
 VERSION     := $(shell echo $(IMAGE) | sed 's/.*://')
 
 # 工具检测
@@ -73,19 +73,32 @@ pull:           ## git fetch + reset hard to origin/main
 # v0.5.43: 永远走 make build / make rebuild,不要裸跑 docker build —— 裸跑会用
 # Dockerfile 默认的 proxy.golang.org(在受限网络里超时),Makefile 默认 GOPROXY
 # 是 https://goproxy.io,direct(已知能访问)。要看当前用的是哪个:`make help`。
+#
+# BuildKit cache:Dockerfile 用 `# syntax=docker/dockerfile:1.4` + `--mount=type=cache`,
+# 跨 build 复用 pnpm store + go mod cache;rebuild 默认不开 --no-cache,缓存命中即秒级。
+# 若用 legacy docker daemon(<= 18.09),需要装 buildx:`docker buildx install`。
 .PHONY: build
-build:          ## docker build 镜像 (默认 $(IMAGE),GOPROXY=$(GOPROXY))
-	docker build \
+build:          ## docker build 镜像 (默认 $(IMAGE),GOPROXY=$(GOPROXY);BuildKit 自动复用缓存)
+	DOCKER_BUILDKIT=1 docker build \
 		--build-arg GOPROXY=$(GOPROXY) \
 		--build-arg NPM_REGISTRY=$(NPM_REGISTRY) \
 		-t $(IMAGE) .
 
 .PHONY: rebuild
-rebuild:        ## 强制 rebuild (--no-cache, 源码改了必须走这条;GOPROXY=$(GOPROXY))
-	docker build --no-cache \
+rebuild:        ## rebuild 镜像 (BuildKit 自动复用 pnpm/go 缓存;仅源码改动 rebuild 时用这条)
+	DOCKER_BUILDKIT=1 docker build \
 		--build-arg GOPROXY=$(GOPROXY) \
 		--build-arg NPM_REGISTRY=$(NPM_REGISTRY) \
 		-t $(IMAGE) .
+
+.PHONY: rebuild-fresh
+rebuild-fresh:  ## 强制全清 rebuild (--no-cache + 清 BuildKit cache mount;解决缓存命中出错时用)
+	DOCKER_BUILDKIT=1 docker build --no-cache --progress=plain \
+		--build-arg GOPROXY=$(GOPROXY) \
+		--build-arg NPM_REGISTRY=$(NPM_REGISTRY) \
+		-t $(IMAGE) .
+	@echo ""
+	@echo "提示:BuildKit cache mount 仍保留,真要彻底清可用 \`docker buildx prune --all\`。"
 
 # ───────────────────────── 三、部署 ─────────────────────────
 .PHONY: env-init

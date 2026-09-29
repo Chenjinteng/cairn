@@ -13,7 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"cairn/internal/storage"
+	"github.com/Chenjinteng/cairn/internal/storage"
 )
 
 // TestUploadFlowLocationHeaders walks the full OCI push flow through the

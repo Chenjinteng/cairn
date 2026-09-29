@@ -1,4 +1,4 @@
-module cairn
+module github.com/Chenjinteng/cairn
 
 go 1.26.0
 

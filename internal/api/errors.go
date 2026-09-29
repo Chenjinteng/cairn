@@ -14,7 +14,7 @@ import (
 	"log/slog"
 	"net/http"
 
-	"cairn/internal/registry"
+	"github.com/Chenjinteng/cairn/internal/registry"
 )
 
 // ErrorBody is the JSON shape used for every non-2xx response.

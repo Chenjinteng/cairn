@@ -9,12 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"cairn/internal/config"
-	"cairn/internal/credentials"
-	"cairn/internal/db"
-	"cairn/internal/proxies"
-	"cairn/internal/registry"
-	"cairn/internal/storage"
+	"github.com/Chenjinteng/cairn/internal/config"
+	"github.com/Chenjinteng/cairn/internal/credentials"
+	"github.com/Chenjinteng/cairn/internal/db"
+	"github.com/Chenjinteng/cairn/internal/proxies"
+	"github.com/Chenjinteng/cairn/internal/registry"
+	"github.com/Chenjinteng/cairn/internal/storage"
 )
 
 // DefaultUpstream is the upstream used when the job, its credential and the

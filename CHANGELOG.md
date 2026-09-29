@@ -6,6 +6,40 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.51] - 2026-09-30
+
+本轮主题:**产品介绍页同 tab 打开 + 上一轮改名收敛补 CHANGELOG + 公开仓库脚手架治理**
+
+### 变更
+
+- **产品介绍页同 tab 打开**(`web/src/components/page-sidebar.tsx`):sidebar footer 的「产品介绍」链接去掉 `target="_blank" rel="noopener"`,浏览器默认 `_self` 在同 tab 打开。旧行为(0.5.37.6 加的)是为了避免「跳页丢筛选状态」,但代价是用户被强行推到新 tab —— 现在用户点 cairn-intro footer 的「管理控制台 →」按钮 / 浏览器后退就能回来,体验更顺。
+
+- **cairn-intro.html 占位符同步**(`web/public/cairn-intro.html`):行 429 (hero 版本徽章) / 638 (footer 版本号) 占位符 `0.5.37` → `0.5.51`。这是 AGENTS.md「5 处版本号同步」漏的一处。
+
+### 补漏:上一轮改名收敛的 CHANGELOG
+
+0.5.50 上一轮 3 个 commit(`959e963` 抹内部引用 + 删 `tests/web-auto/` / `49110ec` rename internal / `0331079` unify module path + binary 名 + brand)完成了 module path + 63 处 Go import + 二进制名 + Dockerfile HEALTHCHECK + Makefile + web/package.json + 代码注释 + cairn-intro.html 全部 `go-hub` → `cairn` 的收敛,但 CHANGELOG.md 漏写一节。本轮补上,版本号才自洽。
+
+### 公开仓库脚手架(并入本轮)
+
+- **`LICENSE`**(Apache-2.0)+ **`NOTICE`** 落地
+- **基础件**:`CODE_OF_CONDUCT.md`(Contributor Covenant 2.1)+ `CONTRIBUTING.md`(PR 流程 + `make gates` + Conventional Commits + 5 处版本号同步)+ `.github/pull_request_template.md`(8 项自查)+ `.github/ISSUE_TEMPLATE/{bug_report,feature_request}.md`
+- **`.github/workflows/ci.yml`**:push / PR 自动跑 tsc + go build + go build -tags webui + go test -race
+- **BuildKit 缓存加速**:`Dockerfile` 的 `pnpm install` 和 `go mod download` 加 `--mount=type=cache`;`Makefile` 加 `DOCKER_BUILDKIT=1` 显式开关,`rebuild` 去 `--no-cache`(默认命中就命中),新增 `rebuild-fresh` 兜底"绝对全清"
+- **删 `#syntax=docker/dockerfile:1.4`**(这行让 BuildKit 去 docker.io 拉 frontend 镜像,公司受限网络 timeout)
+- **`docs/ROADMAP.md`** 重构:删 hotfix 罗列,只保留"近期里程碑" + "既定计划" + 0.5.19 状态 + 0.6.0 设计 + 刻意不做;**`docs/resilience.md`** 新增(0.5.18 韧性轮 B/F/L 问题清单)
+
+### 影响范围(升级须知)
+
+- **行为变化**:点 sidebar 「产品介绍」现在在同一 tab 打开(不再新开 tab)。cairn-intro.html 的 GitHub CTA / footer 链接保留 `target="_blank"`(去外部站点,同 tab 跳走会丢控制台状态)。
+- **不变**:cairn 二进制协议、API 路径、SQLite 库结构、registry 存储、凭据/热度库格式。
+- **数据兼容**:无存储改动。
+- **5 处版本号同步**:`internal/version/version.go` / `docker-compose.yml` / `.env.example` / `README.md` / `web/public/cairn-intro.html` 全部 0.5.50 → 0.5.51。
+- **补漏一处 — `Makefile` `IMAGE ?=` 默认值 + AGENTS.md 清单 5 → 6 处**:`make rebuild` / `make build` / `make rebuild-fresh` 三个目标都 `-t $(IMAGE)`,默认值不跟版本号改就 build 出 `cairn:0.5.50`,跟 `docker-compose.yml` 默认 `cairn:0.5.51` 打架,docker compose up 会找不到 image。AGENTS.md「5 处版本号同步」清单补上第 5 条,以后必改项写齐。
+- **cairn-intro.html 数据平面鉴权 callout 同步实际状态**:旧 callout 说"/v2/* 目前匿名可访问,鉴权仍在 TODO 列表里"是错的 —— 入站 Basic auth 鉴权 0.5.3 加(commit `67b582f`),0.5.33 修过 docker daemon 鉴权流程;`server.go:211` 把 `getCreds` 接进 `registryd.New`,settings-page「Registry 认证」配 username/password 就实时启用,无需重启。改成:/v2/* 默认匿名;设置页开 Basic auth 后客户端需 `docker login` 才能 push/pull;生产仍建议内网 + 反代多层稳。
+
+---
+
 ## [0.5.50] - 2026-09-29
 
 本轮主题:**修 regsync / 严格 OCI 客户端同步时撞 +1 字节 size mismatch** —— UAT 复现:从 proxy.example.com:10001 同步 `bitnami/redis-cluster:8.2.1-debian-12-r0` 到 cairn(registry.example.com),regsync 报 `blob content size does not match descriptor, expected 7266, received 7267`,整图失败。skopeo copy 同样源/目**不撞**(0.5.46 部署后已验证)—— 同一个 cairn、同一个镜像,行为差异指向协议实现细节而非数据问题。

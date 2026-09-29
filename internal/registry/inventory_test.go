@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"cairn/internal/registry"
+	"github.com/Chenjinteng/cairn/internal/registry"
 )
 
 // fakeRegistry is a minimal CNCF Distribution server sufficient for the

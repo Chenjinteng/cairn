@@ -75,6 +75,36 @@
     margin-bottom: 18px;
   }
   h1.wordmark .dot { color: var(--accent); }
+  .hero-cta {
+    display: flex;
+    gap: 12px;
+    margin-top: 22px;
+    flex-wrap: wrap;
+  }
+  .hero-cta .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 18px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 500;
+    text-decoration: none;
+    transition: transform 0.12s ease, box-shadow 0.12s ease;
+    border: 1px solid transparent;
+  }
+  .hero-cta .btn:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(13, 148, 136, 0.18); }
+  .hero-cta .btn-primary {
+    background: var(--primary);
+    color: #fff;
+  }
+  .hero-cta .btn-primary:hover { background: var(--primary-deep); }
+  .hero-cta .btn-ghost {
+    background: transparent;
+    color: var(--primary-deep);
+    border-color: var(--line);
+  }
+  .hero-cta .btn-ghost:hover { background: var(--primary-tint); border-color: var(--primary-tint); }
   .tagline {
     font-size: 17px;
     color: var(--ink-mid);
@@ -396,12 +426,18 @@
       <h1 class="wordmark">Cairn<span class="dot">.</span></h1>
       <div class="tagline">Lightweight Container Image Infrastructure</div>
       <div class="tagline-cn">轻量级容器镜像基础设施平台</div>
-      <div class="version-badge">v<span data-cairn-version>0.5.37</span> · 单进程单二进制</div>
+      <div class="version-badge">v<span data-cairn-version>0.5.51</span> · 单进程单二进制</div>
       <div class="chips">
         <span class="chip">单进程单二进制</span>
         <span class="chip">scratch 镜像 ~15 MB</span>
         <span class="chip">无外部服务依赖</span>
         <span class="chip">一次管理一个 registry</span>
+      </div>
+      <div class="hero-cta">
+        <a class="btn btn-primary" href="https://github.com/Chenjinteng/cairn" target="_blank" rel="noopener">
+          ⭐ GitHub · github.com/Chenjinteng/cairn
+        </a>
+        <a class="btn btn-ghost" href="/">进入管理控制台 →</a>
       </div>
     </div>
   </div>
@@ -416,39 +452,10 @@
       浏览器打开同一个端口,就是管理界面。
     </p>
     <p class="body">
-      cairn 是内部代号(module path / 二进制名),产品面对用户时称 Cairn。行为与 API 与 registry-manager 对齐,
-      但代码是独立的 —— 两句话说完两者的关系:
+      Cairn 用 Go 从零实现 —— 单二进制、自带控制台、零外部依赖（数据库 / 消息队列 / Redis 全不要）。
+      覆盖 <code>docker push / pull / skopeo copy</code> 的全 roundtrip,日常运维走 6 个内置页面
+      （镜像列表 / 拉取 / 热度 / 凭据 / 代理 / 设置）即可。
     </p>
-    <ul class="const-list">
-      <li>
-        <div class="rel-mark ok">✓</div>
-        <div>
-          <div class="const-label">行为 / API 对齐</div>
-          <div class="const-detail">浏览镜像、查看每个 tag 的 digest / 架构 / 层数 / 体积 / 构建时间、复制 docker pull、按 digest 删除 manifest —— 语义与它一致。</div>
-        </div>
-      </li>
-      <li>
-        <div class="rel-mark ok">✓</div>
-        <div>
-          <div class="const-label">UI 视觉一致</div>
-          <div class="const-detail">控制台的版式、配色与信息密度沿用同一套设计。</div>
-        </div>
-      </li>
-      <li>
-        <div class="rel-mark no">✕</div>
-        <div>
-          <div class="const-label">不是 fork</div>
-          <div class="const-detail">用 Go 从零实现的独立仓库,不共享代码,也不从它继承历史。</div>
-        </div>
-      </li>
-      <li>
-        <div class="rel-mark no">✕</div>
-        <div>
-          <div class="const-label">不追版本号</div>
-          <div class="const-detail">两者各自演进,发布节奏互不绑定。</div>
-        </div>
-      </li>
-    </ul>
   </section>
 
   <!-- ═══════ DESIGN GOALS ═══════ -->
@@ -487,7 +494,7 @@
       <div class="card">
         <div class="card-tag">/v2/*</div>
         <div class="card-title">镜像仓库协议</div>
-        <div class="card-detail">实现 catalog、tags/list、manifests(4 种 Accept 类型)、blobs 与 uploads(4 MiB 分块 PATCH / PUT);docker push / pull 与 skopeo 直连均已 roundtrip 验证。</div>
+        <div class="card-detail">实现 catalog、tags/list、manifests(4 种 Accept 类型)、blobs 与 uploads(4 MiB 分块 PATCH / PUT);docker push / pull、skopeo copy、regsync(regclient)均已 roundtrip 验证(0.5.50 Range 头修复后 regsync 也通)。</div>
       </div>
       <div class="card">
         <div class="card-tag">repos/ · blobs/ · uploads/</div>
@@ -580,7 +587,7 @@ curl -fsS http://localhost:8787/healthz</pre>
       </div>
       <div class="card">
         <div class="card-title">配置分层</div>
-        <div class="card-detail">基础设施 env 只有 3 个:PORT、REGISTRY_CREDENTIAL_KEY、CAIRN_ENV;业务配置(仓库地址 / 代理 / 认证 / 保留天数)走设置页,保存即生效。</div>
+        <div class="card-detail">基础设施 env 只有 4 个:PORT、HOST_PORT、REGISTRY_CREDENTIAL_KEY、CAIRN_ENV;业务配置(仓库地址 / 代理 / 认证 / 保留天数)走设置页,保存即生效。</div>
       </div>
       <div class="card">
         <div class="card-title">端口两层</div>
@@ -603,8 +610,8 @@ curl -fsS http://localhost:8787/healthz</pre>
       <div class="no-item"><span class="no-mark">✕</span>Helm chart / OCI artifact 浏览</div>
     </div>
     <div class="callout">
-      <div class="callout-title">数据平面的鉴权现状</div>
-      <div class="callout-body">/v2/* 目前匿名可访问,鉴权仍在 TODO 列表里 —— 生产部署请把它放在内网或反向代理之后,不要裸暴露到公网。</div>
+      <div class="callout-title">数据平面的鉴权</div>
+      <div class="callout-body">/v2/* 默认匿名可访问;设置页「Registry 认证」开 Basic auth(实时生效,无需重启),客户端 docker login 后才能 push/pull —— 0.5.3 加,0.5.33 修过 docker daemon 鉴权流程。生产部署仍建议放内网或反代之后,单层 Basic auth 不如多层稳。</div>
     </div>
   </section>
 
@@ -620,13 +627,15 @@ curl -fsS http://localhost:8787/healthz</pre>
         <div class="link-desc">镜像列表 / 镜像拉取 / 镜像热度 / 凭据管理 / 代理管理 / 设置 —— 六个页面覆盖日常运维。</div>
       </a>
     </div>
-    <div class="foot-note">设计资产(<code>docs/design/*.html</code>)、路线图(<code>docs/ROADMAP.md</code>)、变更日志(<code>CHANGELOG.md</code>)与 README 随源码仓库分发,不在本运行实例内。</div>
+    <div class="foot-note">设计资产(<code>docs/design/*.html</code>)、路线图(<code>docs/ROADMAP.md</code>)、韧性轮问题清单(<code>docs/resilience.md</code>)、变更日志(<code>CHANGELOG.md</code>)、贡献指南(<code>CONTRIBUTING.md</code>)、行为准则(<code>CODE_OF_CONDUCT.md</code>)与许可证(<code>LICENSE</code>)随源码仓库分发,不在本运行实例内。</div>
   </section>
 
   <!-- ═══════ FOOTER ═══════ -->
   <footer>
-    <span>Cairn · cairn · 2026</span>
-    <span>v<span data-cairn-version>0.5.37</span> · <a href="/">管理控制台 →</a></span>
+    <span>
+      <a href="https://github.com/Chenjinteng/cairn" target="_blank" rel="noopener">⭐ GitHub · github.com/Chenjinteng/cairn</a>
+    </span>
+    <span>v<span data-cairn-version>0.5.51</span> · <a href="/">管理控制台 →</a></span>
   </footer>
 
 </div>

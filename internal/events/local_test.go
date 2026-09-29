@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"cairn/internal/db"
+	"github.com/Chenjinteng/cairn/internal/db"
 )
 
 // newTestHandler wires a Handler backed by a fresh on-disk SQLite db so we

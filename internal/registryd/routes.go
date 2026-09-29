@@ -47,8 +47,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"cairn/internal/events"
-	"cairn/internal/storage"
+	"github.com/Chenjinteng/cairn/internal/events"
+	"github.com/Chenjinteng/cairn/internal/storage"
 )
 
 // basicAuthCreds returns (user, pass) the registry should accept. nil means

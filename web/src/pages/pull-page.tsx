@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   App as AntdApp,
-  AutoComplete,
   Button,
   Collapse,
   Descriptions,
@@ -60,7 +59,6 @@ import {
   nextJobExpansion,
   parseImageReference,
   parseKnownHosts,
-  PRESET_SOURCES,
   shortDigest,
   splitRepoTag,
 } from '../utils';
@@ -81,7 +79,8 @@ interface Props {
 interface FormValues {
   image: string;       // 源镜像名（可能含主机前缀）
   destImage?: string;  // 本 registry 内的目标镜像名 <repo>[:<tag>]，不含主机
-  sourceUrl?: string;  // 高级选项：留空时由 image 自动推断
+  // 来源 URL 不再让用户填 —— 镜像名含主机段自动识别，无主机段默认 Docker Hub;
+  // 自建源 / 强制覆盖场景走设置页「第三方拉取源」（pull.known_hosts）。
   // 高级选项：源端代理（不用 / 从代理库选 / 临时输入）
   sourceProxyMode?: 'none' | 'library' | 'temp';
   sourceProxyId?: string;
@@ -242,17 +241,8 @@ export default function PullPage({ config, sidebarFilter, onPublishGroups }: Pro
     [config?.mutable.pullKnownHosts],
   );
 
-  /** 「来源 registry 地址」AutoComplete 候选：内置知名源 + 用户自配第三方源（去重）。 */
-  const sourceUrlOptions = useMemo(() => {
-    const presetValues = new Set(PRESET_SOURCES.map((p) => p.value));
-    const custom = Array.from(userHosts.entries())
-      .filter(([, baseUrl]) => !presetValues.has(baseUrl))
-      .map(([h, baseUrl]) => ({
-        value: baseUrl,
-        label: `${baseUrl}（自定义 · ${h}）`,
-      }));
-    return [...PRESET_SOURCES, ...custom];
-  }, [userHosts]);
+  /**「来源地址」不再让用户在拉取表单里填 —— 镜像名含主机段自动识别,无主机段默认 Docker Hub;
+     自建源 / 强制覆盖场景统一走设置页「第三方拉取源」(pull.known_hosts)。 */
 
   /**
    * 任务行的展开状态（受控）。
@@ -493,9 +483,9 @@ export default function PullPage({ config, sidebarFilter, onPublishGroups }: Pro
     // 智能解析：用户写 `ghcr.io/owner/repo:tag` 这种含主机前缀的引用，
     // 自动拆出 sourceUrl；写 `alpine:3.19` / `library/alpine:3.19` 默认走 docker.io。
     // v0.5.48: 设置页自配的第三方源也参与识别（userHosts，优先于内置表）。
-    // 高级选项里的 sourceUrl 仅在用户显式覆盖时生效。
+    // 自建源 / 强制覆盖场景统一走设置页「第三方拉取源」，UI 不再让用户填。
     const parsed = parseImageReference(image, userHosts);
-    const sourceUrlEffective = values.sourceUrl?.trim() || parsed.sourceUrl;
+    const sourceUrlEffective = parsed.sourceUrl;
     const sourceRefEffective = parsed.sourceRef || image;
 
     // 目标引用 = 本仓库地址（固定）+ 目标镜像名。
@@ -829,43 +819,9 @@ export default function PullPage({ config, sidebarFilter, onPublishGroups }: Pro
             items={[
               {
                 key: 'advanced',
-                label: '高级选项（来源地址 / 来源代理 / 认证）',
+                label: '高级选项（来源代理 / 认证）',
                 children: (
                   <>
-                    <div className="pull-form-grid">
-                      <Form.Item
-                        label="来源 registry 地址"
-                        name="sourceUrl"
-                        extra="留空时按镜像名前缀自动推断：含主机段则用该主机；否则默认 Docker Hub。知名源与设置页自配的第三方源可从下拉直接选。"
-                        rules={[
-                          {
-                            validator: (_, value: string | undefined) =>
-                              !value || /^https?:\/\//i.test(value.trim())
-                                ? Promise.resolve()
-                                : Promise.reject(new Error('需要以 http:// 或 https:// 开头')),
-                          },
-                        ]}
-                      >
-                        {/* v0.5.48: 之前这个输入框漏了 name 绑定 —— 界面上能填，
-                            但值永远进不了 form，「显式覆盖来源」从来没生效过。
-                            补上绑定并升级成 AutoComplete（内置知名源 + 设置页
-                            「第三方拉取源」条目作为候选，仍可自由输入）。 */}
-                        <AutoComplete
-                          options={sourceUrlOptions}
-                          placeholder="自动推断"
-                          allowClear
-                          filterOption={(input, option) =>
-                            String(option?.value ?? '')
-                              .toLowerCase()
-                              .includes(input.trim().toLowerCase()) ||
-                            String(option?.label ?? '')
-                              .toLowerCase()
-                              .includes(input.trim().toLowerCase())
-                          }
-                        />
-                      </Form.Item>
-                    </div>
-
                     <Form.Item
                       label="源端代理"
                       extra="仅作用于本次拉取访问源；本仓库自身的代理走服务配置。"

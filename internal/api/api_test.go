@@ -14,10 +14,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"cairn/internal/api"
-	"cairn/internal/config"
-	"cairn/internal/registryd"
-	"cairn/internal/storage"
+	"github.com/Chenjinteng/cairn/internal/api"
+	"github.com/Chenjinteng/cairn/internal/config"
+	"github.com/Chenjinteng/cairn/internal/registryd"
+	"github.com/Chenjinteng/cairn/internal/storage"
 )
 
 // fakeBackend is a filesystem-backed storage.Storage in a t.TempDir().

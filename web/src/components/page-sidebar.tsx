@@ -171,11 +171,13 @@ export default function PageSidebar({ groups, selected, onSelect, version }: Pag
           v0.5.37.4：版本号从写死的字符串改成读 /api/config 的运行中版本，
           跟顶栏那个 badge 同源，避免侧栏还写着上个版本。
           v0.5.37.6：footer 挂「产品介绍」入口 —— 该页随二进制分发（web/public/
-          经 vite publicDir 拷进 dist，被 go:embed all:dist 收进二进制），
-          新窗口打开，避免把控制台里的筛选状态丢掉。 */}
+          经 vite publicDir 拷进 dist，被 go:embed all:dist 收进二进制）。
+          v0.5.51：去掉 target="_blank"，改同 tab 打开。0.5.37.6 加 _blank
+          是怕跳页丢筛选状态，但代价是用户被强行推到新 tab；现在点 cairn-intro
+          footer 的「管理控制台 →」按钮 / 浏览器后退就能回来，体验更顺。 */}
       <div className="page-sidebar-footer mono">
         {version ? `v${version} · ` : ''}
-        <a href="/cairn-intro.html" target="_blank" rel="noopener">
+        <a href="/cairn-intro.html">
           产品介绍
         </a>
         {' · © Cairn'}

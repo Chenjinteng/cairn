@@ -44,8 +44,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"cairn/internal/db"
-	"cairn/internal/version"
+	"github.com/Chenjinteng/cairn/internal/db"
+	"github.com/Chenjinteng/cairn/internal/version"
 )
 
 // MANIFEST_MEDIA_TYPES is the whitelist (NOT blacklist). Anything not in

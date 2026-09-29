@@ -31,7 +31,7 @@ import LoadError from '../components/load-error';
 import type { SidebarGroup, SidebarSelection } from '../components/page-sidebar';
 import { useAppConfig } from '../config-store';
 import type { ApiResult, AppConfig, IgnoreRules, Inventory } from '../types';
-import { hostOnly, PRESET_SOURCES, stripUrlProtocol } from '../utils';
+import { hostOnly, HOST_PORT_PATTERN, PRESET_SOURCES, stripUrlProtocol } from '../utils';
 
 interface Props {
   config: AppConfig | null;
@@ -158,9 +158,10 @@ export default function SettingsPage({
     const patch: Record<string, string> = {};
     if (registryUrlDraft.trim() !== (m.registryUrl ?? '')) {
       const v = registryUrlDraft.trim();
-      // v0.5.28: 字段语义改成「裸 host:port」,协议留给 v0.6.0 的 http/https 切换。
-      if (v !== '' && !/^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?(?::\d{1,5})?$/.test(v)) {
-        message.error('地址格式:只接受 IP 或域名(如 192.168.1.10 或 registry.example.com),不要带端口或协议');
+      // v0.5.42: 字段只接受裸 host(无端口)—— 端口由 HOST_PORT env 决定。
+      //   协议(http:// / https://)留给 v0.6.0 统一切换;这里也拒绝。
+      if (v !== '' && !HOST_PORT_PATTERN.test(v)) {
+        message.error('地址格式:只接受 IP 或域名(如 192.168.1.10 或 registry.example.com)。不要带端口或协议 —— 端口由 docker-compose 的 HOST_PORT env 决定,改完 docker compose up -d');
         return;
       }
       patch['registry.url'] = v;
@@ -784,17 +785,18 @@ export default function SettingsPage({
               )}
             </Form.Item>
 
-            {/* v0.5.48: 第三方拉取源 —— 知名公网源已内置在代码里
-                (utils.ts KNOWN_HOSTS/PRESET_SOURCES),这里维护的是操作员
-                追加的第三方/内网 registry。保存时后端归一化并校验。 */}
+            {/* v0.5.48: 第三方拉取源 —— 让 cairn 在 pull 时知道哪些 host 走匿名 token(不发送
+                Basic Auth 头)。匿名源如果不加进来,镜像名前缀识别不到时拉取会 401。
+                已知公网匿名源已内置在 utils.ts KNOWN_HOSTS,这里只追加未内置的:
+                比如 nvcr.io(NVIDIA NGC)、docker.elastic.co、内网 HTTP registry(也是匿名场景)等。 */}
             <Form.Item
               label={<span>第三方拉取源</span>}
               extra={
                 editing
-                  ? '输入 host[:port] 或完整 URL 后回车;也可从下拉直接选知名源。裸主机默认按 https 识别(端口非 443/8443/5000 时按 http),需要强制 http 请显式写 http://主机:端口。保存后:拉取页的镜像名智能解析会认这些主机(含无点内网主机如 harbor/team/app),「来源 registry 地址」输入框也会出现这些候选。'
+                  ? '输入 host[:port] 或完整 URL 后回车;也可从下拉直接选匿名公网源。裸主机默认按 https 识别(端口非 443/8443/5000 时按 http),需要强制 http 请显式写 http://主机:端口。保存后:拉取页的镜像名智能解析会认这些主机前缀,识别成"匿名可访问"源(不发送 Basic Auth 头),否则 pull 会因 401 失败。需要认证的私有 registry 走「凭据管理」。'
                   : pullKnownHostsDraft.length === 0
-                    ? '未配置:仅识别内置知名源(Docker Hub / quay.io / ghcr.io / registry.k8s.io / mcr.microsoft.com / public.ecr.aws / gcr.io 等)。'
-                    : `已配置 ${pullKnownHostsDraft.length} 个,镜像名带这些主机前缀时自动识别为源。`
+                    ? '未配置:仅识别内置匿名源(Docker Hub / quay.io / ghcr.io / gcr.io / registry.k8s.io / mcr.microsoft.com / public.ecr.aws / registry.access.redhat.com)。'
+                    : `已配置 ${pullKnownHostsDraft.length} 个匿名源,镜像名带这些主机前缀时 cairn 不发送 Basic Auth 头,直接走匿名 token 流程。`
               }
             >
               {editing ? (
@@ -809,13 +811,13 @@ export default function SettingsPage({
                   }
                   options={PRESET_SOURCES}
                   tokenSeparators={[',']}
-                  placeholder="如 harbor.local:8080 或 https://nvcr.io;回车添加"
+                  placeholder="如 nvcr.io、k8s.gcr.io、docker.elastic.co;回车添加"
                 />
               ) : (
                 <ReadonlyValue
                   value={
                     pullKnownHostsDraft.length === 0
-                      ? '未配置（仅内置知名源）'
+                      ? '未配置（仅内置匿名源）'
                       : pullKnownHostsDraft.join(', ')
                   }
                   mono

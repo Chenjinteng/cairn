@@ -16,7 +16,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"cairn/internal/storage"
+	"github.com/Chenjinteng/cairn/internal/storage"
 )
 
 // pushBlob walks the full OCI push flow (POST upload-start → PATCH (one

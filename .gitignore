@@ -56,5 +56,6 @@ go.work.sum
 /.scrub-publish.sh
 /.scrub-replace.txt
 /.scrub-message.txt
+/.scrub-mailmap
 /.tmp_*.sh
 /.git.bak-pre-filter-repo

@@ -16,9 +16,9 @@ import (
 	"syscall"
 	"time"
 
-	"cairn/internal/config"
-	"cairn/internal/server"
-	"cairn/internal/version"
+	"github.com/Chenjinteng/cairn/internal/config"
+	"github.com/Chenjinteng/cairn/internal/server"
+	"github.com/Chenjinteng/cairn/internal/version"
 )
 
 func main() {
