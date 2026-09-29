@@ -504,10 +504,14 @@ export default function CredentialsPage({ config, sidebarFilter, onPublishGroups
             rules={[
               { required: true, message: '请填写 registry 地址' },
               {
-                validator: (_, value: string) =>
-                  /^https?:\/\//i.test(value?.trim() ?? '')
+                // v0.5.49: 空值由上面的 required 独占负责,这条 validator 只在
+                // 有值时跑「必须带协议头」检查。
+                validator: (_, value: string) => {
+                  if (!value || !value.trim()) return Promise.resolve();
+                  return /^https?:\/\//i.test(value.trim())
                     ? Promise.resolve()
-                    : Promise.reject(new Error('需要以 http:// 或 https:// 开头')),
+                    : Promise.reject(new Error('需要以 http:// 或 https:// 开头'));
+                },
               },
             ]}
             extra="必须严格匹配任务要打的源/目的 registry 地址；不一致时任务会被拒绝使用。"
