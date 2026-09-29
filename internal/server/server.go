@@ -358,6 +358,9 @@ func safeDBPath(dataDir string) (string, error) {
 	if dataDir == "" {
 		return "", fmt.Errorf("no data dir")
 	}
+	// v0.5.36: DB file renamed from cairn.db → cairn.db to match the product
+	// name (v0.5.21+). The container-internal data dir is still /app/data
+	// (compile-time constant); only the file name tracks the brand.
 	return filepath.Join(dataDir, "cairn.db"), nil
 }
 
