@@ -6,6 +6,40 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.45] - 2026-09-29
+
+本轮主题:**修正 0.5.44 的 dispatch bug** —— 0.5.44 改了 Location header 但请求根本没到 uploadStart handler,fall through 到了 404 `NAME_UNKNOWN`,所以 Location 头根本不会发出。
+
+### 修复
+
+- **upload-start route 接受带尾斜杠**(`internal/registryd/routes.go`):
+
+  0.5.44 修了 Location header 必须是绝对 URL 的 spec 偏差,但部署后 skopeo 仍报 `Error determining upload URL: http: no Location header in response`。原因:
+
+  ```go
+  // 0.5.44 之前的代码:
+  if repo, ok := strings.CutSuffix(rest, "/blobs/uploads"); ok && repo != "" {
+      ...
+      h.uploadStart(w, r)
+  }
+  ```
+
+  OCI spec §5.2 / docker daemon / skopeo **都会**发送 POST 到 `/v2/<repo>/blobs/uploads/`(**带尾斜杠**)。`strings.CutSuffix(rest, "/blobs/uploads")` 只匹配无尾斜杠的写法,带尾斜杠的请求 fall through 到 dispatcher 末尾,被 `writeV2Error(... NAME_UNKNOWN ...)` 拒掉。**Location header 还没机会发,客户端就拿到 404 + JSON 错误体**(没有 `Location` header)。
+
+  改为同时接受两种写法:
+  ```go
+  if repo, ok := strings.CutSuffix(rest, "/blobs/uploads/"); ok && repo != "" { ... }  // 带尾斜杠
+  if repo, ok := strings.CutSuffix(rest, "/blobs/uploads");  ok && repo != "" { ... }  // 无尾斜杠(兼容)
+  ```
+
+### 影响范围(升级须知)
+
+- **行为变化**:`POST /v2/<repo>/blobs/uploads/`(带尾斜杠,OCI spec 推荐)从**404 NAME_UNKNOWN** 变成 **202 Accepted + Location header**(绝对 URL,见 0.5.44)。
+- **数据兼容**:完全兼容,无 SQLite / 凭据库 / 镜像存储层面的改动
+- **客户端兼容**:docker daemon / skopeo / regsync 现在都能正常 upload blob;`docker push` / `docker pull` 行为不变(daemon 老版本就用带尾斜杠)。
+
+---
+
 ## [0.5.44] - 2026-09-29
 
 本轮主题:**修复 Location header 必须是绝对 URL**(原 3 处全是相对路径,导致严格客户端如 skopeo 直接报错)。来自 regsync 迁移测试的反馈 —— 实际是 Cairn 的 spec 实现偏差。
