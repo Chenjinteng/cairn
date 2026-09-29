@@ -6,6 +6,13 @@
  *
  * **深浅两套必须一一对应**：`[data-theme='dark']` 要覆盖 `:root` 里的每一个 token。
  * 漏掉的那个会继续用浅色值，表现为"某个角落突然是白的"，而且不会有任何报错。
+ *
+ * v0.5.37：UI 改版 — 暖米底色（与 docs/design/cairn-brand.html 一致）+ 三字体系统。
+ *   - `--color-background-body` 浅色 #f2f4f7 → #f7f5f0(暖米)
+ *   - `--color-border-warm` 浅色 #eaecf0 → #e9e3d6(暖灰边线)
+ *   - 新增 `--font-display`（DM Serif Display）/ `--font-mono`（JetBrains Mono）
+ *   - 新增 `--radius-lg: 12px`，KPI 卡 / 面板统一上提到 12px（与 § 4 Surfaces 对齐）
+ *   - 字段 key / hash / digest 默认改用 mono（与 § 2 Typography 对齐）
  */
 :root {
   /* 让原生滚动条、表单控件跟随主题，否则深色页面上会插着一根亮滚动条。 */
@@ -54,7 +61,8 @@
   /* 失败态的浅色底块（错误详情之类）。 */
   --color-fail-bg: #f43b2c14;
 
-  --color-background-body: #f2f4f7;
+  --color-background-body: #f7f5f0;
+  --color-border-warm: #e9e3d6;
   --color-side-nav-text: #475468;
   --color-side-nav-text-active: #0d9488;
   --color-side-nav-bg: #ffffff;
@@ -62,13 +70,30 @@
   --color-side-nav-active-bg: #0d948814;
 
   --radius-sm: 6px;
-  --radius-md: 8px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+
+  /* v0.5.37：三字体 — 与 docs/design/cairn-ui-design.html § 2 Typography 对齐。
+   * 三字体用途：
+   *   --font-display → hero / 页面大数字（DM Serif Display，44px 用）
+   *   --font-sans    → UI 主字体（Outfit；CDN 失败 fallback 到系统栈）
+   *   --font-mono    → hash / digest / 时间戳 / id / 等宽数据
+   *
+   * Outfit 通过 web/index.html <link> 加载；font-display: swap 让 CDN 失败时
+   * 浏览器立刻用系统栈渲染，不阻塞首屏。深色与浅色共用同一组字体 token。
+   */
+  --font-sans: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  --font-display: 'DM Serif Display', Georgia, 'Times New Roman', serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   /*
    * 顶栏下方那道极淡的内阴影。做成 token 是因为深色下要换：黑色阴影压在深色底上
    * 等于没有，得加深才保得住那点层次。
    */
-  --shadow-inset: rgba(0, 0, 0, 0.03);
+  --shadow-inset: rgba(0, 0, 0, 0.04);
+  /* v0.5.37：行 hover / 卡片浮起 — 0 1px 2px 暖中性阴影 */
+  --shadow-card: 0 1px 2px rgba(20, 23, 30, 0.05);
 }
 
 /*
@@ -120,6 +145,7 @@
   --color-fail-bg: #ff6b5e1f;
 
   --color-background-body: #0f131a;
+  --color-border-warm: #2a313d;
   --color-side-nav-text: #aab6c8;
   --color-side-nav-text-active: #2dd4bf;
   --color-side-nav-bg: #171b24;
@@ -127,6 +153,8 @@
   --color-side-nav-active-bg: #2dd4bf1f;
 
   --shadow-inset: rgba(0, 0, 0, 0.4);
+  /* 深色下卡片浮起阴影要更深一档（黑底叠黑等于没有） */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.6);
 }
 
 * {
@@ -143,9 +171,10 @@ body,
 body {
   background: var(--color-background-body);
   color: var(--color-text-1);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
-    'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  /* v0.5.37：UI 主字体走 Outfit，CDN 失败时降级到系统栈（font-display: swap）。 */
+  font-family: var(--font-sans);
   font-size: 14px;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -156,6 +185,14 @@ body {
   white-space: nowrap;
 }
 
+/* v0.5.37：mono 优先走 JetBrains Mono（CDN 不可达时降级到系统 mono 栈） */
 .mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
+}
+
+/* v0.5.37：display 字体（页面大标题 / hero 使用） */
+.display {
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: -0.02em;
 }

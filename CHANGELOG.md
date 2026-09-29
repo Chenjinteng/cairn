@@ -6,6 +6,62 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.37] - 2026-09-29
+
+本轮主题:**UI 改版 —— 全面采用 `docs/design/cairn-ui-design.html` 设计稿(暖米底色 + 三字体 + 圆角/阴影 token 化)。** `cairn` 仍是 module path / 二进制名 / 内部代号,产品面对用户时仍叫 Cairn。
+
+### 新增
+
+- **Outfit 字体作为 UI 主字体引入**(`web/index.html` `<link>`):
+
+  设计稿 § 2 Typography 明确把 Outfit 列为 UI 主字体(5 个 weight:300/400/500/600/700),与现有 antd UI 风格匹配。**通过 Google Fonts CDN + `font-display: swap` 加载**,CDN 失败时降级到系统栈(`-apple-system, BlinkMacSystemFont, PingFang SC, …`),不白屏也不显示空白字。`docs/design/` 已整合的设计稿(commit `21a9198`)是 token 取值的唯一来源。
+
+- **`--font-sans` / `--font-display` / `--font-mono` 三个字体 token**(`web/src/theme.css`):
+
+  - `--font-sans: 'Outfit', -apple-system, BlinkMacSystemFont, 'PingFang SC', …` —— 供 body 字体栈使用
+  - `--font-display: 'DM Serif Display', Georgia, 'Times New Roman', serif` —— 供 `.display` 类使用(hero / 页面大数字)
+  - `--font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace` —— 供 `.mono` 类(hash / digest / 时间戳)使用
+
+  新增 `.display` CSS 类(走 `--font-display` + `font-weight: 400` + `letter-spacing: -0.02em`),后续 hero 用得上。深色与浅色共用同一组字体 token。
+
+### 变更
+
+- **暖米底色 / 暖灰边线主题对齐设计稿 § 1 Color**(`web/src/theme.css` + `web/src/main.tsx` `LIGHT_TOKENS`):
+
+  - 浅色 `--color-background-body`: `#f2f4f7` → `#f7f5f0`(暖米);深色保持 `#0f131a`
+  - 浅色 `--color-border-warm`: `#eaecf0` → `#e9e3d6`(暖灰);深色新增 `#2a313d`
+  - antd `ConfigProvider` `LIGHT_TOKENS`: `colorBgLayout` `#f2f4f7` → `#f7f5f0`、`colorBorder` `#eaecf0` → `#e9e3d6`
+
+  **意图**:与 `docs/design/cairn-brand.html` 一致的「纸张感」底色,配合暖灰边线让数据密集区(表格 / 表单 / KPI 卡)有更柔和的视觉边界。**KPI 卡 / 表格内部仍走纯白**(`--color-bg-1: #ffffff`),不让数据读起来累。
+
+- **圆角 / 阴影 token 化对齐设计稿 § 4 Surfaces**(`web/src/theme.css` + `web/src/app.css`):
+
+  - 新增 `--radius-lg: 12px`(面板 / hero 用)
+  - `--radius-md`: `8px` → `10px`(KPI 单卡用,本仓库一致)
+  - `--radius-sm`: 6px(小件 / icon 保留)
+  - 新增 `--shadow-card: 0 1px 2px rgba(20, 23, 30, 0.05)`(浅色)/ `0 1px 2px rgba(0, 0, 0, 0.6)`(深色,黑底叠黑等于没有,要加深)
+  - `.panel` 圆角 `var(--radius-md)` → `var(--radius-lg)`(10 → 12px),与设计稿「容器 12 / 单卡 10」的分档一致
+
+- **body 字体栈 / 行高调整**(`web/src/theme.css`):
+
+  - `font-family` 从硬编码系统栈 → `var(--font-sans)`(Outfit 主 + 系统栈兜底)
+  - 新增 `line-height: 1.5`(暖米底色下读感更松)
+
+- **版本号同步**(按 AGENTS.md「一次改动要同时更新这几处」):`internal/version/version.go`、`.env.example` 的 `IMAGE`、`docker-compose.yml` 的 `${IMAGE:-…}`、README 「当前状态」+「当前版本」、Makefile `IMAGE ?=`、CHANGELOG 顶部节标题 全部 → `0.5.37`。
+
+### 文档
+
+- **`docs/design/` 整合**(本轮未单独进位,见 commit `21a9198`):把品牌稿 / UI 设计稿 / 6 页 teal 实际样子原型(7 个 HTML 文件共 ~107 KB)集中到 `docs/design/`,作为 0.5.37 token 取值的事实来源,README 路径修复。
+
+### 影响范围(升级须知)
+
+- **行为变化**:无 —— 仅视觉层(token + 字体 + 圆角),API / 数据 / 后端逻辑全部不动。
+- **首屏**:Google Fonts CDN 加载 ≈ 50 KB(Outfit 5 weight)+ DM Serif Display ≈ 12 KB + JetBrains Mono ≈ 18 KB,`font-display: swap` 让首字不阻塞。**离线 / 防火墙环境自动降级到系统栈**,视觉接近但不字面一致。
+- **浏览器兼容**:`font-display: swap` 要求 Safari 11.1+ / Chrome 60+ / Firefox 58+ / Edge 17+;老版本浏览器会走 FOIT(Flash of Invisible Text)约 100ms,可接受。**没有 fallback 到 `block`** —— 因为那会阻塞首屏。
+- **`cairn-mark.tsx` 颜色未动**:4 个硬编码 hex(`#0d9488` / `#f59e0b` / `#5eead4` / `#fbbf24`)与 `docs/design/cairn-brand.html` § Brand 色定义字面一致,故意不跟随 token(品牌色不应当被主题切换改变)。本轮不动,留待 0.5.x 后续优化。
+
+---
+
 ## [0.5.36] - 2026-09-29
 
 本轮主题:**统一 SQLite DB 文件名 `cairn.db` → `cairn.db`(与产品名对齐,v0.5.21 起的「image / container / service = cairn」命名一致)+ 顶部导航 Tab 顺序按「查/操作 → 观测 → 管理」重排**。
