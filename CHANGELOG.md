@@ -147,6 +147,20 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 **影响范围(升级须知)**:侧栏从"装饰性 UI"变成"实际控制内容区"的唯一入口 —— 时间窗等控件的位置变了(从页头移到侧栏),操作按钮位置全部保留在页头不变。**没有 API / 数据 / 后端逻辑改动,升级无需迁移**。
 
+### 文档(0.5.37.5)
+
+- **新增 Cairn 产品介绍页 `docs/product/cairn-intro.html`**:
+
+  面向读者的单文件产品介绍页 —— 自包含(内联 CSS + 内联 SVG),外部网络依赖只有 Google Fonts 字体;视觉整页 1:1 继承 `docs/design/cairn-brand.html`(`:root` token 全套:暖米底色 / Teal+Amber 双色 / 三字体 / 圆角与阴影;`.card` / `.const-list` / `.version-badge` 等组件样式复用,Logo mark 复用同一套 SVG 几何)。内容为 hero + 7 段:这是什么(定位 + 与 registry-manager 的 4 条关系:兼容 / 视觉一致 / 不是 fork / 不追版本号)→ 设计目标(4 张卡)→ 能力地图(8 张卡:数据平面 / 管理平面 / 前端 / 工程化,带 `/v2/*` `repos/ · blobs/ · uploads/` 等 mono 标签)→ 单二进制架构(`clients` → `:8787` → `internal/` → `/app/data` 四行流转图)→ 快速开始(4 行 compose 起服务 + 3 张运维卡:数据目录 / 配置分层 / 端口两层)→ 边界(6 项不做 + amber callout 说明 `/v2/*` 当前匿名)→ 延伸阅读(7 张卡:设计资产总览 / 品牌稿 / UI 设计稿 / 页面原型 / ROADMAP / CHANGELOG / README)。
+
+- **落位:新建 `docs/product/`,与 `docs/design/` 平行**:
+
+  `design/` 收纳品牌与界面设计资产(品牌稿 / UI 设计稿 / 页面原型),`product/` 收纳面向读者的产品文档 —— 避免把产品文档塞进设计资产目录,语义干净,后续产品向文档继续放这里。介绍页本身自包含单文件、与落位解耦:以后要挂内网 URL 或移动位置,成本都低。
+
+- **README「品牌资产」小节补入口**:在三份设计稿条目之后加一行「产品介绍页」链接;不改 `docs/design/index.html`,避免污染设计枢纽。
+
+- **本轮不动版本常量**:纯文档新增,不引新功能,`internal/version/version.go` 保持 `0.5.37`。
+
 ## [0.5.36] - 2026-09-29
 
 本轮主题:**统一 SQLite DB 文件名 `cairn.db` → `cairn.db`(与产品名对齐,v0.5.21 起的「image / container / service = cairn」命名一致)+ 顶部导航 Tab 顺序按「查/操作 → 观测 → 管理」重排**。

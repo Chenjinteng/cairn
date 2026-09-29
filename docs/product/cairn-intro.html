@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cairn — 产品介绍 / Product Overview</title>
+<meta name="description" content="Cairn(cairn)产品介绍 —— 轻量级容器镜像基础设施平台:单进程单二进制,完整实现 Docker Registry HTTP API V2,自带管理控制台。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f7f5f0;
+    --surface: #ffffff;
+    --line: #e9e3d6;
+    --line-soft: #f0ead9;
+    --ink: #14171e;
+    --ink-mid: #3a4256;
+    --ink-soft: #7c7a72;
+    --primary: #0d9488;
+    --primary-deep: #0f766e;
+    --primary-tint: #ccfbf1;
+    --accent: #f59e0b;
+    --accent-deep: #d97706;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 15px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    background-image:
+      radial-gradient(at 8% 0%, rgba(13, 148, 136, 0.04) 0px, transparent 50%),
+      radial-gradient(at 100% 100%, rgba(245, 158, 11, 0.05) 0px, transparent 50%);
+    min-height: 100dvh;
+  }
+  .wrap {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 80px 32px 100px;
+  }
+
+  /* ── Hero ── */
+  .hero {
+    display: flex;
+    align-items: center;
+    gap: 48px;
+    padding-bottom: 72px;
+    border-bottom: 1px solid var(--line);
+  }
+  .hero-mark { flex: 0 0 180px; }
+  .hero-mark svg { width: 180px; height: 180px; display: block; }
+  .hero-text { flex: 1; }
+  .eyebrow {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    color: var(--primary-deep);
+    text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+  h1.wordmark {
+    font-family: 'Outfit', sans-serif;
+    font-weight: 600;
+    font-size: 76px;
+    line-height: 1;
+    letter-spacing: -0.03em;
+    color: var(--ink);
+    margin-bottom: 18px;
+  }
+  h1.wordmark .dot { color: var(--accent); }
+  .tagline {
+    font-size: 17px;
+    color: var(--ink-mid);
+    margin-bottom: 6px;
+    font-weight: 400;
+    letter-spacing: -0.005em;
+  }
+  .tagline-cn {
+    font-size: 14px;
+    color: var(--ink-soft);
+    letter-spacing: 0.02em;
+  }
+  .version-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 22px;
+    padding: 4px 12px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    font-size: 12px;
+    color: var(--ink-soft);
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .version-badge::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--primary);
+  }
+
+  /* ── Hero chips ── */
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 11px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    font-size: 12px;
+    color: var(--ink-mid);
+  }
+  .chip::before {
+    content: "";
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--primary);
+    opacity: 0.75;
+  }
+
+  /* ── Sections ── */
+  section { padding: 56px 0; border-bottom: 1px solid var(--line); }
+  section:last-of-type { border-bottom: none; }
+  h2 {
+    font-family: 'Outfit', sans-serif;
+    font-weight: 500;
+    font-size: 26px;
+    letter-spacing: -0.015em;
+    color: var(--ink);
+    margin-bottom: 8px;
+  }
+  .h-sub {
+    font-size: 13px;
+    color: var(--ink-soft);
+    margin-bottom: 28px;
+    font-family: 'JetBrains Mono', monospace;
+    letter-spacing: 0.02em;
+  }
+  p.body {
+    color: var(--ink-mid);
+    max-width: 640px;
+    margin-bottom: 24px;
+  }
+  p.body strong { color: var(--ink); font-weight: 500; }
+  code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.9em;
+    background: var(--line-soft);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 1px 5px;
+    color: var(--primary-deep);
+    white-space: nowrap;
+  }
+
+  /* ── Relation list (registration vs registry-manager) ── */
+  .const-list { list-style: none; max-width: 720px; }
+  .const-list li {
+    display: grid;
+    grid-template-columns: 24px 1fr;
+    gap: 14px;
+    padding: 14px 0;
+    border-bottom: 1px dashed var(--line);
+    font-size: 14px;
+  }
+  .const-list li:last-child { border-bottom: none; }
+  .rel-mark {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    font-weight: 500;
+    text-align: center;
+  }
+  .rel-mark.ok { color: var(--primary-deep); }
+  .rel-mark.no { color: var(--ink-soft); }
+  .const-label { color: var(--ink); font-weight: 500; margin-bottom: 2px; }
+  .const-detail { color: var(--ink-soft); font-size: 13px; }
+
+  /* ── Cards (goals / capabilities / ops) ── */
+  .goal-grid, .cap-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+  .op-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 16px; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 24px 26px;
+    transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+  }
+  .card:hover {
+    transform: translateY(-2px);
+    border-color: #ddd5c4;
+    box-shadow: 0 10px 24px rgba(20, 23, 30, 0.05);
+  }
+  .op-grid .card { padding: 20px 22px; }
+  .card-num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--primary-deep);
+    margin-bottom: 10px;
+  }
+  .card-tag {
+    display: inline-block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--primary-deep);
+    background: var(--primary-tint);
+    border-radius: 4px;
+    padding: 1px 7px;
+    margin-bottom: 10px;
+    letter-spacing: 0.01em;
+  }
+  .card-title { font-size: 15px; font-weight: 500; color: var(--ink); margin-bottom: 6px; }
+  .card-detail { font-size: 13px; color: var(--ink-soft); line-height: 1.65; }
+
+  /* ── Architecture stack ── */
+  .arch {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 8px 26px;
+  }
+  .arch-row {
+    display: grid;
+    grid-template-columns: 150px 1fr;
+    gap: 20px;
+    align-items: baseline;
+    padding: 18px 0;
+    border-bottom: 1px dashed var(--line);
+  }
+  .arch-row:last-child { border-bottom: none; }
+  .arch-key {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--primary-deep);
+  }
+  .arch-val { font-size: 13.5px; color: var(--ink-mid); }
+  .foot-note { margin-top: 14px; font-size: 12.5px; color: var(--ink-soft); }
+
+  /* ── Code card ── */
+  .code-card {
+    background: #14171e;
+    border: 1px solid #2a2f3d;
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .code-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 18px;
+    border-bottom: 1px solid #2a2f3d;
+  }
+  .code-bar .d { width: 10px; height: 10px; border-radius: 50%; }
+  .code-bar .d.r { background: #f87171; }
+  .code-bar .d.y { background: #fbbf24; }
+  .code-bar .d.g { background: #34d399; }
+  .code-title {
+    margin-left: 8px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.45);
+  }
+  .code-card pre {
+    padding: 20px 22px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    line-height: 1.95;
+    color: #e5e7eb;
+    overflow-x: auto;
+  }
+  .code-card .cmt { color: rgba(255, 255, 255, 0.35); }
+
+  /* ── Out-of-scope list ── */
+  .no-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0 24px; }
+  .no-item {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 12px 0;
+    border-bottom: 1px dashed var(--line);
+    font-size: 14px;
+    color: var(--ink-mid);
+  }
+  .no-mark {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--ink-soft);
+  }
+  .callout {
+    margin-top: 26px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    border-radius: 12px;
+    padding: 18px 22px;
+    max-width: 720px;
+  }
+  .callout-title { font-size: 13.5px; font-weight: 500; color: var(--ink); margin-bottom: 6px; }
+  .callout-body { font-size: 13px; color: var(--ink-soft); }
+
+  /* ── Further reading ── */
+  .links { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+  .link-card {
+    display: block;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 20px 22px;
+    text-decoration: none;
+    color: inherit;
+    transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+  }
+  .link-card:hover {
+    transform: translateY(-2px);
+    border-color: var(--primary);
+    box-shadow: 0 10px 24px rgba(13, 148, 136, 0.08);
+  }
+  .link-title {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--ink);
+    margin-bottom: 4px;
+  }
+  .link-title::after {
+    content: "→";
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--primary-deep);
+  }
+  .link-path {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11.5px;
+    color: var(--ink-soft);
+    margin-bottom: 6px;
+  }
+  .link-desc { font-size: 12.5px; color: var(--ink-soft); }
+
+  /* ── Footer ── */
+  footer {
+    margin-top: 80px;
+    padding-top: 32px;
+    border-top: 1px solid var(--line);
+    color: var(--ink-soft);
+    font-size: 12px;
+    display: flex;
+    justify-content: space-between;
+  }
+
+  /* ── Mobile ── */
+  @media (max-width: 720px) {
+    .wrap { padding: 48px 20px 60px; }
+    .hero { flex-direction: column; align-items: flex-start; gap: 28px; padding-bottom: 48px; }
+    .hero-mark { flex: 0 0 auto; }
+    .hero-mark svg { width: 120px; height: 120px; }
+    h1.wordmark { font-size: 56px; }
+    section { padding: 40px 0; }
+    .goal-grid, .cap-grid, .op-grid, .no-grid, .links { grid-template-columns: 1fr; }
+    .arch-row { grid-template-columns: 1fr; gap: 6px; }
+    footer { flex-direction: column; gap: 6px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ═══════ HERO ═══════ -->
+  <div class="hero">
+    <div class="hero-mark">
+      <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-label="Cairn mark">
+        <rect x="6" y="46" width="52" height="12" rx="3" fill="#0d9488"/>
+        <rect x="14" y="32" width="36" height="10" rx="2.5" fill="#0d9488"/>
+        <rect x="22" y="20" width="20" height="9" rx="2" fill="#0d9488"/>
+        <circle cx="32" cy="10" r="3.5" fill="#f59e0b"/>
+      </svg>
+    </div>
+    <div class="hero-text">
+      <div class="eyebrow">Product Overview · 产品介绍</div>
+      <h1 class="wordmark">Cairn<span class="dot">.</span></h1>
+      <div class="tagline">Lightweight Container Image Infrastructure</div>
+      <div class="tagline-cn">轻量级容器镜像基础设施平台</div>
+      <div class="version-badge">v0.5.37 · 单进程单二进制</div>
+      <div class="chips">
+        <span class="chip">单进程单二进制</span>
+        <span class="chip">scratch 镜像 ~15 MB</span>
+        <span class="chip">无外部服务依赖</span>
+        <span class="chip">一次管理一个 registry</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════ WHAT IT IS ═══════ -->
+  <section>
+    <h2>这是什么</h2>
+    <div class="h-sub">// 定位 / What it is</div>
+    <p class="body">
+      Cairn 是一个<strong>可独立部署的容器镜像仓库</strong>:完整实现 CNCF Distribution(Docker Registry HTTP API V2),
+      自带管理控制台。它只有<strong>一个进程、一个二进制、一个 registry</strong> —— 起在哪儿,镜像就存在哪儿;
+      浏览器打开同一个端口,就是管理界面。
+    </p>
+    <p class="body">
+      cairn 是内部代号(module path / 二进制名),产品面对用户时称 Cairn。行为与 API 与 registry-manager 对齐,
+      但代码是独立的 —— 两句话说完两者的关系:
+    </p>
+    <ul class="const-list">
+      <li>
+        <div class="rel-mark ok">✓</div>
+        <div>
+          <div class="const-label">行为 / API 对齐</div>
+          <div class="const-detail">浏览镜像、查看每个 tag 的 digest / 架构 / 层数 / 体积 / 构建时间、复制 docker pull、按 digest 删除 manifest —— 语义与它一致。</div>
+        </div>
+      </li>
+      <li>
+        <div class="rel-mark ok">✓</div>
+        <div>
+          <div class="const-label">UI 视觉一致</div>
+          <div class="const-detail">控制台的版式、配色与信息密度沿用同一套设计。</div>
+        </div>
+      </li>
+      <li>
+        <div class="rel-mark no">✕</div>
+        <div>
+          <div class="const-label">不是 fork</div>
+          <div class="const-detail">用 Go 从零实现的独立仓库,不共享代码,也不从它继承历史。</div>
+        </div>
+      </li>
+      <li>
+        <div class="rel-mark no">✕</div>
+        <div>
+          <div class="const-label">不追版本号</div>
+          <div class="const-detail">两者各自演进,发布节奏互不绑定。</div>
+        </div>
+      </li>
+    </ul>
+  </section>
+
+  <!-- ═══════ DESIGN GOALS ═══════ -->
+  <section>
+    <h2>设计目标</h2>
+    <div class="h-sub">// 四条硬约束 / Design goals</div>
+    <div class="goal-grid">
+      <div class="card">
+        <div class="card-num">01</div>
+        <div class="card-title">单进程单二进制</div>
+        <div class="card-detail">运行时不依赖数据库、消息队列、Redis 这类需要运维的外部服务;只依赖 Go 标准库 + chi + x/sync,最终二进制 ~10 MB。</div>
+      </div>
+      <div class="card">
+        <div class="card-num">02</div>
+        <div class="card-title">前后端同源</div>
+        <div class="card-detail">React 前端构建产物经 <code>//go:embed</code> 打进二进制;同一个端口同时提供 /v2/*、/api/* 与页面 —— 没有跨域,也没有第二套部署。</div>
+      </div>
+      <div class="card">
+        <div class="card-num">03</div>
+        <div class="card-title">库式后端</div>
+        <div class="card-detail">cmd/server 只做装配;能力都住在 internal/ 各包(registry / pull / stats / credentials / proxies / webhook),行为修改有唯一落点。</div>
+      </div>
+      <div class="card">
+        <div class="card-num">04</div>
+        <div class="card-title">可观测</div>
+        <div class="card-detail">/healthz 存活、/readyz 就绪,日志走结构化 slog;compose 与 k8s 需要的探针端点开箱即用。</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════ CAPABILITY MAP ═══════ -->
+  <section>
+    <h2>能力地图</h2>
+    <div class="h-sub">// 已实现 / Capability map</div>
+    <div class="cap-grid">
+      <div class="card">
+        <div class="card-tag">/v2/*</div>
+        <div class="card-title">镜像仓库协议</div>
+        <div class="card-detail">实现 catalog、tags/list、manifests(4 种 Accept 类型)、blobs 与 uploads(4 MiB 分块 PATCH / PUT);docker push / pull 与 skopeo 直连均已 roundtrip 验证。</div>
+      </div>
+      <div class="card">
+        <div class="card-tag">repos/ · blobs/ · uploads/</div>
+        <div class="card-title">本地存储</div>
+        <div class="card-detail">registry 内容落文件系统:digest 校验 + 原子写入;容器内固定 /app/data/registry,要让内容独占一块盘,加一条 bind mount 即可。</div>
+      </div>
+      <div class="card">
+        <div class="card-tag">manifest</div>
+        <div class="card-title">清单浏览与删除</div>
+        <div class="card-detail">按仓库 / tag 浏览 digest、架构、层数、体积与构建时间;删除按 digest 执行,执行前先列出同一 digest 的全部 tag 影响面。</div>
+      </div>
+      <div class="card">
+        <div class="card-tag">queue</div>
+        <div class="card-title">拉取队列</div>
+        <div class="card-detail">从上游 registry 拉取镜像:FIFO 队列、单并发执行、可协作式取消;进度用 ring buffer 限制内存占用。</div>
+      </div>
+      <div class="card">
+        <div class="card-tag">AES-256-GCM</div>
+        <div class="card-title">凭据与代理</div>
+        <div class="card-detail">凭据加密落盘(密钥来自 <code>REGISTRY_CREDENTIAL_KEY</code>),支持 Docker Hub / ghcr.io / quay.io 等的 Bearer 令牌流程(含无 scope token);代理库独立成表。</div>
+      </div>
+      <div class="card">
+        <div class="card-tag">SQLite</div>
+        <div class="card-title">热度库</div>
+        <div class="card-detail">SQLite(modernc 纯 Go 实现,无 cgo)记录拉取热度,按镜像与时间窗聚合;数据同样在 /app/data 下,备份数据目录即备份一切。</div>
+      </div>
+      <div class="card">
+        <div class="card-tag">HMAC-SHA256</div>
+        <div class="card-title">Webhook 通知</div>
+        <div class="card-detail">事件出站 POST 带 HMAC-SHA256 签名,接收端走白名单校验;接口响应统一 {success, code, message, data} 信封。</div>
+      </div>
+      <div class="card">
+        <div class="card-tag">React · AntD</div>
+        <div class="card-title">控制台</div>
+        <div class="card-detail">镜像列表 / 镜像拉取 / 镜像热度 / 凭据管理 / 代理管理 / 设置 —— 6 个页面覆盖日常运维。</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════ ARCHITECTURE ═══════ -->
+  <section>
+    <h2>单二进制架构</h2>
+    <div class="h-sub">// 一个进程的四层 / Architecture</div>
+    <div class="arch">
+      <div class="arch-row">
+        <div class="arch-key">clients</div>
+        <div class="arch-val">docker / skopeo / curl 与浏览器 —— 全部指向同一个端口。</div>
+      </div>
+      <div class="arch-row">
+        <div class="arch-key">:8787</div>
+        <div class="arch-val">chi 路由 + slog 结构化日志;数据平面 /v2/*、管理平面 /api/*、Web UI(//go:embed)同源提供。</div>
+      </div>
+      <div class="arch-row">
+        <div class="arch-key">internal/</div>
+        <div class="arch-val">registry(协议与存储) · pull(拉取队列) · stats(热度) · credentials · proxies · webhook</div>
+      </div>
+      <div class="arch-row">
+        <div class="arch-key">/app/data</div>
+        <div class="arch-val">credentials.json · proxies.json · cairn.db · registry/(repos + blobs + uploads)</div>
+      </div>
+    </div>
+    <div class="foot-note">容器内监听端口是编译期常量 8787;对外端口由 compose 的 <code>HOST_PORT</code> 决定(默认 8787)。</div>
+  </section>
+
+  <!-- ═══════ QUICK START ═══════ -->
+  <section>
+    <h2>快速开始</h2>
+    <div class="h-sub">// 一条 compose 起服务 / Quick start</div>
+    <div class="code-card">
+      <div class="code-bar">
+        <span class="d r"></span><span class="d y"></span><span class="d g"></span>
+        <span class="code-title">bash — 部署与探活</span>
+      </div>
+      <pre><span class="cmt"># 数据目录:宿主机侧的数据落点(容器内固定 /app/data)</span>
+mkdir -p /data/cairn
+
+<span class="cmt"># 生成配置(默认值即可跑)</span>
+cp .env.example .env
+
+<span class="cmt"># 构建并启动</span>
+docker compose up -d --build
+
+<span class="cmt"># 探活</span>
+curl -fsS http://localhost:8787/healthz</pre>
+    </div>
+    <div class="op-grid">
+      <div class="card">
+        <div class="card-title">数据目录</div>
+        <div class="card-detail">HOST_DATA_DIR 默认 /data/cairn,挂进容器 /app/data;凭据、代理、热度库、registry 内容全在这里。容器重建不丢数据的前提是卷在。</div>
+      </div>
+      <div class="card">
+        <div class="card-title">配置分层</div>
+        <div class="card-detail">基础设施 env 只有 3 个:PORT、REGISTRY_CREDENTIAL_KEY、CAIRN_ENV;业务配置(仓库地址 / 代理 / 认证 / 保留天数)走设置页,保存即生效。</div>
+      </div>
+      <div class="card">
+        <div class="card-title">端口两层</div>
+        <div class="card-detail">容器内监听固定 8787(不可配);对外端口看 HOST_PORT。要挪数据只改宿主机侧的 HOST_DATA_DIR。</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════ OUT OF SCOPE ═══════ -->
+  <section>
+    <h2>边界</h2>
+    <div class="h-sub">// 刻意不做 / Out of scope</div>
+    <p class="body">这些是明确的「不做」,而不是「还没做」:</p>
+    <div class="no-grid">
+      <div class="no-item"><span class="no-mark">✕</span>登录 / 用户体系 / RBAC</div>
+      <div class="no-item"><span class="no-mark">✕</span>镜像扫描 / CVE 检测</div>
+      <div class="no-item"><span class="no-mark">✕</span>镜像签名 / cosign 集成</div>
+      <div class="no-item"><span class="no-mark">✕</span>多 registry 聚合</div>
+      <div class="no-item"><span class="no-mark">✕</span>配额 / 速率限制</div>
+      <div class="no-item"><span class="no-mark">✕</span>Helm chart / OCI artifact 浏览</div>
+    </div>
+    <div class="callout">
+      <div class="callout-title">数据平面的鉴权现状</div>
+      <div class="callout-body">/v2/* 目前匿名可访问,鉴权仍在 TODO 列表里 —— 生产部署请把它放在内网或反向代理之后,不要裸暴露到公网。</div>
+    </div>
+  </section>
+
+  <!-- ═══════ FURTHER READING ═══════ -->
+  <section>
+    <h2>延伸阅读</h2>
+    <div class="h-sub">// 更多文档 / Further reading</div>
+    <div class="links">
+      <a class="link-card" href="../design/index.html">
+        <div class="link-title">设计资产总览</div>
+        <div class="link-path">docs/design/index.html</div>
+        <div class="link-desc">设计枢纽:品牌、界面与页面原型的入口。</div>
+      </a>
+      <a class="link-card" href="../design/cairn-brand.html">
+        <div class="link-title">品牌规范</div>
+        <div class="link-path">docs/design/cairn-brand.html</div>
+        <div class="link-desc">Mark 几何、色彩、字体与应用规范。</div>
+      </a>
+      <a class="link-card" href="../design/cairn-ui-design.html">
+        <div class="link-title">界面设计</div>
+        <div class="link-path">docs/design/cairn-ui-design.html</div>
+        <div class="link-desc">控制台的版式与组件约定。</div>
+      </a>
+      <a class="link-card" href="../design/demo-A-overview.html">
+        <div class="link-title">页面原型</div>
+        <div class="link-path">docs/design/demo-A-*.html</div>
+        <div class="link-desc">六个页面的静态原型,从 overview 起跳。</div>
+      </a>
+      <a class="link-card" href="../ROADMAP.md">
+        <div class="link-title">路线图</div>
+        <div class="link-path">docs/ROADMAP.md</div>
+        <div class="link-desc">已做 / 在做 / 计划。</div>
+      </a>
+      <a class="link-card" href="../../CHANGELOG.md">
+        <div class="link-title">变更日志</div>
+        <div class="link-path">CHANGELOG.md</div>
+        <div class="link-desc">每个版本改了什么、为什么。</div>
+      </a>
+      <a class="link-card" href="../../README.md">
+        <div class="link-title">README</div>
+        <div class="link-path">README.md</div>
+        <div class="link-desc">部署、配置分层与运维速查。</div>
+      </a>
+    </div>
+  </section>
+
+  <!-- ═══════ FOOTER ═══════ -->
+  <footer>
+    <span>Cairn · cairn · 2026</span>
+    <span>v0.5.37 · docs/product/cairn-intro.html</span>
+  </footer>
+
+</div>
+</body>
+</html>
