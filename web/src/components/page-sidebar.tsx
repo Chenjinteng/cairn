@@ -132,28 +132,36 @@ export default function PageSidebar({ page }: PageSidebarProps) {
 
   return (
     <aside className="app-page-sidebar" aria-label={`${page} sub navigation`}>
-      {groups.map((group) => (
-        <div key={group.label} className="page-sidebar-group">
-          <div className="page-sidebar-group-label">{group.label}</div>
-          {group.items.map((item) => {
-            const itemId = `${group.label}:${item.label}`;
-            const isActive = active === itemId;
-            return (
-              <button
-                key={item.label}
-                type="button"
-                className={`page-sidebar-item${isActive ? ' is-active' : ''}`}
-                onClick={() => setActive(itemId)}
-              >
-                <span className="page-sidebar-item-label">{item.label}</span>
-                {item.badge !== undefined ? (
-                  <span className="page-sidebar-item-badge">{item.badge}</span>
-                ) : null}
-              </button>
-            );
-          })}
-        </div>
-      ))}
+      <div className="page-sidebar-content">
+        {groups.map((group) => (
+          <div key={group.label} className="page-sidebar-group">
+            <div className="page-sidebar-group-label">{group.label}</div>
+            {group.items.map((item) => {
+              const itemId = `${group.label}:${item.label}`;
+              const isActive = active === itemId;
+              return (
+                <button
+                  key={item.label}
+                  type="button"
+                  className={`page-sidebar-item${isActive ? ' is-active' : ''}`}
+                  onClick={() => setActive(itemId)}
+                >
+                  <span className="page-sidebar-item-label">{item.label}</span>
+                  {item.badge !== undefined ? (
+                    <span className="page-sidebar-item-badge">{item.badge}</span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+      {/* v0.5.37：sidebar footer block — 让 grid 撑满 100vh 时底部不再是大段空白。
+          设计稿 § 6 demo 没画 footer，但 grid 撑满是 sidebar 内容少时的预期表现，
+          加 footer 让 sidebar 看起来是"完整结构"而不是"上面 200px + 下面 300px 空白"。 */}
+      <div className="page-sidebar-footer mono">
+        v0.5.37 · © Cairn
+      </div>
     </aside>
   );
 }
