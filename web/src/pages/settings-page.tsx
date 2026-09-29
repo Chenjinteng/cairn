@@ -124,7 +124,11 @@ export default function SettingsPage({
     if (!config) return;
     const m = config.mutable;
     // v0.5.28: 历史值可能还带 http:// 前缀,加载到编辑态时剥掉,完成一次性迁移。
-    setRegistryUrlDraft(stripUrlProtocol(m.registryUrl ?? ''));
+    // v0.5.39: 跟 useEffect 一样的预填逻辑 —— 取消编辑也回到「badge 默认值」,
+    // 而不是回到空字符串(避免「取消后再点编辑又回到自动填」的不一致)。
+    const savedUrl = stripUrlProtocol(m.registryUrl);
+    const autoFilled = !savedUrl && config.url ? stripUrlProtocol(config.url) : savedUrl;
+    setRegistryUrlDraft(autoFilled);
     setRegistryNameDraft(m.registryName ?? '');
     setAllowDeleteDraft(m.allowDelete ?? false);
     setAllowPullDraft(m.allowPull ?? false);
@@ -246,8 +250,14 @@ export default function SettingsPage({
     // v0.5.18（F7）：config 缺失时整页已早退，这里只是防御。
     if (!config) return;
     const m = config.mutable;
-    // v0.5.28: 历史值可能还带 http:// 前缀,加载时剥掉。
-    setRegistryUrlDraft(stripUrlProtocol(m.registryUrl));
+    // v0.5.39: 未配置时表单也跟着 badge 自动填 —— 之前「badge 有 IP / 表单是
+    // 空」观感很怪,改成:m.registryUrl 为空时,用 config.url(后端 r.Host 兜底
+    // 出来的 http://host:port)剥掉协议作为草稿默认值。这样 badge 与表单视觉一致,
+    // 用户「看到什么就改什么」。用户点 Save 且未改动 → 草稿 == 空 → 不写盘;
+    // 用户改后再 Save → 落盘新值,之后草稿来自 mutable.registryUrl(不再自动填)。
+    const savedUrl = stripUrlProtocol(m.registryUrl);
+    const autoFilled = !savedUrl && config.url ? stripUrlProtocol(config.url) : savedUrl;
+    setRegistryUrlDraft(autoFilled);
     setRegistryNameDraft(m.registryName ?? '');
     setAllowDeleteDraft(m.allowDelete ?? false);
     setAllowPullDraft(m.allowPull ?? false);
@@ -499,14 +509,19 @@ export default function SettingsPage({
               label={<span>仓库地址（/前缀）</span>}
               extra={
                 <>
-                  配置本仓库对外暴露的地址（docker login / docker push 用）。示例：<span className="mono">registry.example.com:8787</span> 或 <span className="mono">devhub..io:443</span>。协议 = http（v0.6.0 起可切到 https）,写在前面那个固定 <Tag color="cyan" bordered={false}>http://</Tag> 上,<strong>这里只填 host:port</strong> —— 留空时右上角 badge 同步显示「(未配置)」,不会自动填当前访问地址。
+                  {/* v0.5.39: 改回「自动跟随」语义 —— 刚部署完没填过的话,
+                      表单会用右上角 badge 同一个值(当前访问地址)预填,
+                      做到 badge ↔ 表单视觉一致;点编辑直接覆盖或留默认即可。
+                      留空保存 = 回到「跟随当前访问地址」自动识别。 */}
+                  配置本仓库对外暴露的地址（docker login / docker push 用）。示例：<span className="mono">registry.example.com:8787</span> 或 <span className="mono">devhub..io:443</span>。协议 = http（v0.6.0 起可切到 https）,写在前面那个固定 <Tag color="cyan" bordered={false}>http://</Tag> 上,<strong>这里只填 host:port</strong>。未保存时表单会预填右上角 badge 同一个值（当前访问地址）;点「编辑」直接覆盖即可,留空保存则回归自动识别。
                 </>
               }
             >
               {editing ? (
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                   {/* v0.5.28: addonBefore 把当前协议 (http) 显式画出来,用户不会被「我刚填的为啥报错」困扰;
-                      v0.6.0 加 https 切换时,这个 badge 改成 Select。 */}
+                      v0.6.0 加 https 切换时,这个 badge 改成 Select。
+                      v0.5.39: 草稿默认从 badge 预填(见 useEffect) —— 这里只管受控显示。 */}
                   <Input
                     className="mono"
                     value={registryUrlDraft}
@@ -519,12 +534,18 @@ export default function SettingsPage({
                   />
                 </div>
               ) : (
-                // 只读视图也补上协议前缀,避免用户看到「http://registry.example.com:8787」却找不到它是从哪儿配出来的。
+                // v0.5.39: 只读视图也跟 badge 同步 —— mutable.registryUrl 为空时,
+                // 显示「http://[自动识别的地址]（跟随访问地址,未保存）」,
+                // 让用户一眼知道右上角的 IP 是哪儿来的、点 Edit 真的能改。
                 <ReadonlyValue
                   value={
                     (() => {
-                      const v = config?.mutable.registryUrl ?? '';
-                      return v ? `http://${stripUrlProtocol(v)}` : '(空 — pull 任务回退到 Docker Hub)';
+                      const saved = stripUrlProtocol(config?.mutable.registryUrl ?? '');
+                      if (saved) return `http://${saved}`;
+                      const auto = stripUrlProtocol(config?.url ?? '');
+                      return auto
+                        ? `http://${auto}（跟随访问地址,未保存）`
+                        : '(空 — pull 任务回退到 Docker Hub)';
                     })()
                   }
                   mono

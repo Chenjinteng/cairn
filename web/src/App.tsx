@@ -184,29 +184,18 @@ export default function App({
                v0.5.30: 之前两个独立 span 被 antd Tooltip 包成单一 inline-block,
                父容器的 gap:8px 进不去 —— 「Carin Dev 环境」和「http://...」挤一坨
                看着像少了空格。现在把 url 嵌进主 span 内,括号做天然分隔符。
-               v0.5.38: url 为空(仓库地址未配置)时不再 fallback 到 r.Host,直接显示
-               「(未配置)」,与 settings 页表单保持一致 —— 之前那种「右上角有 IP /
-               表单是空」的不一致观感源自后端的 r.Host 兜底。 */}
+               v0.5.39: 回退 0.5.38 的「未配置」分支 —— 实际上大多数部署场景里
+               都希望 badge 显示当前访问地址(由后端 r.Host 兜底),settings 页表单
+               在编辑态会用同一个值预填,做到视觉一致。 */}
             {config ? (
-              <Tooltip
-                title={
-                  config.url ||
-                  '仓库地址未配置,到「设置 → 仓库连接」填 host:port'
-                }
-              >
+              <Tooltip title={config.url}>
                 <span className="app-registry-name ellipsis">
                   {config.name || '镜像仓库'}
-                  {config.url ? (
-                    <>
-                      {' ('}
-                      <span className="app-registry-url mono" title={config.url}>
-                        {config.url}
-                      </span>
-                      {')'}
-                    </>
-                  ) : (
-                    ' (未配置)'
-                  )}
+                  {' ('}
+                  <span className="app-registry-url mono" title={config.url}>
+                    {config.url}
+                  </span>
+                  {')'}
                 </span>
               </Tooltip>
             ) : configFailure ? (
