@@ -9,14 +9,27 @@
         Outfit          → UI 主字体（h1/h2/h3/body/button）；5 个 weight（300/400/500/600/700）
         DM Serif Display → hero（页面大数字 44px 用）；1 个 weight
         JetBrains Mono  → hash / digest / 时间戳 / id；3 个 weight（400/500/600）
-      CDN 失败时通过 font-display: swap 走系统栈（theme.css var(--font-sans) / var(--font-mono) /
-      var(--font-display) 的 fallback），不阻塞首屏。
+
+      **不阻塞首屏**：用 `rel="preload" as="style"` 异步预加载，onload 后再切换
+      为真正的 stylesheet。理由是内网 / 受限网络环境（测试 runner 53、企业
+      proxy 等）下 fonts.googleapis.com 可能不可达或极慢 —— 用
+      `<link rel="stylesheet">` 是 render-blocking，会让 chromium 的
+      `domcontentloaded` 永不 fire（实测 30s timeout），导致整页卡白屏。
+      `font-display: swap` + theme.css 的系统栈 fallback 兜底，让 CDN 失败时
+      浏览器立刻用系统栈渲染，不白屏也不显示空白字。
     -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link
+      rel="preload"
+      as="style"
       href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap"
-      rel="stylesheet">
+      onload="this.rel='stylesheet'; this.onload=null;">
+    <noscript>
+      <link
+        href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet">
+    </noscript>
     <script>
       /*
        * 在 React 挂载之前就把主题定下来。
