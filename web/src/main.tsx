@@ -21,16 +21,19 @@ const LIGHT_TOKENS = {
   /*
    * v0.5.22: 与 theme.css 浅色版同步 —— 主色与 info 都换成 Teal 600
    * (#0D9488),跟 Cairn mark 塔身色一致。语义色 success/warning/error 保留。
+   *
+   * v0.5.37：UI 改版 — colorBgLayout 从 #f2f4f7 改成 #f7f5f0(暖米),
+   * colorBorder 从 #eaecf0 改成 #e9e3d6(暖灰边线),与 theme.css 浅色版同步。
    * 字符大小写保留 hex 的 raw 值(未小写),因为 ConfigProvider 的 token
    * 校验对大小写不敏感;但与 theme.css 的小写一致会让「两端不同源」这件事
    * 更显眼,review 时容易发现。
    */
   colorPrimary: '#0d9488',
-  colorBgLayout: '#f2f4f7',
+  colorBgLayout: '#f7f5f0',
   colorBgContainer: '#ffffff',
   colorText: '#1e252e',
   colorTextSecondary: '#475468',
-  colorBorder: '#eaecf0',
+  colorBorder: '#e9e3d6',
   colorSuccess: '#27c274',
   colorWarning: '#faad14',
   colorInfo: '#0d9488',
@@ -38,6 +41,10 @@ const LIGHT_TOKENS = {
 };
 
 const DARK_TOKENS = {
+  /*
+   * v0.5.37：与 theme.css 深色版同步 —— colorBgLayout/colorBorder 与
+   * token 完全一致（参见 theme.css `[data-theme='dark']` 段）。
+   */
   colorPrimary: '#2dd4bf',
   colorBgLayout: '#0f131a',
   colorBgContainer: '#171b24',

@@ -4,6 +4,19 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Cairn</title>
+    <!--
+      v0.5.37：UI 改版 — 三字体，对齐 docs/design/cairn-ui-design.html § 2 Typography。
+        Outfit          → UI 主字体（h1/h2/h3/body/button）；5 个 weight（300/400/500/600/700）
+        DM Serif Display → hero（页面大数字 44px 用）；1 个 weight
+        JetBrains Mono  → hash / digest / 时间戳 / id；3 个 weight（400/500/600）
+      CDN 失败时通过 font-display: swap 走系统栈（theme.css var(--font-sans) / var(--font-mono) /
+      var(--font-display) 的 fallback），不阻塞首屏。
+    -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap"
+      rel="stylesheet">
     <script>
       /*
        * 在 React 挂载之前就把主题定下来。

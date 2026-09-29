@@ -318,7 +318,8 @@
   padding: 4px 0;
   background: var(--color-bg);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  /* v0.5.37：面板 / 容器走 12px，对齐设计稿 § 4 Surfaces（KPI 单卡仍用 --radius-md=10）。 */
+  border-radius: var(--radius-lg);
 }
 
 .drawer-stack {
