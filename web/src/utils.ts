@@ -144,8 +144,11 @@ export function stripUrlProtocol(value: string | null | undefined): string {
  *
  * r.Host 里的端口是**当前操作员的访问路径**(可能经反代/隧道/SSH 端口转发),
  * 不是「对外规范地址」的端口。自动填时把 port 扔掉,留下规范 host。
- * 例:`cairn.t..io:1122` → `cairn.t..io`;`registry.example.com:8787` →
- * `registry.example.com`。如果需要显式指定对外端口(比如非标端口映射),用户手动加。
+ *
+ * v0.5.42: 用户要求「仓库地址」字段**禁止输入端口**,只接受 IP 或域名。
+ * 端口配置统一由 docker-compose 的 HOST_PORT 决定,UI 在「监听端口」字段单独显示。
+ * `hostOnly` 仍保留用于自动填(从 r.Host 剥端口);`HOST_PORT_PATTERN` 已收紧为
+ * 不再允许 `:port` 后缀。
  */
 export function hostOnly(value: string | null | undefined): string {
   const v = String(value ?? '').trim();
@@ -158,8 +161,8 @@ export function hostOnly(value: string | null | undefined): string {
   return v;
 }
 
-/** v0.5.28: 仓库地址校验 —— 字母数字 / [._-] 主机段,可选 :端口。 */
-export const HOST_PORT_PATTERN = /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?(?::\d{1,5})?$/;
+/** v0.5.28 + v0.5.42: 仓库地址校验 —— 只接受 IP / 域名,**禁止端口**。 */
+export const HOST_PORT_PATTERN = /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/;
 
 /** 把任意 Docker Hub 别名归一到真正的 API 主机。 */
 function normalizeDockerHubHost(host: string): string {

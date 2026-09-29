@@ -1179,9 +1179,11 @@ func proxyURLFrom(raw, username, password string) (*url.URL, error) {
 // v0.5.38: 默认从「本仓库 /v2/」改成 Docker Hub 公网 /v2/。原因:
 //   1. 实际场景里代理测试的目的几乎是「能不能出外网」,而不是「能不能到自己」,
 //      用 Docker Hub 更贴合运维直觉。
-//   2. `e.Full.RegistryURL()` 可能是不带 scheme 的裸 hostname（如 `cairn.t..io`）,
-//      直接拼 `/v2/` 会得到 `cairn.t..io/v2/` 这种无 scheme 的 URL,Go 的
+//   2. `e.Full.RegistryURL()` 可能是不带 scheme 的裸 hostname(如配置时
+//      没填 `http://` 前缀),直接拼 `/v2/` 会得到无 scheme 的 URL,Go 的
 //      `http.NewRequest` 会报 `unsupported protocol scheme`,实测踩过。
+//      v0.5.42 之后 UI 已禁止填端口,但裸 hostname(无协议前缀)仍是允许的,
+//      所以这条仍然有用。
 // 之前那种「本仓库 /v2/」在 RegistryURL 有 scheme 且可直连时是有用的,但很少见,
 // 现在统一收敛到 Docker Hub,「要测自己」时显式填完整 URL(含 scheme)。
 func (e *ExtraHandlers) proxyTestTarget(r *http.Request, want string) string {

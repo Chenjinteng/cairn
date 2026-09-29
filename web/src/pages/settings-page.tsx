@@ -151,7 +151,7 @@ export default function SettingsPage({
       const v = registryUrlDraft.trim();
       // v0.5.28: 字段语义改成「裸 host:port」,协议留给 v0.6.0 的 http/https 切换。
       if (v !== '' && !/^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?(?::\d{1,5})?$/.test(v)) {
-        message.error('地址格式:host 或 host:port(如 cairn.t..io 或 cairn.t..io:80),不要带协议;port 是对外端口,不是容器内 8787');
+        message.error('地址格式:只接受 IP 或域名(如 registry.example.com 或 registry.example.com),不要带端口或协议');
         return;
       }
       patch['registry.url'] = v;
@@ -258,11 +258,9 @@ export default function SettingsPage({
     // 用户改后再 Save → 落盘新值,之后草稿来自 mutable.registryUrl(不再自动填)。
     //
     // v0.5.40: 自动填时只取 host、剥端口。config.url 的端口是当前请求的 r.Host
-    // 端口(操作员访问路径,可能经反代/隧道),不是「对外规范地址」的端口。例如部署
-    // 是 80→8787 映射,操作员经 :1122 隧道访问,若自动填「cairn.t..io:1122」
-    // 会误导其他用户去 :1122 —— 但 :1122 是你本机的隧道端口,别人根本到不了。
-    // 剥掉 port 留 host,显示「http://cairn.t..io」(默认 80 端口),需要
-    // 别的对外端口手动加。
+    // 端口(操作员访问路径,可能经反代/隧道),不是「对外规范地址」的端口。
+    // v0.5.42: 校验只接受 IP / 域名(见 utils.ts 的 HOST_PORT_PATTERN),
+    // 端口统一由 docker-compose 配,这里自动填出来的值不带端口。
     const savedUrl = stripUrlProtocol(m.registryUrl);
     const autoFilled = !savedUrl && config.url ? hostOnly(stripUrlProtocol(config.url)) : savedUrl;
     setRegistryUrlDraft(autoFilled);
@@ -514,14 +512,12 @@ export default function SettingsPage({
           <div id="settings-connection" className="settings-anchor">
             {/* 仓库地址 */}
             <Form.Item
-              label={<span>仓库地址（/前缀）</span>}
+              label={<span>仓库地址</span>}
               extra={
                 <>
-                  {/* v0.5.39: 改回「自动跟随」语义 —— 刚部署完没填过的话,
-                      表单会用右上角 badge 同一个值(当前访问地址)预填,
-                      做到 badge ↔ 表单视觉一致;点编辑直接覆盖或留默认即可。
-                      留空保存 = 回到「跟随当前访问地址」自动识别。 */}
-                  配置本仓库对外暴露的地址（docker login / docker push 用）。示例：<span className="mono">cairn.t..io</span>（默认 80）或 <span className="mono">cairn.t..io:1122</span>（非标端口映射）。协议 = http（v0.6.0 起可切到 https）,写在前面那个固定 <Tag color="cyan" bordered={false}>http://</Tag> 上,<strong>这里只填 host[:port]</strong>,port 是<strong>对外端口</strong>(docker-compose 映射的左侧),<strong>不是</strong>容器内 8787。未保存时表单会预填右上角 badge 同一个 host(自动剥端口 —— 你的访问路径端口不等于对外端口);点「编辑」直接覆盖即可,留空保存则回归自动识别。
+                  {/* v0.5.42: 精简 —— 一句话说清用途,不再展开「端口/对外/容器内」细节。
+                    端口由 docker-compose 的 HOST_PORT 决定,UI 在「监听端口」字段单独显示。 */}
+                  供 docker login / docker push / docker pull 使用的对外地址(仅 IP 或域名)。
                 </>
               }
             >
@@ -537,7 +533,7 @@ export default function SettingsPage({
                     disabled={savingBulk}
                     allowClear
                     addonBefore={<Tag color="cyan" bordered={false}>http://</Tag>}
-                    placeholder="registry.example.com:8787"
+                    placeholder="registry.example.com"
                     style={{ maxWidth: 560 }}
                   />
                 </div>

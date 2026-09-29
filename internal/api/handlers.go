@@ -392,23 +392,14 @@ func hostOf(rawURL string) string {
 	return rawURL
 }
 
-// v0.5.28: 仓库地址 = 裸 host[:port],不带 http(s)://。
+// v0.5.28 + v0.5.42: 仓库地址 = 裸 host(只 IP 或域名),不带 http(s):// 也不带端口。
 // 协议留给后续 v0.6.0 的 http/https 切换;现在写死 http。
-// 端口合法区间 1..65535,host 段允许字母数字 . _ -。
-var hostPortRe = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?(?::\d{1,5})?$`)
+// 端口不再接受 —— 端口由 docker-compose 的 HOST_PORT 决定,UI 在「监听端口」字段单独显示。
+// host 段允许字母数字 . _ -,首位与末位必须字母数字(避免 `-.foo` / `foo.-`)。
+var hostPortRe = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$`)
 
 func isValidHostPort(val string) bool {
-	if !hostPortRe.MatchString(val) {
-		return false
-	}
-	// 端口在 1..65535。
-	if i := strings.LastIndexByte(val, ':'); i >= 0 {
-		port, err := strconv.Atoi(val[i+1:])
-		if err != nil || port < 1 || port > 65535 {
-			return false
-		}
-	}
-	return true
+	return hostPortRe.MatchString(val)
 }
 
 // --- inventory ---------------------------------------------------------------
