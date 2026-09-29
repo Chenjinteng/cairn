@@ -62,6 +62,7 @@ import {
   splitRepoTag,
 } from '../utils';
 import type { SidebarGroup, SidebarItem, SidebarSelection } from '../components/page-sidebar';
+import TableSkeleton from '../components/table-skeleton';
 
 interface Props {
   config: AppConfig | null;
@@ -202,6 +203,10 @@ export default function PullPage({ config, sidebarFilter, onPublishGroups }: Pro
   const [jobs, setJobs] = useState<PullJob[]>([]);
   const [error, setError] = useState<ApiResult<unknown> | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // v0.5.41: 首屏拉列表的 loading —— 之前没这个状态,切到本页面时直接显示空表格
+  // + Empty 文案,观感像「坏了」。配上 TableSkeleton 让用户看到「正在拉」。
+  // 用 jobs 为空 + loading=true 作为首屏判定(避免每次轮询都闪骨架)。
+  const [loading, setLoading] = useState(true);
   /**
    * v0.5.18（F2/F6）：配置读不到时这一页的**表单与历史任务仍然可用**（只是拿不到
    * allowPull / host 这些约束），所以不做整页错误态，只加一条提示 + 重试，
@@ -330,6 +335,7 @@ export default function PullPage({ config, sidebarFilter, onPublishGroups }: Pro
     } else {
       setError(result);
     }
+    setLoading(false); // v0.5.41: 首屏/轮询都收尾 —— 即便失败也退掉骨架,展示错误
   }, []);
 
   // 首屏 + 配置就绪后拉一次；后续只在有未完成任务时持续轮询。
@@ -1048,33 +1054,39 @@ export default function PullPage({ config, sidebarFilter, onPublishGroups }: Pro
       ) : null}
 
       <div className="panel">
-        <Table<PullJob>
-          rowKey="id"
-          size="middle"
-          columns={columns}
-          dataSource={visibleJobs}
-          scroll={{ x: 1000 }}
-          pagination={false}
-          expandable={{
-            expandedRowRender: (job) => <JobPhases job={job} />,
-            // 每一行都可展开：成功 / 进行中的任务也常有"看看到底走到哪一层"的需求，
-            // 而且每行都有箭头才不会让人以为"这行点不动"。
-            rowExpandable: () => true,
-            expandedRowKeys: expandedKeys,
-            onExpandedRowsChange: (keys) => setExpandedKeys(keys.map(String)),
-          }}
-          locale={{
-            emptyText: (
-              <Empty
-                description={
-                  jobs.length > 0
-                    ? '当前筛选下没有任务，换个筛选条件试试'
-                    : '还没有任务，填写上方表单加入第一个'
-                }
-              />
-            ),
-          }}
-        />
+        {/* v0.5.41: 首屏 loading 走 TableSkeleton —— 切到本页时直接给骨架占位,
+            不再「空白 → Empty 文案 → 表格」三段闪。后续轮询不闪骨架(loading=false)。 */}
+        {loading && jobs.length === 0 ? (
+          <TableSkeleton rows={6} columns={5} title={false} description={false} />
+        ) : (
+          <Table<PullJob>
+            rowKey="id"
+            size="middle"
+            columns={columns}
+            dataSource={visibleJobs}
+            scroll={{ x: 1000 }}
+            pagination={false}
+            expandable={{
+              expandedRowRender: (job) => <JobPhases job={job} />,
+              // 每一行都可展开：成功 / 进行中的任务也常有"看看到底走到哪一层"的需求，
+              // 而且每行都有箭头才不会让人以为"这行点不动"。
+              rowExpandable: () => true,
+              expandedRowKeys: expandedKeys,
+              onExpandedRowsChange: (keys) => setExpandedKeys(keys.map(String)),
+            }}
+            locale={{
+              emptyText: (
+                <Empty
+                  description={
+                    jobs.length > 0
+                      ? '当前筛选下没有任务，换个筛选条件试试'
+                      : '还没有任务，填写上方表单加入第一个'
+                  }
+                />
+              ),
+            }}
+          />
+        )}
       </div>
 
       <PullPreviewModal

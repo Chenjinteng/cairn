@@ -6,6 +6,41 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.41] - 2026-09-29
+
+本轮主题:**页面切换观感优化 + 刷新页面保留当前 tab**。来自部署测试的体感反馈 ——「页面切换生硬」「刷新就回首页」。轻量改动(纯前端),无新协议、无新功能。
+
+### 修复
+
+- **页面切换淡入动画**(`web/src/app.css`):
+
+  之前 `App.tsx` 用硬 ternary 切页面,React unmount/mount 之间是「啪」一下,没有任何过渡。现在 `.page` 根节点挂 120ms `ease-out` 淡入 + 4px 上移过渡,看起来像「滑入」。CSS animation 只在 mount 时跑一次,后续 `setState` 不会重跑(避免状态变化时也淡入,看起来怪)。`@media (prefers-reduced-motion: reduce)` 下退化为「啪」一下,尊重 OS「减弱动态效果」偏好。
+
+- **当前页面选择 localStorage 持久化**(`web/src/App.tsx`):
+
+  之前刷新或新开 tab 总是回到「镜像列表」,操作员切到「代理管理」按 F5 就跳回首页,反直觉。现在把 `page` 状态写到 localStorage(`cairn-active-page`),首屏恢复上次选择。`isPageKey()` 校验防非法值,隐私模式 / 禁用 localStorage 降级老行为。`pageFilter`(侧栏筛选条件)暂不持久化 —— 改动更大,留待后续。
+
+- **表格 loading 走骨架占位替代裸 spinner**(新增 `web/src/components/table-skeleton.tsx` + `web/src/pages/{images,pull,stats,credentials,proxies}-page.tsx`):
+
+  antd `Table` 的 `loading` 属性只显示一个居中 spinner,视觉上像「页面是空的 / 坏了」。新建 `<TableSkeleton>` 组件,用 antd `Skeleton` 画 N 行表格骨架(列宽不等更接近真实表格),首屏 loading 时直接渲染,数据回来后切换为真实表格。
+
+  - `images-page`:有 `loading` 状态,直接替换
+  - `pull-page`:之前没有,新增 `loading` state(refresh 收尾),首屏走骨架
+  - `stats-page`:3 张子表(top / clients / events)各自走骨架
+  - `credentials-page`:之前没有,新增 `loading` state(禁用管凭据也收尾),首屏走骨架
+  - `proxies-page`:之前没有,新增 `loading` state(禁用管代理也收尾),首屏走骨架
+
+### 影响范围(升级须知)
+
+- **行为变化**:
+    - 刷新或新开 tab,默认仍从「镜像列表」开始;**只有访问过别的页面后再刷新才会保留**(localStorage 第一次没值)
+    - 切页面时看到短暂淡入动画;开「减弱动态效果」的用户仍看到「啪」一下
+    - 首屏访问 5 个表格页(proxies / credentials / pull / stats / images)时,在数据到达前会看到骨架占位(约 50-300ms,取决于网络)
+- **数据兼容**:完全兼容,无 SQLite schema / 凭据库 / 镜像存储层面的改动
+- **其他修复**(0.5.38 / 0.5.39 / 0.5.40 已就位,本轮不动):去外部字体 / Cairn favicon / 代理测试默认 Docker Hub / 「仓库地址」自动填 + HOST_PORT。
+
+---
+
 ## [0.5.40] - 2026-09-29
 
 本轮主题:**修正 0.5.39 自动填地址带错端口(只取 host 剥掉端口)+ 新增 HOST_PORT env 通路让 UI 「监听端口」同时显示「容器内 / 宿主机」两个值。**

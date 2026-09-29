@@ -31,7 +31,7 @@
 3. **库式后端**：HTTP handler 通过 `cmd/server` 装配，业务逻辑在 `internal/` 下，方便后续挂到别人的服务里
 4. **可观测性**：自带 `/healthz` `/readyz`
 
-## 当前状态:v0.5.40(2026-09-29) —— **修正 0.5.39 自动填地址带错端口(只取 host 剥掉端口)+ 新增 HOST_PORT env 通路让 UI「监听端口」同时显示「容器内 / 宿主机」两个值(docker-compose 把 .env 的 HOST_PORT 传给容器内的 cairn 进程)**
+## 当前状态:v0.5.41(2026-09-29) —— **页面切换观感优化:120ms 淡入 + 表格骨架占位替代裸 spinner + 当前页面选择 localStorage 持久化(刷新页面不跳回首页)**
 
 ✅ 已实现（v0.1 – v0.4）：
 
@@ -83,7 +83,7 @@
 4. `README.md` 里所有 `docker build/tag/push` 示例
 5. `CHANGELOG.md` 新增一节
 
-当前版本：`0.5.40`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
+当前版本：`0.5.41`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
 
 ## 项目结构
 

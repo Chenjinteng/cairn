@@ -271,13 +271,28 @@
   scroll-margin-top: 12px;
 }
 
-/* 页面骨架。外边距由 .app-main 的 p-4 提供，页面内不要再加外边距。 */
+/* v0.5.41：页面切换淡入 —— 之前 page 三元 unmount/mount 是「啪」一下,
+ * 配 120ms ease-out 短淡入 + 4px 上移过渡,看起来像「滑入」而不是「硬切」。
+ * 只对 .page 根节点生效(每个页面根 div 都带 .page 类),状态变化不会重跑
+ * —— CSS animation 在 mount 时跑一次就停,后续 setState 不再触发。
+ */
+@keyframes cairn-page-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
 .page {
   display: flex;
   flex-direction: column;
   gap: 16px;
   width: 100%;
   min-width: 0;
+  animation: cairn-page-fade-in 120ms ease-out;
+}
+/* 尊重 OS「减少动画」设置(Windows 设置 → 辅助功能 → 视觉效果;
+ * macOS 系统设置 → 辅助功能 → 显示器 → 减弱动态效果)。这俩用户开了之后
+ * 应该看到「啪」一下而不是淡入 —— 前者对他们更舒服。 */
+@media (prefers-reduced-motion: reduce) {
+  .page { animation: none; }
 }
 
 /*

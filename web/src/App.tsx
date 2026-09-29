@@ -42,6 +42,12 @@ type PageFilter = Record<PageKey, SidebarSelection>;
 /** 页面还没上浮分组数据时用的空数组：常量引用，避免每次渲染换身份。 */
 const NO_GROUPS: SidebarGroup[] = [];
 
+/** v0.5.41:localStorage 反序列化出来的 page key 校验,非法值降级。 */
+const PAGE_KEYS: readonly PageKey[] = ['images', 'stats', 'pull', 'credentials', 'proxies', 'settings'];
+function isPageKey(v: unknown): v is PageKey {
+  return typeof v === 'string' && (PAGE_KEYS as readonly string[]).includes(v);
+}
+
 /** 界面主题。持久化与首屏应用都在 main.tsx / index.html 里，这里只负责展示与切换。 */
 export type ThemeMode = 'light' | 'dark';
 
@@ -75,7 +81,27 @@ export default function App({
   onToggleMode: () => void;
 }) {
   // 两个页面共享同一份清单：切换页面不该重新抓取 registry。
-  const [page, setPage] = useState<PageKey>('images');
+  //
+  // v0.5.41：page 选择持久化到 localStorage —— 之前刷新或新开 tab 总是回到
+  // 「镜像列表」,操作员切到「代理管理」按 F5 就跳回首页,反直觉。现在记住上次
+  // 选中的 page key,首屏恢复。localStorage 读不到 / 解析失败 / 值不是合法
+  // PageKey 都降级到 'images'(老行为),不影响隐私模式或清缓存用户。
+  const [page, setPage] = useState<PageKey>(() => {
+    try {
+      const saved = window.localStorage.getItem('cairn-active-page');
+      if (saved && isPageKey(saved)) return saved;
+    } catch {
+      // 隐私模式 / 禁用存储时 localStorage 会抛错,降级默认首页
+    }
+    return 'images';
+  });
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('cairn-active-page', page);
+    } catch {
+      // 同上,持久化失败不影响主流程
+    }
+  }, [page]);
   const [inventory, setInventory] = useState<Inventory | null>(null);
   // v0.5.37.4：每页 sidebar 的当前选择（groupKey -> itemKey）。
   // stats 的时间窗默认 30 天，跟页面自身的 days 默认值对齐 —— 否则首屏侧栏
