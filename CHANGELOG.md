@@ -79,6 +79,16 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
   **效果**:53 chromium 实测 `domcontentloaded` 1s 内可达;CDN 可达 → Outfit 切到 stylesheet 生效;CDN 不可达 → `font-display: swap` + theme.css `--font-sans` 系统栈 fallback,首屏不白屏也不显示空白字。
 
+### 修复(0.5.37.2)
+
+- **间距对齐设计稿**(commit `aa8ee66`):
+
+  **设计稿的间距规范本来就是对的**(`docs/design/demo-A-*.html` § `.content` `padding: 24px 28px` + § `.page-head` `margin-bottom: 20px`),cairn 0.5.37 漏了这两条 —— 本轮只动 cairn,**未改设计稿**。
+
+  - **右红框违和**(搜索 + 时间窗 + 按钮紧贴 .app-body 顶部):修 `web/src/app.css` `.app-content` 加 `padding: 24px 28px`(原 0)
+  - **page-header 跟下面 KPI cards 紧贴**:修 `.page-header` 加 `margin-bottom: 20px`(原 0)
+  - **左红框违和**(sidebar 内容集中顶部 ~200px + 底部 ~300px 空白):修 `web/src/components/page-sidebar.tsx` 加 `.page-sidebar-footer`(`v0.5.37 · © Cairn`),让 sidebar 看起来是"完整结构"而不是"上短下空"。grid 撑满是 sidebar 内容少时的预期表现;设计稿 demo 没有 footer(因为 demo 写死了 height: 240px),cairn 用 100vh + 内容稀疏,所以**加 footer 块是 cairn 侧的必要补全**。
+
 ## [0.5.36] - 2026-09-29
 
 本轮主题:**统一 SQLite DB 文件名 `cairn.db` → `cairn.db`(与产品名对齐,v0.5.21 起的「image / container / service = cairn」命名一致)+ 顶部导航 Tab 顺序按「查/操作 → 观测 → 管理」重排**。
