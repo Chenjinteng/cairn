@@ -6,6 +6,32 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.46] - 2026-09-29
+
+本轮主题:**补齐 PATCH / GET 上传响应的 `Location` 头** —— 0.5.45 修好 upload-start 后,skopeo 的 POST 已经能拿到 202 + 绝对 Location,但 blob 数据传输(PATCH)完成后仍然报同一个错 `Error determining upload URL: http: no Location header in response`。这次的缺口在 **PATCH 响应**。
+
+### 修复
+
+- **PATCH / GET 上传响应补 `Location` 头**(`internal/registryd/routes.go`):
+
+  UAT 实测证据链(skopeo --debug + cairn 访问日志):4 个 POST 全部 202、4 个 PATCH 全部 202,**之后没有任何 PUT finalize、也没有 manifest PUT** —— skopeo 在 PATCH 之后就放弃了。
+
+  根因:OCI Distribution Spec 要求 **PATCH 202 响应必须带 `Location`**(下一步的上传 URL,服务端可以借机把会话重定位到另一个地址),skopeo/containers-image 传完每段数据后**从 PATCH 响应的 `Location` 头拿 PUT finalize 的地址**,不自己拼 URL。0.5.44 把 POST upload-start / PUT finalize / PUT manifest 三处改成了绝对 Location,唯独漏了 `uploadPatch`(只回了 `Docker-Upload-UUID` + `Range`)。
+
+  为什么 curl 验证 POST 时看起来"已修好":POST 的 Location 确实修好了(0.5.45),skopeo 也正是靠它找到 PATCH 地址的;但 PATCH 响应缺头,下一步就断了。regsync 没撞到这个问题是因为 regclient 自己用 POST 返回的 Location 拼后续 URL,不读 PATCH 响应的 Location —— 两个客户端踩的是同一条 spec 的不同半截。
+
+  修改:
+  - `uploadPatch`:202 响应加 `Location: <scheme>://<host>/v2/<repo>/blobs/uploads/<uuid>`(走 `absoluteLocation`,与 0.5.44 口径一致;我们不重定位会话,原样回传同一上传 URL)+ 显式 `Content-Length: 0`
+  - `uploadGet`:GET 上传进度(204)同样补 `Location`,与 PATCH 口径一致(spec 对 progress 查询响应同样要求)
+
+### 影响范围(升级须知)
+
+- **行为变化**:`PATCH /v2/<repo>/blobs/uploads/<uuid>` 与 `GET /v2/<repo>/blobs/uploads/<uuid>` 的响应多了 `Location` 头(绝对 URL)。请求处理逻辑、存储层、状态码均未变。
+- **数据兼容**:完全兼容,无 SQLite / 凭据库 / 镜像存储层面的改动
+- **客户端兼容**:skopeo 现在能走完 POST → PATCH → **PUT finalize** → manifest PUT 全流程;docker daemon / regsync 行为不变(它们本来就不依赖 PATCH 的 Location)
+
+---
+
 ## [0.5.45] - 2026-09-29
 
 本轮主题:**修正 0.5.44 的 dispatch bug** —— 0.5.44 改了 Location header 但请求根本没到 uploadStart handler,fall through 到了 404 `NAME_UNKNOWN`,所以 Location 头根本不会发出。
