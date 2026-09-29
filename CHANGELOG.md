@@ -6,6 +6,37 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.48] - 2026-09-29
+
+本轮主题:**知名拉取源预置 + 第三方拉取源可配置** —— 用户需求:「这些比较有名的已知的可以预先打到代码中,但是一些外部第三方的我也可能需要,所以我需要有一个入口可以进行修改的」。按 AGENTS.md 的规矩(v0.5.9 起 .env 只留 3 个基础设施变量,业务配置一律走 UI → SQLite settings,新增业务 env 要过「为什么不能走 UI」两道闸),入口落在**设置页**而不是 .env:该配置每次拉取任务热读、无 boot 期约束,UI 改完即生效,不用重建容器。
+
+### 新增
+
+- **`pull.known_hosts` 设置键**(`internal/config/config.go` + `internal/api/handlers.go` + 新文件 `internal/api/knownhosts.go`):
+  - CSV,每条是一个第三方 registry 地址。保存时后端 `normalizeHostCSV` 归一化成 `<scheme>://host[:port]`:显式 scheme 原样生效;裸 host 按与前端 `inferProtocol` **同一套**规则猜协议(无端口 / 443 / 8443 / 5000 → https,其余端口 → http),保证存盘形式和解析器口径永不打架;host 小写化、按 host[:port] 去重(首条生效);路径 / query / 凭据 / 非 http(s) scheme 一律 400 拒绝;上限 64 条。
+  - 空 = 只用内置知名源。`MutableFieldType` 新增 `hostcsv` 校验分支,`GET /api/config` 以 `mutable.pullKnownHosts` 暴露。
+- **设置页「第三方拉取源」字段**(`web/src/pages/settings-page.tsx`):在「拉取平台白名单」同一锚点下;Select tags 模式,下拉候选直接给知名源预置清单,也可手输任意第三方/内网主机;draft / 取消还原 / diff / 一次性 PATCH 与 pullPlatforms 全套同机制。
+- **拉取页镜像名智能解析认自配主机**(`web/src/utils.ts`):新增 `parseKnownHosts(csv)`(与后端归一化同口径的 host→baseUrl 映射);`parseImageReference(raw, userHosts?)` 首段主机**优先**查用户表。补上两个真缺口:①无点内网主机 —— `harbor/team/app:v1` 这种形状内置的点/端口启发式拒认,以前被整个当成 Docker Hub 仓库路径;②强制协议 —— 显式 `http://` 条目可压过内置猜测(甚至压过内置知名源本身,比如给 quay.io 指一个 http 代理)。
+- **知名源预置清单 `PRESET_SOURCES`**(代码内置,即「预先打到代码中」的那部分):Docker Hub / quay.io / ghcr.io / mcr.microsoft.com / registry.k8s.io / public.ecr.aws / gcr.io / registry.access.redhat.com,带中文标注,供拉取页与设置页下拉共用。
+- **测试**:`internal/api/knownhosts_test.go` 19 断言(归一化:裸 host / 端口猜测 / 显式 scheme / 小写 / 去重 / 尾斜杠;拒绝:路径 / 凭据 / ftp / 空 host / `://` 垃圾 / query / 64 条上限);前端冒烟(node `ts.transpileModule` 跑 utils.ts 真身,21 断言):parseKnownHosts 口径 + userHosts 优先 + 主机大小写不敏感 + Docker Hub 语义不受影响 + 无表时行为与 0.5.47 完全一致。
+
+### 变更
+
+- **拉取页「来源 registry 地址」输入框 → AutoComplete**(`web/src/pages/pull-page.tsx`):候选 = 内置知名源 + 设置页自配第三方源(去重),仍可自由输入任意 `http(s)://` 地址;三处 `parseImageReference` 调用(目标名自动跟随 / 入队解析 / 表单校验)全部传入用户宿主表。
+
+### 修复
+
+- **「来源 registry 地址」自诞生起就缺 `name="sourceUrl"` 绑定**:界面上能填、校验规则也在,但值永远进不了 form store —— 高级选项的「手动覆盖来源」**从未生效过**(`handleQueue` 里 `values.sourceUrl` 恒为 undefined,所有任务都走镜像名自动推断)。本轮补上绑定,该字段第一次真正可用。
+
+### 影响范围(升级须知)
+
+- **行为变化**:镜像名前缀命中 `pull.known_hosts` 主机时按配置解析源(此前无点主机被误当 Docker Hub 路径);拉取页手动填「来源 registry 地址」现在真的生效。
+- **不变**:未配置 `pull.known_hosts` 时,内置知名源与点/端口启发式的识别行为与 0.5.47 完全一致;后端 pull executor 不动(sourceUrl / sourceRef 由前端拆好传入)。
+- **数据兼容**:新键写 SQLite settings 表,老数据无迁移;无存储 / 凭据库层面改动。
+- **已知遗留(下一轮候选)**:凭据库「测试」按钮(`TestCredential`)对 Bearer 型 registry 仍显示 401(0.5.47 已记录,未动)。
+
+---
+
 ## [0.5.47] - 2026-09-29
 
 本轮主题:**匿名 Probe 接受 401+Bearer challenge** —— 用户以 quay.io 为拉取源做预检时报 `registry: GET /v2/: 401 unauthorized (bearer token fetch failed: TOKEN_FETCH_FAILED: token endpoint returned 401 url=https://quay.io/v2/auth)`。Docker Hub 匿名一直能过,quay.io 匿名必挂。

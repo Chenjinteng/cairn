@@ -76,6 +76,24 @@ const KNOWN_HOSTS = new Set([
   'registry.access.redhat.com',
 ]);
 
+/**
+ * v0.5.48: 知名公网拉取源预置清单。
+ *
+ * 用在两处:拉取页「来源 registry 地址」的 AutoComplete 选项、设置页
+ * 「第三方拉取源」tags 输入的候选。协议识别本身不依赖这份清单
+ * (KNOWN_HOSTS + 点/端口启发式已覆盖),它只负责「省打字 + 可发现」。
+ */
+export const PRESET_SOURCES: Array<{ value: string; label: string }> = [
+  { value: 'https://registry-1.docker.io', label: 'Docker Hub · registry-1.docker.io' },
+  { value: 'https://quay.io', label: 'Quay · quay.io' },
+  { value: 'https://ghcr.io', label: 'GitHub Container Registry · ghcr.io' },
+  { value: 'https://mcr.microsoft.com', label: 'Microsoft Container Registry · mcr.microsoft.com' },
+  { value: 'https://registry.k8s.io', label: 'Kubernetes 官方镜像 · registry.k8s.io' },
+  { value: 'https://public.ecr.aws', label: 'AWS ECR Public · public.ecr.aws' },
+  { value: 'https://gcr.io', label: 'Google Container Registry · gcr.io' },
+  { value: 'https://registry.access.redhat.com', label: 'Red Hat · registry.access.redhat.com' },
+];
+
 /** Docker Hub 的各个别名，以及它们真正的 API 主机。 */
 const DOCKER_HUB_HOSTS = new Set([
   'docker.io',
@@ -101,6 +119,41 @@ function inferProtocol(host: string): 'http' | 'https' {
   const port = Number(portMatch[1]);
   if (port === 443 || port === 8443 || port === 5000) return 'https';
   return 'http';
+}
+
+/**
+ * v0.5.48: `pull.known_hosts`(CSV,设置页「第三方拉取源」)→ host[:port] → baseUrl 映射。
+ *
+ * 与后端 normalizeHostCSV 同一套归一规则:显式 scheme 原样生效;裸 host 按
+ * inferProtocol 猜协议(无端口/443/8443/5000 → https,其余端口 → http)。
+ * 后端在写入时已归一化并存成 `<scheme>://host[:port]`,这里的宽松解析
+ * 同时覆盖「草稿还没保存」的场合。
+ *
+ * 命中的条目在 parseImageReference 里**优先于**内置识别 —— 这样无点内网
+ * 主机(`harbor/team/app` 这种 isHostSegment 拒认的形状)和必须强制 http
+ * 的镜像站都能正确解析。
+ */
+export function parseKnownHosts(csv: string | null | undefined): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const raw of String(csv ?? '').split(',')) {
+    const entry = raw.trim();
+    if (!entry) continue;
+    const m = /^(https?):\/\/(.+)$/i.exec(entry);
+    let host: string;
+    let scheme: string;
+    if (m) {
+      scheme = m[1].toLowerCase();
+      host = m[2];
+    } else {
+      host = entry;
+      scheme = inferProtocol(host);
+    }
+    // 容错:剥掉路径尾巴(后端写入时会拒绝带路径的条目,这里只影响未保存草稿)。
+    host = host.replace(/\/.*$/, '').toLowerCase();
+    if (!host) continue;
+    if (!map.has(host)) map.set(host, `${scheme}://${host}`);
+  }
+  return map;
 }
 
 /**
@@ -169,7 +222,7 @@ function normalizeDockerHubHost(host: string): string {
   return DOCKER_HUB_HOSTS.has(host) ? DOCKER_HUB_API : `${inferProtocol(host)}://${host}`;
 }
 
-export function parseImageReference(raw: string): ParsedImageRef {
+export function parseImageReference(raw: string, userHosts?: Map<string, string>): ParsedImageRef {
   const value = String(raw ?? '').trim();
   if (!value) {
     return { sourceUrl: DOCKER_HUB_API, sourceRef: '' };
@@ -178,6 +231,13 @@ export function parseImageReference(raw: string): ParsedImageRef {
   if (firstSlash > 0) {
     const head = value.slice(0, firstSlash);
     const tail = value.slice(firstSlash + 1);
+    // v0.5.48: 操作员自配的第三方源优先于内置识别 —— 覆盖无点内网主机
+    // (`harbor/team/app`,isHostSegment 的点/端口启发式拒认)与需要强制
+    // http 的镜像站;显式配置也能压过内置表(比如给 quay.io 指 http 代理)。
+    const userBase = userHosts?.get(head.toLowerCase());
+    if (userBase) {
+      return { sourceUrl: userBase, sourceRef: tail };
+    }
     if (isHostSegment(head)) {
       if (DOCKER_HUB_HOSTS.has(head)) {
         // 显式写了 docker.io 也要归一 + 补 library/

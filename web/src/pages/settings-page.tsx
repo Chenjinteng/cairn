@@ -7,6 +7,7 @@ import {
   Form,
   Input,
   InputNumber,
+  Select,
   Space,
   Switch,
   Table,
@@ -30,7 +31,7 @@ import LoadError from '../components/load-error';
 import type { SidebarGroup, SidebarSelection } from '../components/page-sidebar';
 import { useAppConfig } from '../config-store';
 import type { ApiResult, AppConfig, IgnoreRules, Inventory } from '../types';
-import { hostOnly, stripUrlProtocol } from '../utils';
+import { hostOnly, PRESET_SOURCES, stripUrlProtocol } from '../utils';
 
 interface Props {
   config: AppConfig | null;
@@ -106,6 +107,11 @@ export default function SettingsPage({
   // under config.MutableKey "pull.platforms"; the UI speaks a string
   // array.
   const [pullPlatformsDraft, setPullPlatformsDraft] = useState<string[]>([]);
+  // v0.5.48: 第三方拉取源（pull.known_hosts）。服务端存归一化后的
+  // "<scheme>://host[:port]" CSV（保存时校验、小写、去重），UI 侧说数组。
+  // 用途：拉取页镜像名智能解析认这些主机（含无点内网主机）+ 源地址
+  // AutoComplete 候选。空 = 只认内置知名源。
+  const [pullKnownHostsDraft, setPullKnownHostsDraft] = useState<string[]>([]);
   // v0.5.3: registry self-auth (Basic). Password is NEVER seeded from
   // config -- server deliberately doesn't echo it back, so we always
   // start blank; user typing = "set", blank on save = "clear override".
@@ -136,6 +142,9 @@ export default function SettingsPage({
     setStatsRetentionDraft(m.statsRetentionDays ?? 365);
     setPullPlatformsDraft(
       (m.pullPlatforms ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+    );
+    setPullKnownHostsDraft(
+      (m.pullKnownHosts ?? '').split(',').map((s) => s.trim()).filter(Boolean)
     );
     setRegistryUsernameDraft('');
     setRegistryPasswordDraft('');
@@ -180,6 +189,19 @@ export default function SettingsPage({
       currentChips.some((c, i) => c !== draftChips[i])
     ) {
       patch['pull.platforms'] = pullPlatformsDraft.join(',');
+    }
+    // v0.5.48: 第三方拉取源。原样提交用户输入,后端 normalizeHostCSV 负责
+    // 归一化(补协议/小写/去重)与校验(路径/凭据/非法 scheme → 400)。
+    const currentKnownHosts = (m.pullKnownHosts ?? '')
+      .split(',').map((s) => s.trim()).filter(Boolean).sort();
+    const draftKnownHosts = pullKnownHostsDraft
+      .map((s) => s.trim()).filter(Boolean).sort();
+    if (
+      currentKnownHosts.length !== draftKnownHosts.length ||
+      currentKnownHosts.some((c, i) => c !== draftKnownHosts[i])
+    ) {
+      patch['pull.known_hosts'] = pullKnownHostsDraft
+        .map((s) => s.trim()).filter(Boolean).join(',');
     }
     if (registryUsernameDraft.trim() !== (m.registryUsername ?? '')) {
       patch['registry.username'] = registryUsernameDraft.trim();
@@ -273,6 +295,12 @@ export default function SettingsPage({
     // ("all platforms").
     setPullPlatformsDraft(
       (m.pullPlatforms ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+    );
+    setPullKnownHostsDraft(
+      (m.pullKnownHosts ?? '')
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean),
@@ -752,6 +780,45 @@ export default function SettingsPage({
                       ? '未启用（拉取所有平台）'
                       : pullPlatformsDraft.join(', ')
                   }
+                />
+              )}
+            </Form.Item>
+
+            {/* v0.5.48: 第三方拉取源 —— 知名公网源已内置在代码里
+                (utils.ts KNOWN_HOSTS/PRESET_SOURCES),这里维护的是操作员
+                追加的第三方/内网 registry。保存时后端归一化并校验。 */}
+            <Form.Item
+              label={<span>第三方拉取源</span>}
+              extra={
+                editing
+                  ? '输入 host[:port] 或完整 URL 后回车;也可从下拉直接选知名源。裸主机默认按 https 识别(端口非 443/8443/5000 时按 http),需要强制 http 请显式写 http://主机:端口。保存后:拉取页的镜像名智能解析会认这些主机(含无点内网主机如 harbor/team/app),「来源 registry 地址」输入框也会出现这些候选。'
+                  : pullKnownHostsDraft.length === 0
+                    ? '未配置:仅识别内置知名源(Docker Hub / quay.io / ghcr.io / registry.k8s.io / mcr.microsoft.com / public.ecr.aws / gcr.io 等)。'
+                    : `已配置 ${pullKnownHostsDraft.length} 个,镜像名带这些主机前缀时自动识别为源。`
+              }
+            >
+              {editing ? (
+                <Select
+                  mode="tags"
+                  style={{ width: '100%' }}
+                  value={pullKnownHostsDraft}
+                  onChange={(vals: string[]) =>
+                    setPullKnownHostsDraft(
+                      vals.map((v) => v.trim()).filter(Boolean)
+                    )
+                  }
+                  options={PRESET_SOURCES}
+                  tokenSeparators={[',']}
+                  placeholder="如 harbor.local:8080 或 https://nvcr.io;回车添加"
+                />
+              ) : (
+                <ReadonlyValue
+                  value={
+                    pullKnownHostsDraft.length === 0
+                      ? '未配置（仅内置知名源）'
+                      : pullKnownHostsDraft.join(', ')
+                  }
+                  mono
                 />
               )}
             </Form.Item>

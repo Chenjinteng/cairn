@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   App as AntdApp,
+  AutoComplete,
   Button,
   Collapse,
   Descriptions,
@@ -58,6 +59,8 @@ import {
   formatDateTime,
   nextJobExpansion,
   parseImageReference,
+  parseKnownHosts,
+  PRESET_SOURCES,
   shortDigest,
   splitRepoTag,
 } from '../utils';
@@ -229,6 +232,29 @@ export default function PullPage({ config, sidebarFilter, onPublishGroups }: Pro
   const destTouchedRef = useRef(false);
 
   /**
+   * v0.5.48: 设置页「第三方拉取源」（pull.known_hosts）→ host[:port] 映射表。
+   * 传给 parseImageReference：镜像名带这些主机前缀时（含无点内网主机如
+   * `harbor/team/app`，点/端口启发式认不出来）也能正确拆出源；显式
+   * http:// 条目还能强制协议。用户条目优先于内置知名源表。
+   */
+  const userHosts = useMemo(
+    () => parseKnownHosts(config?.mutable.pullKnownHosts ?? ''),
+    [config?.mutable.pullKnownHosts],
+  );
+
+  /** 「来源 registry 地址」AutoComplete 候选：内置知名源 + 用户自配第三方源（去重）。 */
+  const sourceUrlOptions = useMemo(() => {
+    const presetValues = new Set(PRESET_SOURCES.map((p) => p.value));
+    const custom = Array.from(userHosts.entries())
+      .filter(([, baseUrl]) => !presetValues.has(baseUrl))
+      .map(([h, baseUrl]) => ({
+        value: baseUrl,
+        label: `${baseUrl}（自定义 · ${h}）`,
+      }));
+    return [...PRESET_SOURCES, ...custom];
+  }, [userHosts]);
+
+  /**
    * 任务行的展开状态（受控）。
    *
    * 行为：
@@ -268,7 +294,7 @@ export default function PullPage({ config, sidebarFilter, onPublishGroups }: Pro
    */
   const handleValuesChange = (changed: Partial<FormValues>) => {
     const autoFor = (sourceImage: string | undefined) =>
-      parseImageReference(sourceImage ?? '').sourceRef;
+      parseImageReference(sourceImage ?? '', userHosts).sourceRef;
 
     if ('destImage' in changed) {
       // 判断这次变化是不是我们自己 setFieldValue 触发的自动填充。
@@ -466,8 +492,9 @@ export default function PullPage({ config, sidebarFilter, onPublishGroups }: Pro
     }
     // 智能解析：用户写 `ghcr.io/owner/repo:tag` 这种含主机前缀的引用，
     // 自动拆出 sourceUrl；写 `alpine:3.19` / `library/alpine:3.19` 默认走 docker.io。
+    // v0.5.48: 设置页自配的第三方源也参与识别（userHosts，优先于内置表）。
     // 高级选项里的 sourceUrl 仅在用户显式覆盖时生效。
-    const parsed = parseImageReference(image);
+    const parsed = parseImageReference(image, userHosts);
     const sourceUrlEffective = values.sourceUrl?.trim() || parsed.sourceUrl;
     const sourceRefEffective = parsed.sourceRef || image;
 
@@ -736,7 +763,7 @@ export default function PullPage({ config, sidebarFilter, onPublishGroups }: Pro
                   // （`192.0.2.20:10001/library/alpine` 会被误判为"已有 tag"），
                   // 于是提交后才被后端拒，报错还跟输入对不上。
                   // 正解是先剥掉主机段，再看剩下部分有没有 tag。
-                  const parsed = parseImageReference(value ?? '');
+                  const parsed = parseImageReference(value ?? '', userHosts);
                   const ref = parsed.sourceRef;
                   const colon = ref.lastIndexOf(':');
                   const tag = colon >= 0 ? ref.slice(colon + 1) : '';
@@ -805,7 +832,8 @@ export default function PullPage({ config, sidebarFilter, onPublishGroups }: Pro
                     <div className="pull-form-grid">
                       <Form.Item
                         label="来源 registry 地址"
-                        extra="留空时按镜像名前缀自动推断：含主机段则用该主机；否则默认 Docker Hub。"
+                        name="sourceUrl"
+                        extra="留空时按镜像名前缀自动推断：含主机段则用该主机；否则默认 Docker Hub。知名源与设置页自配的第三方源可从下拉直接选。"
                         rules={[
                           {
                             validator: (_, value: string | undefined) =>
@@ -815,7 +843,23 @@ export default function PullPage({ config, sidebarFilter, onPublishGroups }: Pro
                           },
                         ]}
                       >
-                        <Input placeholder="自动推断" allowClear />
+                        {/* v0.5.48: 之前这个输入框漏了 name 绑定 —— 界面上能填，
+                            但值永远进不了 form，「显式覆盖来源」从来没生效过。
+                            补上绑定并升级成 AutoComplete（内置知名源 + 设置页
+                            「第三方拉取源」条目作为候选，仍可自由输入）。 */}
+                        <AutoComplete
+                          options={sourceUrlOptions}
+                          placeholder="自动推断"
+                          allowClear
+                          filterOption={(input, option) =>
+                            String(option?.value ?? '')
+                              .toLowerCase()
+                              .includes(input.trim().toLowerCase()) ||
+                            String(option?.label ?? '')
+                              .toLowerCase()
+                              .includes(input.trim().toLowerCase())
+                          }
+                        />
                       </Form.Item>
                     </div>
 
