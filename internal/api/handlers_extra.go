@@ -1174,17 +1174,21 @@ func proxyURLFrom(raw, username, password string) (*url.URL, error) {
 }
 
 // proxyTestTarget resolves which URL a connectivity test fetches: the caller's
-// explicit target, else this registry's own /v2/ (which proves both "the proxy
-// is reachable" and "it can reach this registry").
+// explicit target, else `https://registry-1.docker.io/v2/`.
+//
+// v0.5.38: 默认从「本仓库 /v2/」改成 Docker Hub 公网 /v2/。原因:
+//   1. 实际场景里代理测试的目的几乎是「能不能出外网」,而不是「能不能到自己」,
+//      用 Docker Hub 更贴合运维直觉。
+//   2. `e.Full.RegistryURL()` 可能是不带 scheme 的裸 hostname（如 `cairn.t..io`）,
+//      直接拼 `/v2/` 会得到 `cairn.t..io/v2/` 这种无 scheme 的 URL,Go 的
+//      `http.NewRequest` 会报 `unsupported protocol scheme`,实测踩过。
+// 之前那种「本仓库 /v2/」在 RegistryURL 有 scheme 且可直连时是有用的,但很少见,
+// 现在统一收敛到 Docker Hub,「要测自己」时显式填完整 URL(含 scheme)。
 func (e *ExtraHandlers) proxyTestTarget(r *http.Request, want string) string {
 	if t := strings.TrimSpace(want); t != "" {
 		return t
 	}
-	base := strings.TrimSuffix(e.Full.RegistryURL(), "/")
-	if base == "" {
-		base = "http://" + r.Host
-	}
-	return base + "/v2/"
+	return "https://registry-1.docker.io/v2/"
 }
 
 // proxyTestThrough performs the actual dial-through-proxy and writes the

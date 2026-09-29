@@ -499,7 +499,7 @@ export default function SettingsPage({
               label={<span>仓库地址（/前缀）</span>}
               extra={
                 <>
-                  配置本仓库对外暴露的地址（docker login / docker push 用）。示例：<span className="mono">registry.example.com:8787</span> 或 <span className="mono">devhub..io:443</span>。协议 = http（v0.6.0 起可切到 https），写在前面那个固定 badge 上，<strong>这里只填 host:port</strong>。
+                  配置本仓库对外暴露的地址（docker login / docker push 用）。示例：<span className="mono">registry.example.com:8787</span> 或 <span className="mono">devhub..io:443</span>。协议 = http（v0.6.0 起可切到 https）,写在前面那个固定 <Tag color="cyan" bordered={false}>http://</Tag> 上,<strong>这里只填 host:port</strong> —— 留空时右上角 badge 同步显示「(未配置)」,不会自动填当前访问地址。
                 </>
               }
             >

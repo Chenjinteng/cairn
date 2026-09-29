@@ -6,6 +6,44 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.38] - 2026-09-29
+
+本轮主题:**部署测试(v0.5.37)暴露的 4 个 UX / 依赖问题** —— 全部是修小磨小,没有新模块、没有新协议,小版本 +1。
+
+### 修复
+
+- **右上角 badge 与「仓库地址」表单对齐,不再自动 fallback 到 `r.Host`**(`internal/api/handlers.go` `GetConfig` + `web/src/App.tsx` + `web/src/pages/settings-page.tsx`):
+
+  之前 `cfg.RegistryURL` 留空时,badge 会自动填当前请求的 `r.Host`(例:`http://registry.example.com:8787`),导致用户在「设置 → 仓库连接」看到一个空字段却在右上角看到一个 IP,看起来像「不一致」。现在 badge 与表单一对一:RegistryURL 配了什么 badge 就显示什么,没配就显示「(未配置)」。要回归「自动检测」语义请直接填 host:port 到表单。
+
+- **完全移除 `fonts.googleapis.com` / `fonts.gstatic.com` 外部依赖**(`web/index.html` + `web/public/cairn-intro.html` + `web/src/theme.css`):
+
+  v0.5.37 引入了 Google Fonts CDN + `font-display: swap` 的兜底方案,但实测在离线 / 受限网络(53 跳板机、企业 proxy、纯内网部署)下,Chromium 仍会同步请求 `*.woff2` 文件直到超时,表现为网络面板里出现一长串超时请求、首次访问慢 30s+。现在完全不引入外部字体,`theme.css` 的 `--font-sans` / `--font-display` / `--font-mono` 直接走系统栈(西文走 SF Pro / Segoe UI,等宽走 ui-monospace / Menlo,中文走 PingFang SC / Microsoft YaHei),与 Outfit 的圆润字形略有差异但视觉接近,换来的是「离线部署零外部依赖」。
+
+- **代理测试默认目标改为 `https://registry-1.docker.io/v2/`**(`internal/api/handlers_extra.go` `proxyTestTarget` + `web/src/pages/proxies-page.tsx`):
+
+  之前默认走 `RegistryURL() + "/v2/"`,在 RegistryURL 是裸 hostname(如 `cairn.t..io`,没配 scheme)时会拼出无 scheme 的 URL,Go 的 `http.NewRequest` 报 `unsupported protocol scheme ""`,实测踩过。**默认改成 Docker Hub 公网 /v2/** —— 实际场景里代理测试的目的几乎是「能不能出外网」,用 Docker Hub 更贴合运维直觉;要测本仓库请在「测试目标」字段填完整 URL(含 `https://`)。
+
+### 新增
+
+- **Cairn 品牌 favicon**(`web/public/favicon.svg` + `web/index.html` `<link rel="icon">`):
+
+  之前没有 favicon,浏览器 tab 显示默认占位图(`web/public/cairn-intro.html` 与 `web/src/components/cairn-mark.tsx` 的几何保持一致:三块圆角矩形堆叠成塔身 + 顶部琥珀色标记点,viewBox 64x64)。选用 SVG 而非 `.ico` 的原因:单文件即可覆盖所有 DPI,不需要为 16/32/48/64 各出一份位图。
+
+### 文档
+
+- **`docs/product/cairn-intro.html`** 的 `font-family` 同步移除 `'Outfit'` / `'JetBrains Mono'` 引用(只保留系统栈),与 `web/index.html` 一致。
+
+### 影响范围(升级须知)
+
+- **行为变化**:
+  - badge 在仓库地址未配置时显示「(未配置)」(旧版本会显示 `http://[当前 IP]`)。如果之前依赖 badge 自动显示当前访问地址,现在需要在表单填一次。
+  - 代理测试默认目标从「本仓库 /v2/」变成 Docker Hub /v2/。已有部署如果在「测试目标」里显式填过值则不受影响;留空的新测试会去打 Docker Hub。
+- **离线部署**:首屏加载不再有任何外部网络请求,生产部署可以放在完全隔离的环境里跑。
+- **视觉**:西文字体从 Outfit 改成 SF Pro / Segoe UI 等系统字体,中文不变。整体观感差异极小。
+
+---
+
 ## [0.5.37] - 2026-09-29
 
 本轮主题:**UI 改版 —— 全面采用 `docs/design/cairn-ui-design.html` 设计稿(暖米底色 + 三字体 + 圆角/阴影 token 化)。** `cairn` 仍是 module path / 二进制名 / 内部代号,产品面对用户时仍叫 Cairn。

@@ -812,8 +812,7 @@ export default function ProxiesPage({ config, sidebarFilter, onPublishGroups }: 
               代理本身没有可直接访问的资源，所以测试会<strong>实际穿过这个代理</strong>去访问一个目标。
             </div>
             <div style={{ marginTop: 4 }}>
-              目标留空 = 本仓库的 <span className="mono">/v2/</span>；想验证"能不能出外网"就填{' '}
-              <span className="mono">https://registry-1.docker.io/v2/</span> 之类。超时上限 12 秒。
+              目标留空 = <span className="mono">https://registry-1.docker.io/v2/</span>（验证"能不能出外网"）;想测本仓库或别的 registry 就填完整 URL（含 <span className="mono">https://</span>）。超时上限 12 秒。
             </div>
           </div>
         }
@@ -891,13 +890,16 @@ export default function ProxiesPage({ config, sidebarFilter, onPublishGroups }: 
             label="测试目标（可选，不保存）"
             extra={
               <>
-                留空 = 本仓库的 <span className="mono">/v2/</span>；想验证「能不能出外网」就填{' '}
-                <span className="mono">https://registry-1.docker.io/v2/</span>。
+                {/* v0.5.38: 默认目标从「本仓库 /v2/」改成 Docker Hub —— 实际场景里
+                    代理测试的目的几乎都是「能不能出外网」,用 Docker Hub 更贴合直觉;
+                    之前那种「本仓库 /v2/」在 RegistryURL 没配 scheme(裸 hostname)时会
+                    报 `unsupported protocol scheme`。要测本仓库请显式填完整 URL。 */}
+                留空 = <span className="mono">https://registry-1.docker.io/v2/</span>（验证「能不能出外网」）;想测本仓库或别的 registry 就填完整 URL（含 <span className="mono">https://</span>）。
               </>
             }
           >
             <Input
-              placeholder="留空 = 本仓库 /v2/"
+              placeholder="https://registry-1.docker.io/v2/"
               value={draftTarget}
               onChange={(e) => {
                 setDraftTarget(e.target.value);
@@ -930,7 +932,7 @@ export default function ProxiesPage({ config, sidebarFilter, onPublishGroups }: 
 
             <Input
               addonBefore="访问目标"
-              placeholder="留空 = 本仓库 /v2/"
+              placeholder="https://registry-1.docker.io/v2/"
               value={testTarget}
               onChange={(e) => setTestTarget(e.target.value)}
               allowClear

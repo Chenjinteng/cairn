@@ -152,16 +152,19 @@ func (h *Handlers) GetConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// v0.5.2: URL/Host reflect whichever source wins right now (Mutable
-	// override > env). displayURL is the v0.5 "manage itself" fallback
-	// when no upstream is configured anywhere.
+	// override > env).
 	//
 	// v0.5.28: RegistryURL 现在存的是「裸 host:port」(协议留给 v0.6.0 的 http/https 切换),
 	// 渲染 URL 时按当前协议补上 http://。v0.6.0 起这里改成读 https toggle 状态。
-	displayURL := h.Cfg.RegistryURL()
-	if displayURL != "" {
-		displayURL = "http://" + displayURL
-	} else {
-		displayURL = "http://" + r.Host // cairn now manages itself; no upstream set
+	//
+	// v0.5.38: 不再 fallback 到 r.Host —— 之前「仓库地址」留空时 badge 会自动填
+	// 上当前请求的 Host(例如 `http://registry.example.com:8787`),导致用户在设置页看
+	// 到一个空字段却在右上角看到一个 IP,看起来像「不一致」。现在 badge 与
+	// 表单一对一:RegistryURL 配了什么 badge 就显示什么,没配就空字符串(前端
+	// 渲染为「(未配置)」)。要回归「自动检测」语义请直接填 host:port。
+	displayURL := ""
+	if raw := h.Cfg.RegistryURL(); raw != "" {
+		displayURL = "http://" + raw
 	}
 	writeJSON(w, http.StatusOK, AppConfig{
 		// v0.5.4: every field the settings page can edit is read through
