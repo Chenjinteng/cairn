@@ -20,7 +20,7 @@
 - Logo 设计稿:[`docs/design/cairn-brand.html`](./docs/design/cairn-brand.html) —— 几何构成、调色板、多尺寸 mock、in-app preview
 - UI 设计稿:[`docs/design/cairn-ui-design.html`](./docs/design/cairn-ui-design.html) —— token / 组件 / 导航 / 状态共 8 段,与品牌稿对仗
 - 6 个页面原型:[`docs/design/demo-A-overview.html`](./docs/design/demo-A-overview.html) —— 缩略索引 + 全套 demo-A-*.html
-- 产品介绍页:[`docs/product/cairn-intro.html`](./docs/product/cairn-intro.html) —— 单文件自包含,基于品牌稿视觉,含定位 / 设计目标 / 能力地图 / 架构 / 快速开始 / 边界
+- 产品介绍页:[`web/public/cairn-intro.html`](./web/public/cairn-intro.html) —— **随二进制分发**,运行实例上访问 [`/cairn-intro.html`](http://localhost:8787/cairn-intro.html)(也可从侧栏 footer 的「产品介绍」进);单文件自包含,基于品牌稿视觉,含定位 / 设计目标 / 能力地图 / 架构 / 快速开始 / 边界 / 从这里开始
 - 项目内 Logo 组件:`web/src/components/cairn-mark.tsx`(内联 SVG,接受 `size` / `variant` props)
 - 配色 token:`web/src/theme.css` 的 `--color-primary` / `--color-info` 同步 Logo 的 Teal 600
 

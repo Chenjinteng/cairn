@@ -169,9 +169,16 @@ export default function PageSidebar({ groups, selected, onSelect, version }: Pag
       </div>
       {/* v0.5.37：sidebar footer block — 让 grid 撑满 100vh 时底部不再是大段空白。
           v0.5.37.4：版本号从写死的字符串改成读 /api/config 的运行中版本，
-          跟顶栏那个 badge 同源，避免侧栏还写着上个版本。 */}
+          跟顶栏那个 badge 同源，避免侧栏还写着上个版本。
+          v0.5.37.6：footer 挂「产品介绍」入口 —— 该页随二进制分发（web/public/
+          经 vite publicDir 拷进 dist，被 go:embed all:dist 收进二进制），
+          新窗口打开，避免把控制台里的筛选状态丢掉。 */}
       <div className="page-sidebar-footer mono">
-        {version ? `v${version} · © Cairn` : '© Cairn'}
+        {version ? `v${version} · ` : ''}
+        <a href="/cairn-intro.html" target="_blank" rel="noopener">
+          产品介绍
+        </a>
+        {' · © Cairn'}
       </div>
     </aside>
   );

@@ -5,9 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Cairn — 产品介绍 / Product Overview</title>
 <meta name="description" content="Cairn(cairn)产品介绍 —— 轻量级容器镜像基础设施平台:单进程单二进制,完整实现 Docker Registry HTTP API V2,自带管理控制台。">
+<!--
+  字体不阻塞首屏(v0.5.37.1 起的规定动作):内网 / 受限网络里 fonts.googleapis.com
+  可能不可达或极慢,<link rel="stylesheet"> 是 render-blocking,会让 chromium 的
+  domcontentloaded 永不 fire(实测 30s timeout)直接白屏。改成 preload + onload 切回
+  stylesheet,配合 font-display:swap 与系统字体栈,CDN 挂了也立刻渲染。
+-->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" onload="this.rel='stylesheet'; this.onload=null;">
+<noscript>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</noscript>
 <style>
   :root {
     --bg: #f7f5f0;
@@ -309,8 +318,9 @@
   .callout-title { font-size: 13.5px; font-weight: 500; color: var(--ink); margin-bottom: 6px; }
   .callout-body { font-size: 13px; color: var(--ink-soft); }
 
-  /* ── Further reading ── */
+  /* ── Get started ── */
   .links { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+  .links-single { grid-template-columns: 1fr; }
   .link-card {
     display: block;
     background: var(--surface);
@@ -358,6 +368,8 @@
     display: flex;
     justify-content: space-between;
   }
+  footer a { color: var(--primary-deep); text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
 
   /* ── Mobile ── */
   @media (max-width: 720px) {
@@ -391,7 +403,7 @@
       <h1 class="wordmark">Cairn<span class="dot">.</span></h1>
       <div class="tagline">Lightweight Container Image Infrastructure</div>
       <div class="tagline-cn">轻量级容器镜像基础设施平台</div>
-      <div class="version-badge">v0.5.37 · 单进程单二进制</div>
+      <div class="version-badge">v<span data-cairn-version>0.5.37</span> · 单进程单二进制</div>
       <div class="chips">
         <span class="chip">单进程单二进制</span>
         <span class="chip">scratch 镜像 ~15 MB</span>
@@ -603,55 +615,44 @@ curl -fsS http://localhost:8787/healthz</pre>
     </div>
   </section>
 
-  <!-- ═══════ FURTHER READING ═══════ -->
+  <!-- ═══════ GET STARTED ═══════ -->
   <section>
-    <h2>延伸阅读</h2>
-    <div class="h-sub">// 更多文档 / Further reading</div>
-    <div class="links">
-      <a class="link-card" href="../design/index.html">
-        <div class="link-title">设计资产总览</div>
-        <div class="link-path">docs/design/index.html</div>
-        <div class="link-desc">设计枢纽:品牌、界面与页面原型的入口。</div>
-      </a>
-      <a class="link-card" href="../design/cairn-brand.html">
-        <div class="link-title">品牌规范</div>
-        <div class="link-path">docs/design/cairn-brand.html</div>
-        <div class="link-desc">Mark 几何、色彩、字体与应用规范。</div>
-      </a>
-      <a class="link-card" href="../design/cairn-ui-design.html">
-        <div class="link-title">界面设计</div>
-        <div class="link-path">docs/design/cairn-ui-design.html</div>
-        <div class="link-desc">控制台的版式与组件约定。</div>
-      </a>
-      <a class="link-card" href="../design/demo-A-overview.html">
-        <div class="link-title">页面原型</div>
-        <div class="link-path">docs/design/demo-A-*.html</div>
-        <div class="link-desc">六个页面的静态原型,从 overview 起跳。</div>
-      </a>
-      <a class="link-card" href="../ROADMAP.md">
-        <div class="link-title">路线图</div>
-        <div class="link-path">docs/ROADMAP.md</div>
-        <div class="link-desc">已做 / 在做 / 计划。</div>
-      </a>
-      <a class="link-card" href="../../CHANGELOG.md">
-        <div class="link-title">变更日志</div>
-        <div class="link-path">CHANGELOG.md</div>
-        <div class="link-desc">每个版本改了什么、为什么。</div>
-      </a>
-      <a class="link-card" href="../../README.md">
-        <div class="link-title">README</div>
-        <div class="link-path">README.md</div>
-        <div class="link-desc">部署、配置分层与运维速查。</div>
+    <h2>从这里开始</h2>
+    <div class="h-sub">// 进入控制台 / Get started</div>
+    <p class="body">本页随二进制一起分发 —— 你正在看的这个实例本身就带着它。日常运维从管理控制台开始:</p>
+    <div class="links links-single">
+      <a class="link-card" href="/">
+        <div class="link-title">管理控制台</div>
+        <div class="link-path">/</div>
+        <div class="link-desc">镜像列表 / 镜像拉取 / 镜像热度 / 凭据管理 / 代理管理 / 设置 —— 六个页面覆盖日常运维。</div>
       </a>
     </div>
+    <div class="foot-note">设计资产(<code>docs/design/*.html</code>)、路线图(<code>docs/ROADMAP.md</code>)、变更日志(<code>CHANGELOG.md</code>)与 README 随源码仓库分发,不在本运行实例内。</div>
   </section>
 
   <!-- ═══════ FOOTER ═══════ -->
   <footer>
     <span>Cairn · cairn · 2026</span>
-    <span>v0.5.37 · docs/product/cairn-intro.html</span>
+    <span>v<span data-cairn-version>0.5.37</span> · <a href="/">管理控制台 →</a></span>
   </footer>
 
 </div>
+
+<script>
+  // 版本号由同源 /api/config 提供(对齐侧栏的做法),避免页面写死后跟镜像 tag 漂移;
+  // 请求失败(离线 / 旧版本无此字段)时静默保留 HTML 里的静态值。
+  (function () {
+    fetch('/api/config')
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (!j) return;
+        var v = j.version || (j.data && j.data.version);
+        if (!v) return;
+        var nodes = document.querySelectorAll('[data-cairn-version]');
+        for (var i = 0; i < nodes.length; i++) nodes[i].textContent = v;
+      })
+      .catch(function () { /* keep static */ });
+  })();
+</script>
 </body>
 </html>

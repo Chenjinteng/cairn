@@ -190,6 +190,19 @@
   letter-spacing: 0.04em;
 }
 
+/* v0.5.37.6：footer 里的「产品介绍」入口。继承 footer 的弱化色（跟版本号同一档
+   视觉权重），hover 才提到主色 + 实线下划线，避免侧栏底部出现一个抢眼的蓝色链接。 */
+.page-sidebar-footer a {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px dotted currentColor;
+}
+
+.page-sidebar-footer a:hover {
+  color: var(--color-primary);
+  border-bottom-style: solid;
+}
+
 .page-sidebar-group + .page-sidebar-group {
   margin-top: 4px;
 }

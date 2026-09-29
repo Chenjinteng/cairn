@@ -161,6 +161,31 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 - **本轮不动版本常量**:纯文档新增,不引新功能,`internal/version/version.go` 保持 `0.5.37`。
 
+### 新增(0.5.37.6)
+
+- **产品介绍页搬进产品本体:`docs/product/cairn-intro.html` → `web/public/cairn-intro.html`**:
+
+  0.5.37.5 把介绍页放进仓库文档目录 —— 结果是**部署完看不到**,得先去翻仓库才找得着。本轮把它接进前端构建链路:`web/public/` 是 Vite 的 `publicDir`(`web/vite.config.ts` 用默认值,不改),构建时**原样拷进** `internal/webui/dist/`,再被 `internal/webui/assets_built.go` 的 `//go:embed all:dist` 收进二进制。**零 Go 改动**,运行实例上直接访问 `/cairn-intro.html`(`internal/api/api.go` 的 catch-all `webui.Handler()` 已覆盖:先查真实文件,查不到才回落 index.html)。
+
+  已否决的两条路:① `internal/webui/` 单独 go:embed(多一套机制,且 `assets_stub.go` 的 stub 构建语义对不上);② `docs/` 与 `web/public/` 留双份(**两处维护必然漂移**,`docs/product/` 下那份已删除)。
+
+- **部署语境适配 —— 页面在运行实例里必须自洽,不能照搬仓库文档的写法**:
+
+  - **Google Fonts 改非阻塞**:`<link rel="stylesheet">` 改成 `rel="preload" as="style"` + `onload` 切 `stylesheet` + `<noscript>` 兜底(同 `web/index.html` 的 0.5.37.1 做法)。为什么是硬要求:内网访问不到 `fonts.googleapis.com` 时,**render-blocking 的样式表会让 chromium 的 DCL 永不 fire**(0.5.37.1 实测 30s 超时);字体只是视觉增强,不该拖住整页。
+  - **7 张「延伸阅读」卡 → 1 张同源 CTA**:原卡片指向 `docs/design/*.html`、`docs/ROADMAP.md`、`CHANGELOG.md`、`README.md` 等**仓库相对路径,部署后必然 404**;改成单张「管理控制台」(`/`),并在 `.foot-note` 说明设计资产 / 路线图 / 变更日志随**源码仓库**分发,不在运行实例内。
+  - **版本号动态化**:写死的 `v0.5.37` 会跟镜像 tag 漂移(页面随二进制走),改成 `[data-cairn-version]` 占位 + 页尾 `fetch('/api/config')` 写入运行中版本 —— 对齐侧栏 0.5.37.4 的同源做法;fetch 失败时**静默保留静态值**,不留空白,也不弹错。
+  - **footer 去掉源码路径**:原 footer 写 `docs/product/cairn-intro.html`,换成「管理控制台 →」同源入口。
+
+- **侧栏 footer 挂入口**(`web/src/components/page-sidebar.tsx` + `web/src/app.css`):
+
+  `.page-sidebar-footer` 从 `v0.5.37 · © Cairn` 变成 `v0.5.37 · 产品介绍 · © Cairn`;`<a target="_blank" rel="noopener">` 新窗口打开 —— 保留控制台里的筛选 / 分页状态。样式用 `color: inherit` + 点线下划线(视觉权重跟版本号同档),hover 才提到 `--color-primary`,避免侧栏底部挂一个抢眼的蓝链接。**不开第 7 个 Tab**:介绍页不是控制台的一页,塞进顶部导航会稀释 6 Tab 的信息架构。
+
+- **README「品牌资产」条目改指向 `web/public/cairn-intro.html`**,并注明「**随二进制分发**,运行实例上访问 `/cairn-intro.html`;也可从侧栏 footer 的『产品介绍』进」。
+
+- **本轮不动版本常量**:页面随 `cairn:0.5.37` 镜像一起分发,**不引新模块 / 新 API / 新进程**,`internal/version/version.go` 保持 `0.5.37`;`0.6.0` 留给 registry 同步。
+
+- **影响范围(升级须知)**:本次改了**前端源码**(`web/public/` 新增文件 + 侧栏组件 + 样式),所以升级**必须重建镜像**(`docker compose build && docker compose up -d`),只 `up -d` 拿不到新页面 —— 旧镜像的 dist 里没有这个文件。**无 API / 数据 / 后端逻辑改动,无需迁移**。
+
 ## [0.5.36] - 2026-09-29
 
 本轮主题:**统一 SQLite DB 文件名 `cairn.db` → `cairn.db`(与产品名对齐,v0.5.21 起的「image / container / service = cairn」命名一致)+ 顶部导航 Tab 顺序按「查/操作 → 观测 → 管理」重排**。
