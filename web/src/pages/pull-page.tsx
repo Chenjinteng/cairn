@@ -64,6 +64,8 @@ import {
 
 interface Props {
   config: AppConfig | null;
+  /** v0.5.37.3:侧栏 filter;暂未联动 page 内容(API 已通,后续 0.5.x 加联动)。 */
+  sidebarFilter?: string | null;
 }
 
 interface FormValues {

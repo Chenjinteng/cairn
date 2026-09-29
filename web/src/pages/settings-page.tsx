@@ -35,6 +35,8 @@ interface Props {
   config: AppConfig | null;
   onConfigChange: (config: AppConfig) => void;
   onInventoryChange: (inventory: Inventory) => void;
+  /** v0.5.37.3:侧栏 filter;暂未联动 page 内容(后续 0.5.x anchor 跳转 +)。 */
+  sidebarFilter?: string | null;
 }
 
 /**

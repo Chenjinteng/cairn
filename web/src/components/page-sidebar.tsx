@@ -10,11 +10,13 @@
  *       stats-page        → 时间窗（7d / 30d / 90d / 全部）/ 客户端 UA
  *       proxies-page      → 协议（http / https / socks5）/ 状态（连通 / 从未测试 / 失败）
  *       settings-page     → 分类（Registry / 鉴权 / 拉取 / 热度 / 通知）
- *   - v0.5.37 范围内先做"UI 占位 + active 高亮"，不联动 page 内容过滤
- *     （避免触动每个 page 内部 state）；后续 0.5.x 优化时再加联动。
+ *
+ * v0.5.37.3: 改成受控组件。`selected` 为当前高亮的 item key（`groupLabel:itemLabel`），
+ * `onSelect` 在用户点击 item 时回调（itemKey），App.tsx 持有 state + 透传到对应 page。
+ * 这样 sidebar item 真正能联动 page 内容过滤（搜索框 / 时间窗 / 状态）。
  */
 
-import { useState } from 'react';
+import { useMemo } from 'react';
 
 export type PageKey = 'images' | 'stats' | 'pull' | 'credentials' | 'proxies' | 'settings';
 
@@ -123,12 +125,20 @@ const SIDEBAR_MAP: Record<PageKey, SideGroup[]> = {
 
 export interface PageSidebarProps {
   page: PageKey;
+  /** 当前选中的 item（格式 `groupLabel:itemLabel`）；null = 默认选中第一项。 */
+  selected?: string | null;
+  /** item 点击回调，参数 = `${groupLabel}:${itemLabel}`。 */
+  onSelect?: (itemKey: string) => void;
 }
 
-export default function PageSidebar({ page }: PageSidebarProps) {
+export default function PageSidebar({ page, selected, onSelect }: PageSidebarProps) {
   const groups = SIDEBAR_MAP[page];
-  // 第一个 group 的第一个 item 默认 active（demo 行为）；后续 0.5.x 联动时改成受控。
-  const [active, setActive] = useState<string>(() => `${groups[0]?.label}:${groups[0]?.items[0]?.label ?? ''}`);
+  // 默认选第一项：保持 demo 行为（首次进入页面就高亮最常用 item）
+  const fallback = useMemo(
+    () => `${groups[0]?.label ?? ''}:${groups[0]?.items[0]?.label ?? ''}`,
+    [groups],
+  );
+  const activeKey = selected ?? fallback;
 
   return (
     <aside className="app-page-sidebar" aria-label={`${page} sub navigation`}>
@@ -137,14 +147,14 @@ export default function PageSidebar({ page }: PageSidebarProps) {
           <div key={group.label} className="page-sidebar-group">
             <div className="page-sidebar-group-label">{group.label}</div>
             {group.items.map((item) => {
-              const itemId = `${group.label}:${item.label}`;
-              const isActive = active === itemId;
+              const itemKey = `${group.label}:${item.label}`;
+              const isActive = activeKey === itemKey;
               return (
                 <button
                   key={item.label}
                   type="button"
                   className={`page-sidebar-item${isActive ? ' is-active' : ''}`}
-                  onClick={() => setActive(itemId)}
+                  onClick={() => onSelect?.(itemKey)}
                 >
                   <span className="page-sidebar-item-label">{item.label}</span>
                   {item.badge !== undefined ? (

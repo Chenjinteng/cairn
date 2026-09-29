@@ -52,6 +52,11 @@ import { formatDateTime } from '../utils';
 interface Props {
   config: AppConfig | null;
   onConfigChange: (config: AppConfig) => void;
+  /**
+   * v0.5.37.3:从侧栏传入的 filter(item key)。联动:「时间窗」group 点某天 → setDays;
+   * 「客户端 UA」group 暂不联动(未来 0.5.x 优化时再加)。
+   */
+  sidebarFilter?: string | null;
 }
 
 const WINDOW_OPTIONS: { label: string; value: StatsWindow }[] = [
@@ -95,8 +100,26 @@ const NOTIFY_CONFIG_YAML = `notifications:
       threshold: 5
       backoff: 1s`;
 
-export default function StatsPage({ config, onConfigChange }: Props) {
+export default function StatsPage({ config, onConfigChange, sidebarFilter }: Props) {
   const [days, setDays] = useState<StatsWindow>(30);
+  // v0.5.37.3:侧栏「时间窗:最近 7d / 30d / 90d / 全部」联动 setDays。
+  // 「最近 7d」→ 7;「最近 30d」→ 30;「最近 90d」→ 90;「全部」→ 90(用 90 近似 "全部" —— StatsWindow 类型严格 7/30/90)。
+  useEffect(() => {
+    if (!sidebarFilter) return;
+    const idx = sidebarFilter.indexOf(':');
+    if (idx < 0) return;
+    const group = sidebarFilter.slice(0, idx);
+    const item = sidebarFilter.slice(idx + 1);
+    if (group !== '时间窗') return;
+    const map: Record<string, StatsWindow> = {
+      '最近 7d': 7,
+      '最近 30d': 30,
+      '最近 90d': 90,
+      '全部': 90,
+    };
+    const next = map[item];
+    if (next !== undefined) setDays(next);
+  }, [sidebarFilter]);
   const [topBy, setTopBy] = useState<StatsTopBy>('repository');
   const [summary, setSummary] = useState<StatsSummary | null>(null);
   const [topItems, setTopItems] = useState<StatsTopItem[]>([]);

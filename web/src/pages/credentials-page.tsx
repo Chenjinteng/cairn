@@ -43,6 +43,8 @@ import { formatDateTime } from '../utils';
 
 interface Props {
   config: AppConfig | null;
+  /** v0.5.37.3:侧栏 filter;暂未联动 page 内容(凭据 schema 无 group / source 字段,后续 0.5.x 加)。 */
+  sidebarFilter?: string | null;
 }
 
 interface FormValues {
