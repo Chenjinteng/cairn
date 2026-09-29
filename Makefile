@@ -16,7 +16,7 @@
 #   make test                       # 跑本机门禁
 #
 # 环境变量(全部可覆盖,默认值见对应 target):
-#   IMAGE          cairn:0.5.42
+#   IMAGE          cairn:0.5.43
 #   PORT           8787(容器内监听)
 #   HOST_PORT      80(宿主机映射端口)
 #   DATA_DIR       /data/cairn(宿主机数据目录)
@@ -25,7 +25,7 @@
 #   NPM_REGISTRY   https://registry.npmmirror.com
 
 # ───────────────────────── 变量 ─────────────────────────
-IMAGE       ?= cairn:0.5.42
+IMAGE       ?= cairn:0.5.43
 PORT        ?= 8787
 HOST_PORT   ?= 80
 DATA_DIR    ?= /data/cairn
@@ -33,7 +33,7 @@ REGISTRY_URL ?= registry.example.com
 GOPROXY     ?= https://goproxy.io,direct
 NPM_REGISTRY ?= https://registry.npmmirror.com
 
-# 运行时构造 (从镜像 tag 解析版本号, 例: cairn:0.5.42 → 0.5.42)
+# 运行时构造 (从镜像 tag 解析版本号, 例: cairn:0.5.43 → 0.5.43)
 VERSION     := $(shell echo $(IMAGE) | sed 's/.*://')
 
 # 工具检测
@@ -53,6 +53,8 @@ help:           ## 显示所有目标与说明
 	@echo "环境变量(可覆盖):"
 	@echo "  IMAGE=$(IMAGE)   VERSION=$(VERSION)"
 	@echo "  PORT=$(PORT)   HOST_PORT=$(HOST_PORT)   DATA_DIR=$(DATA_DIR)"
+	@echo "  GOPROXY=$(GOPROXY)"
+	@echo "  NPM_REGISTRY=$(NPM_REGISTRY)"
 
 # ───────────────────────── 一、克隆 ─────────────────────────
 .PHONY: clone
@@ -68,15 +70,18 @@ pull:           ## git fetch + reset hard to origin/main
 	@echo "HEAD: $$(git log --oneline -1)"
 
 # ───────────────────────── 二、构建 ─────────────────────────
+# v0.5.43: 永远走 make build / make rebuild,不要裸跑 docker build —— 裸跑会用
+# Dockerfile 默认的 proxy.golang.org(在受限网络里超时),Makefile 默认 GOPROXY
+# 是 https://goproxy.io,direct(已知能访问)。要看当前用的是哪个:`make help`。
 .PHONY: build
-build:          ## docker build 镜像 (默认 $(IMAGE))
+build:          ## docker build 镜像 (默认 $(IMAGE),GOPROXY=$(GOPROXY))
 	docker build \
 		--build-arg GOPROXY=$(GOPROXY) \
 		--build-arg NPM_REGISTRY=$(NPM_REGISTRY) \
 		-t $(IMAGE) .
 
 .PHONY: rebuild
-rebuild:        ## 强制 rebuild (--no-cache, 源码改了必须走这条)
+rebuild:        ## 强制 rebuild (--no-cache, 源码改了必须走这条;GOPROXY=$(GOPROXY))
 	docker build --no-cache \
 		--build-arg GOPROXY=$(GOPROXY) \
 		--build-arg NPM_REGISTRY=$(NPM_REGISTRY) \
