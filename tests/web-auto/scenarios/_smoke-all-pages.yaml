@@ -12,7 +12,7 @@
 name: cairn-smoke-all-pages
 description: |
   顺序点击 cairn 顶部 Segmented 导航的 6 个 Tab：
-  镜像列表 / 镜像热度 / 镜像拉取 / 凭据管理 / 代理管理 / 设置。
+  镜像列表 / 镜像拉取 / 镜像热度 / 凭据管理 / 代理管理 / 设置。
   每个 Tab 验证：
     1. 切换后 .app-content 出现非空内容（不是白屏 / "加载中…" 残留）
     2. 没有 antd Alert.error 出现
@@ -62,24 +62,7 @@ steps:
   - name: smoke-01-images
     action: screenshot
 
-  # ---- 2. 镜像热度 ----
-  - name: 点击「镜像热度」Tab
-    action: click
-    locator:
-      strategies:
-        - { type: text, value: "镜像热度", match: exact }
-        - { type: css, value: '.app-nav .ant-segmented-item:has-text("镜像热度")' }
-
-  - name: 断言热度页渲染（子 Tab / heatmap / 卡片）
-    action: assert
-    type: visible
-    selector: '.app-content .ant-segmented, .app-content svg, .app-content canvas, .app-content .ant-card, .app-content .ant-empty'
-    timeout: 10000
-
-  - name: smoke-02-stats
-    action: screenshot
-
-  # ---- 3. 镜像拉取 ----
+  # ---- 2. 镜像拉取 ----
   - name: 点击「镜像拉取」Tab
     action: click
     locator:
@@ -93,7 +76,24 @@ steps:
     selector: '.app-content .ant-form, .app-content input[placeholder*="源"], .app-content input[placeholder*="镜像"], .app-content button:has-text("提交"), .app-content button:has-text("拉取")'
     timeout: 10000
 
-  - name: smoke-03-pull
+  - name: smoke-02-pull
+    action: screenshot
+
+  # ---- 3. 镜像热度 ----
+  - name: 点击「镜像热度」Tab
+    action: click
+    locator:
+      strategies:
+        - { type: text, value: "镜像热度", match: exact }
+        - { type: css, value: '.app-nav .ant-segmented-item:has-text("镜像热度")' }
+
+  - name: 断言热度页渲染（子 Tab / heatmap / 卡片）
+    action: assert
+    type: visible
+    selector: '.app-content .ant-segmented, .app-content svg, .app-content canvas, .app-content .ant-card, .app-content .ant-empty'
+    timeout: 10000
+
+  - name: smoke-03-stats
     action: screenshot
 
   # ---- 4. 凭据管理 ----

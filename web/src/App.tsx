@@ -34,8 +34,8 @@ export type ThemeMode = 'light' | 'dark';
  */
 const NAV_ITEMS: { key: PageKey; label: string; icon: ReactNode }[] = [
   { key: 'images', label: '镜像列表', icon: <DockerOutlined /> },
-  { key: 'stats', label: '镜像热度', icon: <BarChartOutlined /> },
   { key: 'pull', label: '镜像拉取', icon: <CloudDownloadOutlined /> },
+  { key: 'stats', label: '镜像热度', icon: <BarChartOutlined /> },
   { key: 'credentials', label: '凭据管理', icon: <KeyOutlined /> },
   { key: 'proxies', label: '代理管理', icon: <ApiOutlined /> },
   { key: 'settings', label: '设置', icon: <SettingOutlined /> },
@@ -158,10 +158,10 @@ export default function App({
                 onInventoryChange={setInventory}
                 onGoSettings={() => setPage('settings')}
               />
-            ) : page === 'stats' ? (
-              <StatsPage config={config} onConfigChange={publishConfig} />
             ) : page === 'pull' ? (
               <PullPage config={config} />
+            ) : page === 'stats' ? (
+              <StatsPage config={config} onConfigChange={publishConfig} />
             ) : page === 'credentials' ? (
               <CredentialsPage config={config} />
             ) : page === 'proxies' ? (

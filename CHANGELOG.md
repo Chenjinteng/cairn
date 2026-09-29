@@ -46,6 +46,13 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 ### 变更
 
 - **版本号同步**(按 AGENTS.md「一次改动要同时更新这几处」):`internal/version/version.go`、`.env.example` 的 `IMAGE`、`docker-compose.yml` 的 `${IMAGE:-…}`、README 「当前状态」+ 「当前版本」、CHANGELOG 顶部节标题 全部 → `0.5.35`。
+
+- **顶部导航 Tab 顺序调整**(`web/src/App.tsx` `NAV_ITEMS` + 渲染三元链):
+
+  旧:`镜像列表` → `镜像热度` → `镜像拉取` → `凭据管理` → `代理管理` → `设置`
+  新:`镜像列表` → `镜像拉取` → `镜像热度` → `凭据管理` → `代理管理` → `设置`
+
+  原因:user 反馈「**列表是查看,拉取是发现不够了来操作的,才是热度与管理**」—— 把 `镜像拉取` 上移到 `镜像热度` 之前,符合从「查/操作 → 观测 → 管理」的真实使用路径。`NAV_ITEMS` 与渲染三元链同步调整(否则会出现「点了第 3 个 Tab 渲染第 5 个 Tab」的渲染错位)。**纯展示层改动,无 API / 数据 / 行为变化**,不进位版本号。
 - **`internal/api/handlers_extra.go` 增 9 行**:门控 + 文档注释(R-open-2 关闭原因,与 0.5.4 起的运行时开关语义一致)。
 - **`web/src/api.ts` 增 3 个 import 名**,函数体零改动。
 - **`web/src/pages/settings-page.tsx` 减 5 个未用声明**;`web/src/App.tsx` 减 1 个未用 prop(`inventory`)。
