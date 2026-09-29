@@ -1,6 +1,10 @@
 # Binaries
 /cairn
 /cairn-*
+# 历史冒烟产物命名(老命名 cairn-smoke-*),继续忽略避免误 add
+/cairn-smoke-*
+/.cairn-smoke-*
+/cairn-smoke-*.mjs
 /cmd/server/server
 *.exe
 *.test
