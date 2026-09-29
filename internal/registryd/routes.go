@@ -326,7 +326,8 @@ func (h *Handler) manifestPut(w http.ResponseWriter, r *http.Request) {
 		h.Events.IngestLocal(*ev)
 	}
 	w.Header().Set("Docker-Content-Digest", digest)
-	w.Header().Set("Location", fmt.Sprintf("/v2/%s/manifests/%s", repo, digest))
+	// v0.5.44: 绝对 URL —— 参见 absoluteLocation 注释。
+	w.Header().Set("Location", absoluteLocation(r, fmt.Sprintf("/v2/%s/manifests/%s", repo, digest)))
 	w.WriteHeader(http.StatusCreated)
 }
 
@@ -406,7 +407,8 @@ func (h *Handler) uploadStart(w http.ResponseWriter, r *http.Request) {
 		writeV2Error(w, http.StatusInternalServerError, "UNSUPPORTED", err.Error())
 		return
 	}
-	w.Header().Set("Location", fmt.Sprintf("/v2/%s/blobs/uploads/%s", repo, uuid))
+	// v0.5.44: 绝对 URL —— skopeo / docker daemon 拒绝相对路径的 Location。
+	w.Header().Set("Location", absoluteLocation(r, fmt.Sprintf("/v2/%s/blobs/uploads/%s", repo, uuid)))
 	w.Header().Set("Docker-Upload-UUID", uuid)
 	w.Header().Set("Range", "0-0")
 	w.WriteHeader(http.StatusAccepted)
@@ -481,7 +483,8 @@ func (h *Handler) uploadPut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Docker-Content-Digest", digest)
-	w.Header().Set("Location", fmt.Sprintf("/v2/%s/blobs/%s", repo, digest))
+	// v0.5.44: 绝对 URL。
+	w.Header().Set("Location", absoluteLocation(r, fmt.Sprintf("/v2/%s/blobs/%s", repo, digest)))
 	w.WriteHeader(http.StatusCreated)
 }
 
@@ -644,4 +647,32 @@ func injectRouteParams(r *http.Request, kv ...string) {
 func writeV2MethodNotAllowed(w http.ResponseWriter, allow ...string) {
 	w.Header().Set("Allow", strings.Join(allow, ", "))
 	writeV2Error(w, http.StatusMethodNotAllowed, "UNSUPPORTED", "method not allowed")
+}
+
+// v0.5.44: Location headers must be absolute URLs per OCI Distribution Spec.
+// skopeo 在 v1.13+ 拒绝相对路径的 Location("http: no Location header in response"),
+// docker daemon 老版本会自己拼但新版本也卡。r.Host 是 client 的 Host header(可能经
+// 反代被改写),所以优先 X-Forwarded-Proto / X-Forwarded-Host,再回退 r.TLS / r.Host。
+// 跟 internal/api/handlers.go 的 registryURL(r) 同样语义。
+func absoluteLocation(r *http.Request, relPath string) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if proto := strings.ToLower(firstCSVHeader(r, "X-Forwarded-Proto")); proto == "http" || proto == "https" {
+		scheme = proto
+	}
+	host := r.Host
+	if fh := firstCSVHeader(r, "X-Forwarded-Host"); fh != "" {
+		host = fh
+	}
+	return scheme + "://" + host + relPath
+}
+
+func firstCSVHeader(r *http.Request, name string) string {
+	v := r.Header.Get(name)
+	if i := strings.IndexByte(v, ','); i >= 0 {
+		v = v[:i]
+	}
+	return strings.TrimSpace(v)
 }

@@ -6,6 +6,32 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.44] - 2026-09-29
+
+本轮主题:**修复 Location header 必须是绝对 URL**(原 3 处全是相对路径,导致严格客户端如 skopeo 直接报错)。来自 regsync 迁移测试的反馈 —— 实际是 Cairn 的 spec 实现偏差。
+
+### 修复
+
+- **Location header 改为绝对 URL**(`internal/registryd/routes.go`):
+
+  OCI Distribution Spec §5.1 / §5.2 明确要求 `Location` header **必须是绝对 URL**(`http(s)://host[:port]/v2/...`)。Cairn 之前 3 处返回的全是相对路径(`/v2/<repo>/manifests/<digest>` 等):
+
+  - `manifestPut` 写完回 `Location: /v2/<repo>/manifests/<digest>`(line 329)
+  - `uploadStart` POST 后回 `Location: /v2/<repo>/blobs/uploads/<uuid>`(line 409)
+  - `uploadPut` 提交后回 `Location: /v2/<repo>/blobs/<digest>`(line 484)
+
+  docker daemon 老版本会自己拼(宽松),skopeo / regsync 这类严格客户端**不识别相对路径** → `http: no Location header in response` 错误直接退出,无法继续上传。
+
+  新增 `absoluteLocation(r, relPath)` helper:按 `internal/api/handlers.go` 同样的 scheme/host 推导优先级 —— `X-Forwarded-Proto` > `r.TLS != nil`,`X-Forwarded-Host` > `r.Host`。反代后部署也能拿到客户端视角的绝对 URL。
+
+### 影响范围(升级须知)
+
+- **行为变化**:上传 / push manifest 后客户端拿到的 `Location` header 从 `/v2/...` 变成 `http(s)://<host>[:port]/v2/...`。
+- **数据兼容**:完全兼容,无 SQLite / 凭据库 / 镜像存储层面的改动。
+- **spec 偏差**:从 v0.1 起 Cairn 就有这个偏差,只是之前 docker daemon 自己拼路径所以没暴露。**0.5.44 把这 3 处都补成绝对 URL**,完全符合 OCI spec。
+
+---
+
 ## [0.5.43] - 2026-09-29
 
 本轮主题:**GOPROXY 配置流程顺一下** —— Makefile / .env.example 把 `https://goproxy.io,direct` 落成默认值,`make help` 显示当前生效的 GOPROXY,「永远走 `make rebuild`」注释强化。来自部署测试的 build timeout 反馈。
