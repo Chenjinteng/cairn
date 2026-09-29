@@ -31,7 +31,7 @@
 3. **库式后端**：HTTP handler 通过 `cmd/server` 装配，业务逻辑在 `internal/` 下，方便后续挂到别人的服务里
 4. **可观测性**：自带 `/healthz` `/readyz`
 
-## 当前状态:v0.5.38(2026-09-29) —— **部署测试暴露的 4 个 UX/依赖问题修复:右上角 badge 与「仓库地址」表单对齐(去掉 r.Host 兜底)+ 完全去掉 `fonts.googleapis.com` / `fonts.gstatic.com` 外部链接(零依赖离线部署)+ Cairn 品牌 favicon(teal 塔身 + amber 标记点)+ 代理测试默认目标改为 `https://registry-1.docker.io/v2/`(解决 `unsupported protocol scheme` 错误)**
+## 当前状态:v0.5.39(2026-09-29) —— **修正 0.5.38 的「仓库地址」方向:恢复 r.Host 兜底 + 表单编辑态预填 badge 值(刚部署完表单也是默认 IP,「看到什么就改什么」)+ 保留 0.5.38 的 字体 / favicon / 代理测试默认值 3 个修复**
 
 ✅ 已实现（v0.1 – v0.4）：
 
@@ -83,7 +83,7 @@
 4. `README.md` 里所有 `docker build/tag/push` 示例
 5. `CHANGELOG.md` 新增一节
 
-当前版本：`0.5.38`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
+当前版本：`0.5.39`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
 
 ## 项目结构
 
