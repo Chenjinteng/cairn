@@ -128,6 +128,13 @@ export interface MutableSettings {
    * or "linux/amd64,linux/arm/v7"). Lowercased server-side.
    */
   pullPlatforms: string;
+  /**
+   * v0.5.48: CSV of operator-added third-party registry base URLs
+   * ("<scheme>://host[:port]"). Normalised + deduped server-side on
+   * save. Merged with the built-in well-known hosts for image-reference
+   * parsing and offered in the pull page's source autocomplete.
+   */
+  pullKnownHosts: string;
 }
 
 /**

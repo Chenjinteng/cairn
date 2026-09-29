@@ -119,6 +119,13 @@ type MutableSettings struct {
 	// this as a chip multi-select so operators can flip their deployment
 	// from "all architectures" to "just x86+arm64" without restarting.
 	PullPlatforms string `json:"pullPlatforms"`
+	// PullKnownHosts (v0.5.48) is the operator-maintained CSV of
+	// third-party registry base URLs ("<scheme>://host[:port]", one per
+	// entry). The pull page merges it with the built-in well-known hosts
+	// for image-reference parsing and the source autocomplete; entries
+	// with an explicit http:// scheme also let dot-less intranet hosts
+	// ("harbor.local") round-trip through the smart parser.
+	PullKnownHosts string `json:"pullKnownHosts"`
 }
 
 // GetConfig returns the safe-to-expose runtime configuration.
@@ -211,6 +218,7 @@ func (h *Handlers) GetConfig(w http.ResponseWriter, r *http.Request) {
 			AllowRegistryEvents: h.Cfg.AllowRegistryEvents(),
 			StatsRetentionDays:  h.Cfg.StatsRetentionDays(),
 			PullPlatforms:       strings.Join(h.Cfg.PullPlatforms(), ","),
+			PullKnownHosts:      h.Cfg.PullKnownHosts(),
 		},
 	})
 }
@@ -302,6 +310,20 @@ func (h *Handlers) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
+		case "hostcsv":
+			// v0.5.48: CSV of third-party registry hosts. Each entry is
+			// normalised to "<scheme>://host[:port]" (bare entries get the
+			// same protocol guess as the frontend parser: no port / 443 /
+			// 8443 / 5000 → https, anything else → http). Garbage (paths,
+			// credentials, non-http schemes, empty hosts) is rejected here
+			// so the pull page never sees half-parsed entries.
+			normalized, err := normalizeHostCSV(val)
+			if err != nil {
+				writeError(w, r, http.StatusBadRequest,
+					errors.New(key+": "+err.Error()))
+				return
+			}
+			val = normalized
 		}
 		// Persist + apply. Empty string means "clear the override".
 		if val == "" {

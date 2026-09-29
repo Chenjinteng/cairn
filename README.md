@@ -31,7 +31,7 @@
 3. **库式后端**：HTTP handler 通过 `cmd/server` 装配，业务逻辑在 `internal/` 下，方便后续挂到别人的服务里
 4. **可观测性**：自带 `/healthz` `/readyz`
 
-## 当前状态:v0.5.47(2026-09-29) —— **匿名 Probe 接受 401+Bearer challenge 作为「活着」的标准应答:quay.io 的 token 端点对「无 scope + 无凭据」直接 401(ping challenge 不带 scope),旧的「ping 必须 200」实现让所有 quay.io 匿名拉取预检报 `TOKEN_FETCH_FAILED`;现在匿名 ping 不再做 token 升级,与 containers/image 的 Ping 语义对齐**
+## 当前状态:v0.5.48(2026-09-29) —— **知名拉取源预置 + 第三方拉取源可配置:知名公网源(Docker Hub / quay.io / ghcr.io / registry.k8s.io / mcr.microsoft.com / public.ecr.aws 等)预置进代码,设置页新增「第三方拉取源」(pull.known_hosts,UI 热改、后端归一化+校验,不走 .env);拉取页镜像名智能解析认自配主机——无点内网主机(`harbor/team/app`)与强制 http 的镜像站不再被误判成 Docker Hub 仓库路径;「来源 registry 地址」升级为 AutoComplete(知名源+自配源候选),并修复了该输入框一直缺 name 绑定、手动覆盖来源从未生效的老 bug**
 
 ✅ 已实现（v0.1 – v0.4）：
 
@@ -83,7 +83,7 @@
 4. `README.md` 里所有 `docker build/tag/push` 示例
 5. `CHANGELOG.md` 新增一节
 
-当前版本：`0.5.47`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
+当前版本：`0.5.48`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
 
 ## 项目结构
 

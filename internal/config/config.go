@@ -79,6 +79,7 @@ var MutableKeys = []string{
 	"stats.retention.days",        // days of activity_daily to retain; default 365
 	"stats.ignore_useragents",     // CSV; events whose UA substring-matches are folded into ignored
 	"pull.platforms",              // CSV of <os>/<arch>[/<variant>]; empty = pull every platform
+	"pull.known_hosts",            // CSV of third-party registry hosts the UI should recognise; empty = built-in list only
 	"pull.history.retention.days", // days of pull_jobs to retain; default 90
 	"notify.token",                // HMAC shared secret for /api/events external webhook; empty = 401 fail-closed
 }
@@ -104,6 +105,7 @@ var MutableFieldType = map[string]string{
 	"allow.registry_events": "bool",
 	"stats.retention.days":  "int",
 	"pull.platforms":        "stringcsv",
+	"pull.known_hosts":      "hostcsv",
 }
 
 // Get returns the persisted override for key, or "" if no override.
@@ -229,6 +231,17 @@ func (c *Config) PullPlatforms() []string {
 		}
 	}
 	return out
+}
+
+// PullKnownHosts returns the raw CSV of operator-added third-party registry
+// hosts (v0.5.48). Values are normalised on write (see api.normalizeHostCSV):
+// each entry is "<scheme>://host[:port]", deduped by host. Empty string means
+// "only the built-in known hosts".
+func (c *Config) PullKnownHosts() string {
+	if c == nil || c.Mutable == nil {
+		return ""
+	}
+	return c.Mutable.Get("pull.known_hosts")
 }
 
 func (c *Config) RegistryUsername() string {
