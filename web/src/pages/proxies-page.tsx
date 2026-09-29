@@ -36,6 +36,7 @@ import {
   updateProxy,
 } from '../api';
 import LoadError from '../components/load-error';
+import TableSkeleton from '../components/table-skeleton';
 import { useAppConfig } from '../config-store';
 import type {
   ApiResult,
@@ -208,9 +209,12 @@ export default function ProxiesPage({ config, sidebarFilter, onPublishGroups }: 
    * 兜两件事 —— 保存期间有忙碌反馈；连点两次不会建出两条。
    */
   const [saving, setSaving] = useState(false);
+  // v0.5.41: 首屏拉列表的 loading —— 之前切到本页直接显示「空表」,配 TableSkeleton。
+  const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     if (!config?.allowProxies) {
+      setLoading(false); // v0.5.41: 禁用管代理也收口,免得切回来一直转
       return;
     }
     const result = await listProxies();
@@ -220,6 +224,7 @@ export default function ProxiesPage({ config, sidebarFilter, onPublishGroups }: 
     } else {
       setError(result);
     }
+    setLoading(false); // v0.5.41: 收尾 —— 即便失败也退掉骨架,展示错误
   }, [config?.allowProxies]);
 
   useEffect(() => {
@@ -778,19 +783,25 @@ export default function ProxiesPage({ config, sidebarFilter, onPublishGroups }: 
           ) : null}
 
           <div className="panel">
-            <Table<ProxyEntry>
-              rowKey="id"
-              size="middle"
-              columns={columns}
-              dataSource={visibleProxies}
-              pagination={false}
-              locale={{
-                emptyText:
-                  proxies.length > 0
-                    ? '当前筛选下没有代理，换个筛选条件试试'
-                    : '还没有代理，点击右上「新增代理」',
-              }}
-            />
+            {/* v0.5.41: loading 走 TableSkeleton —— 首次切到代理管理页直接给骨架,
+                避免「空白 → Empty 文案 → 表格」三段闪。 */}
+            {loading && proxies.length === 0 ? (
+              <TableSkeleton rows={6} columns={5} title={false} description={false} />
+            ) : (
+              <Table<ProxyEntry>
+                rowKey="id"
+                size="middle"
+                columns={columns}
+                dataSource={visibleProxies}
+                pagination={false}
+                locale={{
+                  emptyText:
+                    proxies.length > 0
+                      ? '当前筛选下没有代理，换个筛选条件试试'
+                      : '还没有代理，点击右上「新增代理」',
+                }}
+              />
+            )}
           </div>
         </>
       )}

@@ -31,6 +31,7 @@ import {
   updateCredential,
 } from '../api';
 import LoadError from '../components/load-error';
+import TableSkeleton from '../components/table-skeleton';
 import { useAppConfig } from '../config-store';
 import type {
   ApiResult,
@@ -86,6 +87,8 @@ export default function CredentialsPage({ config, sidebarFilter, onPublishGroups
   const [modalOpen, setModalOpen] = useState(false);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [error, setError] = useState<ApiResult<unknown> | null>(null);
+  // v0.5.41: 首屏拉列表的 loading —— 之前切到本页直接显示「空表」,配 TableSkeleton。
+  const [loading, setLoading] = useState(true);
   /**
    * v0.5.18（F6）：配置从模块级 store 取，不再自己拉。
    *
@@ -97,6 +100,7 @@ export default function CredentialsPage({ config, sidebarFilter, onPublishGroups
 
   const refresh = useCallback(async () => {
     if (!config?.allowCredentials) {
+      setLoading(false); // v0.5.41: 禁用管凭据也收口,免得切回来一直转
       return;
     }
     const result = await listCredentials();
@@ -106,6 +110,7 @@ export default function CredentialsPage({ config, sidebarFilter, onPublishGroups
     } else {
       setError(result);
     }
+    setLoading(false);
   }, [config?.allowCredentials]);
 
   useEffect(() => {
@@ -452,19 +457,25 @@ export default function CredentialsPage({ config, sidebarFilter, onPublishGroups
           ) : null}
 
           <div className="panel">
-            <Table<Credential>
-              rowKey="id"
-              size="middle"
-              columns={columns}
-              dataSource={visibleCredentials}
-              pagination={false}
-              locale={{
-                emptyText:
-                  credentials.length > 0
-                    ? '当前筛选下没有凭据，换个筛选条件试试'
-                    : '还没有凭据，点击右上「新增凭据」',
-              }}
-            />
+            {/* v0.5.41: loading 走 TableSkeleton —— 跟 pull/proxies 一致,首次访问
+                看到「骨架占位」而不是「空表 + Empty」,避免误以为坏了。 */}
+            {loading && credentials.length === 0 ? (
+              <TableSkeleton rows={6} columns={5} title={false} description={false} />
+            ) : (
+              <Table<Credential>
+                rowKey="id"
+                size="middle"
+                columns={columns}
+                dataSource={visibleCredentials}
+                pagination={false}
+                locale={{
+                  emptyText:
+                    credentials.length > 0
+                      ? '当前筛选下没有凭据，换个筛选条件试试'
+                      : '还没有凭据，点击右上「新增凭据」',
+                }}
+              />
+            )}
           </div>
         </>
       )}

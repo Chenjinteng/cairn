@@ -19,6 +19,7 @@ import {
 } from '../api';
 import ImageDetailDrawer from '../components/image-detail-drawer';
 import MetricCard from '../components/metric-card';
+import TableSkeleton from '../components/table-skeleton';
 import type { SidebarGroup, SidebarSelection } from '../components/page-sidebar';
 import { useAppConfig } from '../config-store';
 import type {
@@ -500,33 +501,39 @@ export default function ImagesPage({
       <div className="panel">
         {/* 表格自己滚（表头粘住），页面不滚 —— 见 app.css 的 .page--fill。 */}
         <div className="table-scroll" ref={tableWrapRef}>
-          <Table<RegistryRepository>
-            rowKey="name"
-            size="middle"
-            loading={loading}
-            columns={columns}
-            dataSource={rows}
-            scroll={{ x: statsEnabled ? 1100 : 900 }}
-            sticky={{ getContainer: () => tableWrapRef.current ?? window }}
-            locale={{
-              emptyText: (
-                <Empty
-                  description={
-                    inventory
-                      ? '该 registry 没有匹配的镜像'
-                      : '还没有清单，点击「重新扫描」从 registry 拉取'
-                  }
-                />
-              ),
-            }}
-            pagination={{
-              size: 'small',
-              showSizeChanger: true,
-              defaultPageSize: 20,
-              pageSizeOptions: [10, 20, 50, 100],
-              showTotal: (total) => `共 ${total} 个仓库`,
-            }}
-          />
+          {/* v0.5.41: loading 时改用 TableSkeleton 占位(列数跟实际表对齐),
+              替换 antd Table 自带的居中 spinner —— 之前 spinner 让人以为「页面空了」。
+              实际表没数据(rows 为空)时仍走 Empty 走文案的逻辑。 */}
+          {loading ? (
+            <TableSkeleton rows={10} columns={statsEnabled ? 6 : 5} title={false} description={false} />
+          ) : (
+            <Table<RegistryRepository>
+              rowKey="name"
+              size="middle"
+              columns={columns}
+              dataSource={rows}
+              scroll={{ x: statsEnabled ? 1100 : 900 }}
+              sticky={{ getContainer: () => tableWrapRef.current ?? window }}
+              locale={{
+                emptyText: (
+                  <Empty
+                    description={
+                      inventory
+                        ? '该 registry 没有匹配的镜像'
+                        : '还没有清单，点击「重新扫描」从 registry 拉取'
+                    }
+                  />
+                ),
+              }}
+              pagination={{
+                size: 'small',
+                showSizeChanger: true,
+                defaultPageSize: 20,
+                pageSizeOptions: [10, 20, 50, 100],
+                showTotal: (total) => `共 ${total} 个仓库`,
+              }}
+            />
+          )}
         </div>
       </div>
 

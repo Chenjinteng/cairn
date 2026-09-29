@@ -22,6 +22,7 @@ import type { ColumnsType } from 'antd/es/table';
 
 import IgnoreRuleModal from '../components/ignore-rule-modal';
 import LoadError from '../components/load-error';
+import TableSkeleton from '../components/table-skeleton';
 
 import { useAppConfig } from '../config-store';
 
@@ -675,31 +676,36 @@ export default function StatsPage({
           </div>
           {/* 榜单自己滚、表头粘住，避免翻页/翻列表时把上面的时间窗与 KPI 顶走。 */}
           <div className="table-scroll table-scroll--bounded" ref={topWrapRef}>
-            <Table<StatsTopItem>
-              /*
-               * rowKey 必须**与 topBy 无关**。
-               *
-               * 早先写成 `topBy === 'tag' ? repo:tag : repo`：切换维度时同一个 record 的 key
-               * 会变，React 无法正确协调，表现为**旧行留在 DOM 里** ——
-               * 分页器显示"共 8 项"而 DOM 里有 16 行、`data-row-key` 重复，
-               * 界面看到的就是"Tag 列错位/空白"，而且每切换一次就多留一批。
-               * 用 \u0000 拼接：两种维度下都唯一，且切换维度时不变。
-               */
-              rowKey={(record) => `${record.repository}\u0000${record.tag ?? ''}`}
-              size="middle"
-              loading={loading}
-              columns={topColumns}
-              dataSource={topItems}
-              scroll={{ x: 800 }}
-              sticky={{ getContainer: () => topWrapRef.current ?? window }}
+            {/* v0.5.41: top 榜单 loading 走骨架 —— 切时间窗时直接给骨架占位,
+                避免「spinner → 空表 → 数据回来」三段闪。首屏也用同一路径。 */}
+            {loading && topItems.length === 0 ? (
+              <TableSkeleton rows={8} columns={4} title={false} description={false} />
+            ) : (
+              <Table<StatsTopItem>
+                /*
+                 * rowKey 必须**与 topBy 无关**。
+                 *
+                 * 早先写成 `topBy === 'tag' ? repo:tag : repo`：切换维度时同一个 record 的 key
+                 * 会变，React 无法正确协调，表现为**旧行留在 DOM 里** ——
+                 * 分页器显示"共 8 项"而 DOM 里有 16 行、`data-row-key` 重复，
+                 * 界面看到的就是"Tag 列错位/空白"，而且每切换一次就多留一批。
+                 * 用 \u0000 拼接：两种维度下都唯一，且切换维度时不变。
+                 */
+                rowKey={(record) => `${record.repository}\u0000${record.tag ?? ''}`}
+                size="middle"
+                columns={topColumns}
+                dataSource={topItems}
+                scroll={{ x: 800 }}
+                sticky={{ getContainer: () => topWrapRef.current ?? window }}
               pagination={{
                 size: 'small',
                 showSizeChanger: false,
                 defaultPageSize: 20,
                 showTotal: (total) => `共 ${total} 项`,
               }}
-              locale={{ emptyText: <Empty description="该时间窗内没有可排行的数据" /> }}
-            />
+                locale={{ emptyText: <Empty description="该时间窗内没有可排行的数据" /> }}
+              />
+            )}
           </div>
         </div>
       ) : null}
@@ -725,20 +731,23 @@ export default function StatsPage({
             「计入 0」= 收到过但被规则排掉了；这一行不存在才是真的没来过
           </span>
         </div>
-        <Table<StatsClientItem>
-          rowKey="useragent"
-          size="small"
-          loading={loading}
-          columns={clientColumns}
-          dataSource={clients}
-          pagination={{
-            size: 'small',
-            hideOnSinglePage: true,
-            defaultPageSize: 10,
-            showTotal: (total) => `共 ${total} 个客户端`,
-          }}
-          locale={{ emptyText: <Empty description="这个时间窗内还没收到任何事件" /> }}
-        />
+        {loading && clients.length === 0 ? (
+          <TableSkeleton rows={6} columns={3} title={false} description={false} />
+        ) : (
+          <Table<StatsClientItem>
+            rowKey="useragent"
+            size="small"
+            columns={clientColumns}
+            dataSource={clients}
+            pagination={{
+              size: 'small',
+              hideOnSinglePage: true,
+              defaultPageSize: 10,
+              showTotal: (total) => `共 ${total} 个客户端`,
+            }}
+            locale={{ emptyText: <Empty description="这个时间窗内还没收到任何事件" /> }}
+          />
+        )}
       </div>
 
       <Collapse
@@ -806,22 +815,25 @@ export default function StatsPage({
                   {' '}—— 服务重启就清空，也没有更早的历史。想看更早的请用上面的「见过的客户端」
                   （它落盘，重启不丢）。
                 </div>
-                <Table<StatsEventItem>
-                  rowKey={(record) => `${record.at}-${record.id}`}
-                  size="small"
-                  loading={loading}
-                  columns={eventColumns}
-                  dataSource={events}
-                  scroll={{ x: 1000 }}
-                  pagination={{
-                    size: 'small',
-                    defaultPageSize: 10,
-                    pageSizeOptions: [10, 20, 50],
-                    showSizeChanger: true,
-                    showTotal: (total) => `共 ${total} 条`,
-                  }}
-                  locale={{ emptyText: <Empty description="还没收到任何事件" /> }}
-                />
+                {loading && events.length === 0 ? (
+                  <TableSkeleton rows={8} columns={5} title={false} description={false} />
+                ) : (
+                  <Table<StatsEventItem>
+                    rowKey={(record) => `${record.at}-${record.id}`}
+                    size="small"
+                    columns={eventColumns}
+                    dataSource={events}
+                    scroll={{ x: 1000 }}
+                    pagination={{
+                      size: 'small',
+                      defaultPageSize: 10,
+                      pageSizeOptions: [10, 20, 50],
+                      showSizeChanger: true,
+                      showTotal: (total) => `共 ${total} 条`,
+                    }}
+                    locale={{ emptyText: <Empty description="还没收到任何事件" /> }}
+                  />
+                )}
               </>
             ),
           },
