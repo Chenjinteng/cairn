@@ -6,6 +6,51 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.36] - 2026-09-29
+
+本轮主题:**统一 SQLite DB 文件名 `cairn.db` → `cairn.db`(与产品名对齐,v0.5.21 起的「image / container / service = cairn」命名一致)+ 顶部导航 Tab 顺序按「查/操作 → 观测 → 管理」重排**。
+
+### 修复
+
+- **DB 文件名 `cairn.db` → `cairn.db`**(`internal/server/server.go:361` `safeDBPath`):
+
+  旧:`safeDBPath` 返回 `filepath.Join(dataDir, "cairn.db")` —— DB 文件名沿用旧产品名,与 v0.5.23 起的「image / container / service = cairn」、v0.5.21 起的品牌升级不一致。
+  新:返回 `filepath.Join(dataDir, "cairn.db")`。**容器内 `/app/data` 仍是编译期常量**,只改 DB 文件名。
+
+  **数据迁移**:本轮**无自动迁移** —— 用户在测试阶段,可以直接删 `/data/cairn/cairn.db` / `cairn.db-shm` / `cairn.db-wal`,让 cairn 重新建一个空 `cairn.db`。生产环境后续若要兼容升级,需另加一次性 `rename` 逻辑(v0.5.x 内不引入,留待正式发布线)。
+
+- **同步位置**:README「数据目录约定」一节列举文件时 `cairn.db` → `cairn.db`;`docker-compose.yml` 注释里 `cairn.db / heat.db` → `cairn.db / heat.db`(注意 `heat.db` 是热度数据,本轮不动 —— 名字本身就是「heat」语义)。
+
+### 变更
+
+- **顶部导航 Tab 顺序调整**(`web/src/App.tsx` `NAV_ITEMS` + 渲染三元链):
+
+  旧:`镜像列表` → `镜像热度` → `镜像拉取` → `凭据管理` → `代理管理` → `设置`
+  新:`镜像列表` → `镜像拉取` → `镜像热度` → `凭据管理` → `代理管理` → `设置`
+
+  原因:user 反馈「**列表是查看,拉取是发现不够了来操作的,才是热度与管理**」—— 把 `镜像拉取` 上移到 `镜像热度` 之前,符合从「查/操作 → 观测 → 管理」的真实使用路径。`NAV_ITEMS` 与渲染三元链同步调整(否则会出现「点了第 3 个 Tab 渲染第 5 个 Tab」的渲染错位)。**纯展示层改动,无 API / 数据 / 行为变化**。
+
+- **`tests/web-auto/scenarios/_smoke-all-pages.yaml` 同步**:Tab 切换顺序从「images → stats → pull → credentials → proxies → settings」改为「images → pull → stats → credentials → proxies → settings」;`smoke-02-stats` / `smoke-03-pull` 改名 `smoke-02-pull` / `smoke-03-stats`。22 步不变。**22/22 重跑 passed on 0.5.35**(runId `r-20260929013358-5a8c`,7163ms),上轮已验证。
+
+- **版本号同步**(按 AGENTS.md「一次改动要同时更新这几处」):`internal/version/version.go`、`.env.example` 的 `IMAGE`、`docker-compose.yml` 的 `${IMAGE:-…}`、README 「当前状态」+ 「当前版本」、CHANGELOG 顶部节标题 全部 → `0.5.36`。
+
+### 影响范围(升级须知)
+
+- **行为变化**:SQLite DB 文件名 `cairn.db` → `cairn.db`。启动时若 `/app/data/cairn.db` 不存在会直接 `db.Open` 创建 —— **升级前需要把旧的 `cairn.db` 删掉(本仓库目前仍在测试阶段,可直接删),否则 `/app/data/cairn.db` 会变孤儿文件留在那**。
+- **数据迁移**:无(用户授权丢数据,可直接清空 `/data/cairn/` 重来)。
+- **API 契约不变**;前端行为不变;TS 代码不变(本轮只改 `App.tsx` 顺序)。
+- **无新依赖**。
+
+### 验证
+
+- 本机门禁:`tsc --noEmit` RC=0 / `go build ./...` RC=0 / `go test -race ./...` RC=0。
+- 158 上重构建 `cairn:0.5.36`,镜像 ID 必须 ≠ `cairn:0.5.35`(`5e5782e374ee`)。
+- 启动日志 `db:"true"` 字段确认 SQLite 装载成功;`/api/inventory` 验证 `cairn.db` 实际被读写。
+- 14 场景全量回归(为节省时间,只跑可能受影响的子集:`_smoke-all-pages` / `images-page` / `pull-page` / `pull-real` / `stats-page` / `delete-real` / `delete-repo-real` / `gc-real` / `fault-timeout` / `fault-stall-multipage`)。
+- 验收报告见 `tests/web-auto/reports/acceptance-0.5.36-2026-09-29.md`。
+
+---
+
 ## [0.5.35] - 2026-09-29
 
 本轮主题:**关掉 R-open-2 实际剩余项(`POST /api/gc` 补 `allowDelete` 门控,与 tag / 仓库删除同档)+ 清掉跨版本堆积的 8 个前端类型错误(`tsc --noEmit` 由 RC=2 转 RC=0,可纳入 PR 门禁)**。
