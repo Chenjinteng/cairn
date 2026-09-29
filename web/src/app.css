@@ -145,6 +145,81 @@
   overflow: auto;
 }
 
+/*
+ * v0.5.37：body 区域改为 grid（220 px 侧栏 + 1fr 内容区）。
+ * 侧栏是每页内部的 sub-nav（参见 docs/design/cairn-ui-design.html § 6 + demo-A-*.html）。
+ * 顶栏的 Segmented 6 Tab 仍是顶级导航，不动。
+ */
+.app-body {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.app-page-sidebar {
+  border-right: 1px solid var(--color-border);
+  padding: 16px 12px;
+  background: var(--color-side-nav-bg);
+  overflow-y: auto;
+  font-size: 13px;
+}
+
+.page-sidebar-group + .page-sidebar-group {
+  margin-top: 4px;
+}
+
+.page-sidebar-group-label {
+  padding: 12px 12px 6px;
+  font-size: 11px;
+  color: var(--color-text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+}
+
+.page-sidebar-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  padding: 7px 12px;
+  font-size: 13px;
+  color: var(--color-side-nav-text);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+}
+
+.page-sidebar-item:hover {
+  background: var(--color-side-nav-hover-bg);
+  color: var(--color-text-1);
+}
+
+.page-sidebar-item.is-active {
+  background: var(--color-side-nav-active-bg);
+  color: var(--color-side-nav-text-active);
+  font-weight: 500;
+}
+
+.page-sidebar-item-badge {
+  font-size: 11px;
+  color: var(--color-text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.page-sidebar-item.is-active .page-sidebar-item-badge {
+  color: var(--color-side-nav-text-active);
+}
+
 /* 页面骨架。外边距由 .app-main 的 p-4 提供，页面内不要再加外边距。 */
 .page {
   display: flex;
