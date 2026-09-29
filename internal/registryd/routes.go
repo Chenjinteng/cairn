@@ -428,6 +428,8 @@ func (h *Handler) uploadGet(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Docker-Upload-UUID", u.UUID)
 	w.Header().Set("Range", fmt.Sprintf("0-%d", u.Size))
+	// v0.5.46: GET 上传进度(204)同样要求带 Location,与 PATCH 口径一致。
+	w.Header().Set("Location", absoluteLocation(r, fmt.Sprintf("/v2/%s/blobs/uploads/%s", repo, u.UUID)))
 	w.Header().Set("Content-Length", "0")
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -454,6 +456,13 @@ func (h *Handler) uploadPatch(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Docker-Upload-UUID", uuid)
 	w.Header().Set("Range", fmt.Sprintf("0-%d", size))
+	// v0.5.46: OCI Distribution Spec 要求 PATCH 202 响应必须带 Location(下一步的
+	// 上传 URL,服务端可以借机重定位会话)。skopeo/containers-image 传完数据后
+	// 从这个头拿 PUT finalize 的地址,缺了直接报
+	// "Error determining upload URL: http: no Location header in response"。
+	// 我们不重定位会话,原样回传同一个上传 URL(绝对形式,同 v0.5.44 口径)。
+	w.Header().Set("Location", absoluteLocation(r, fmt.Sprintf("/v2/%s/blobs/uploads/%s", repo, uuid)))
+	w.Header().Set("Content-Length", "0")
 	w.WriteHeader(http.StatusAccepted)
 }
 

@@ -193,9 +193,14 @@ func TestRegistryPushPullRoundTrip(t *testing.T) {
 		t.Fatalf("start upload status=%d body=%s", rr.Code, rr.Body.String())
 	}
 	loc := rr.Header().Get("Location")
-	uuid := strings.TrimPrefix(loc, "/v2/alpine/blobs/uploads/")
-	if uuid == "" {
+	if loc == "" {
 		t.Fatalf("no Location header: %v", rr.Header())
+	}
+	// v0.5.44 起 Location 是绝对 URL(httptest.NewRequest 默认 Host=example.com),
+	// 取路径最后一段作为 uuid —— 对相对/绝对两种形式都成立。
+	uuid := loc[strings.LastIndex(loc, "/")+1:]
+	if uuid == "" {
+		t.Fatalf("cannot parse uuid from Location %q", loc)
 	}
 
 	// 2. PATCH chunk (sha256 of "hello world" = 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824)
@@ -237,7 +242,7 @@ func TestRegistryPushInvalidDigest(t *testing.T) {
 	rr := httptest.NewRecorder()
 	r.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/v2/alpine/blobs/uploads/", nil))
 	loc := rr.Header().Get("Location")
-	uuid := strings.TrimPrefix(loc, "/v2/alpine/blobs/uploads/")
+	uuid := loc[strings.LastIndex(loc, "/")+1:] // v0.5.44+: 绝对 URL,取最后一段
 
 	// PATCH something
 	pReq := httptest.NewRequest(http.MethodPatch, "/v2/alpine/blobs/uploads/"+uuid, bytesReader([]byte("abc")))
