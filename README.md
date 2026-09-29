@@ -31,7 +31,7 @@
 3. **库式后端**：HTTP handler 通过 `cmd/server` 装配，业务逻辑在 `internal/` 下，方便后续挂到别人的服务里
 4. **可观测性**：自带 `/healthz` `/readyz`
 
-## 当前状态:v0.5.46(2026-09-29) —— **补齐 PATCH / GET 上传响应的 `Location` 头(OCI spec 强制):0.5.44 只改了 POST/PUT 三处,漏了 PATCH —— skopeo 传完 blob 数据后从 PATCH 响应拿下一步上传地址,缺头直接报 `Error determining upload URL: http: no Location header in response`,PUT finalize 根本不会发出**
+## 当前状态:v0.5.47(2026-09-29) —— **匿名 Probe 接受 401+Bearer challenge 作为「活着」的标准应答:quay.io 的 token 端点对「无 scope + 无凭据」直接 401(ping challenge 不带 scope),旧的「ping 必须 200」实现让所有 quay.io 匿名拉取预检报 `TOKEN_FETCH_FAILED`;现在匿名 ping 不再做 token 升级,与 containers/image 的 Ping 语义对齐**
 
 ✅ 已实现（v0.1 – v0.4）：
 
@@ -83,7 +83,7 @@
 4. `README.md` 里所有 `docker build/tag/push` 示例
 5. `CHANGELOG.md` 新增一节
 
-当前版本：`0.5.46`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
+当前版本：`0.5.47`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
 
 ## 项目结构
 

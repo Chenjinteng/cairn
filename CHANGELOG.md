@@ -6,6 +6,46 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.47] - 2026-09-29
+
+本轮主题:**匿名 Probe 接受 401+Bearer challenge** —— 用户以 quay.io 为拉取源做预检时报 `registry: GET /v2/: 401 unauthorized (bearer token fetch failed: TOKEN_FETCH_FAILED: token endpoint returned 401 url=https://quay.io/v2/auth)`。Docker Hub 匿名一直能过,quay.io 匿名必挂。
+
+### 修复
+
+- **匿名 Probe 不再做 token 升级**(`internal/registry/inventory.go`):
+
+  `GET /v2/` 有两种「活着」的标准应答(OCI Distribution Spec,containers/image 的 Ping 同样两者都算成功):
+
+  | 应答 | 谁这样 |
+  | --- | --- |
+  | `200 OK` | 内网 registry、mcr.microsoft.com、registry.k8s.io(匿名即通) |
+  | `401 + WWW-Authenticate: Bearer` | quay.io、ghcr.io、gcr.io、Docker Hub、public.ecr.aws(公网 Bearer 型对匿名 ping 的标准应答) |
+
+  旧实现只认 200,401 全权交给 `doRequest` 的 401→token 升级链。升级链对 `/v2/` 这种 **ping challenge 不带 scope** 的请求(AGENTS.md §认证记录过的事实)有两个分岔:
+
+  - Docker Hub:auth.docker.io 无 scope 也发匿名 token → 升级走通 → 重试 200 → Probe OK(**碰巧能用**)
+  - quay.io:`/v2/auth` 对「无 scope + 无凭据」**直接 401**("Requires authentication") → `TOKEN_FETCH_FAILED` → 整个预检挂掉(**用户报的错**)
+
+  新语义按凭据配置分两支:
+  - **匿名**(未配 username):裸 ping,`200` 或 `401 + 可解析 Bearer challenge` = 成功;401 但无 challenge(比如反代配错)= 失败 `PROBE_FAILED`。真实资源能否匿名拉,由预检的下一步(取真实 repo:tag 的 manifest,v0.5.17 起就有)决定 —— 资源请求的 challenge **带 scope**,匿名 token 照常签发,不受本次改动影响。
+  - **带凭据**:保持原有升级链(401 → basic 换 token → Bearer 重试 → 200)。token 换取失败 = 凭据不被接受,照旧报错 —— 凭据测试要的就是这个结论,**不能**因为「对面活着」就放行错凭据。
+
+- **新增回归测试** `internal/registry/probe_test.go`:内置 quay.io 形态的 fake registry(ping 401 无 scope / token 端点匿名无 scope 拒绝、带 scope 放行 / manifest challenge 带 scope),5 个用例:
+  1. 匿名 Probe 过(旧代码精确复现用户报错 `TOKEN_FETCH_FAILED`,已用 stash 复验测试有牙)
+  2. 匿名 Probe → GetManifest 全链路(带 scope challenge → 匿名 token → 200)
+  3. 带凭据 Probe:对的过、错的必须挂(凭据校验语义不回退)
+  4. 200 直通(内网 / mcr 形态不回退)
+  5. 401 无 challenge 必须挂(`PROBE_FAILED`)
+
+### 影响范围(升级须知)
+
+- **行为变化**:匿名拉取预检对 quay.io / ghcr.io / gcr.io / public.ecr.aws 等「ping 401 + 资源带 scope」的公网 registry 从 `TOKEN_FETCH_FAILED` 变为通过;后续 manifest 预检照旧给出「这个源镜像能不能拉」的真实结论。
+- **不变**:带凭据的 Probe 语义、Docker Hub 匿名(从「升级后 200」变为「401+challenge 即过」,结论相同,还省一次 token 往返)、内网 registry 200 直通。
+- **数据兼容**:无存储 / SQLite / 凭据库层面改动。
+- **已知遗留(下一轮候选)**:凭据库「测试」按钮(`TestCredential`)走的是裸 Basic 直发 `GET /v2/`,对 Bearer 型公网 registry(quay.io / Docker Hub)即使凭据有效也显示 401 —— 与本次修的 Probe 是两条链路,要修需把 token 交换引入该 handler,单独一轮做。
+
+---
+
 ## [0.5.46] - 2026-09-29
 
 本轮主题:**补齐 PATCH / GET 上传响应的 `Location` 头** —— 0.5.45 修好 upload-start 后,skopeo 的 POST 已经能拿到 202 + 绝对 Location,但 blob 数据传输(PATCH)完成后仍然报同一个错 `Error determining upload URL: http: no Location header in response`。这次的缺口在 **PATCH 响应**。
