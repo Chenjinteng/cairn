@@ -59,8 +59,25 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 - **首屏**:Google Fonts CDN 加载 ≈ 50 KB(Outfit 5 weight)+ DM Serif Display ≈ 12 KB + JetBrains Mono ≈ 18 KB,`font-display: swap` 让首字不阻塞。**离线 / 防火墙环境自动降级到系统栈**,视觉接近但不字面一致。
 - **浏览器兼容**:`font-display: swap` 要求 Safari 11.1+ / Chrome 60+ / Firefox 58+ / Edge 17+;老版本浏览器会走 FOIT(Flash of Invisible Text)约 100ms,可接受。**没有 fallback 到 `block`** —— 因为那会阻塞首屏。
 - **`cairn-mark.tsx` 颜色未动**:4 个硬编码 hex(`#0d9488` / `#f59e0b` / `#5eead4` / `#fbbf24`)与 `docs/design/cairn-brand.html` § Brand 色定义字面一致,故意不跟随 token(品牌色不应当被主题切换改变)。本轮不动,留待 0.5.x 后续优化。
+- **每页内 220 px sub-nav 侧栏**(commit `e97c760` 补):
 
----
+  设计稿 § 6 + demo-A-*.html 明确侧栏是**每页内部**的 sub-nav(仓库筛选 / 凭据分组 / 拉取历史 / 时间窗 / 协议分类 / 设置分类),不是顶级导航替代。本轮 0.5.37 接续:顶栏的 6 Tab 仍是顶级导航不变,在 `.app-body` 里加 220 px 侧栏。
+
+  - App.tsx layout:`.app-main` → `.app-body`(grid `220px 1fr`),前置 `<PageSidebar page={page} />`;6 Tab 顶级导航保留不动
+  - 新增 `web/src/components/page-sidebar.tsx`:按 page key 渲染对应 group + item(6 page 全覆盖)
+  - app.css:`.app-body` / `.app-page-sidebar` / `.page-sidebar-group-label` / `.page-sidebar-item` 一套样式;色取自 theme.css 已有 `--color-side-nav-*` token(深浅两套);圆角 12 px 与 § 4 Surfaces 对齐
+  - **v0.5.37 范围内仅做"UI 占位 + active 高亮",不联动 page 内容过滤**(避免触动每个 page 内部 state 体系);后续 0.5.x 优化时再加联动
+  - **14 场景 selector 不变**(顶 Tab 仍是顶级导航,scenarios 用 `.app-nav .ant-segmented-item-label` 仍有效)
+
+### 修复(0.5.37.1)
+
+- **`web/index.html` Google Fonts 改成 `rel="preload" as="style"` + `onload` 异步切换 stylesheet**(commit `5adedd0`):
+
+  **根因**:用 `<link rel="stylesheet">` 引用 fonts.googleapis.com 时,headless chromium 把 stylesheet 当 render-blocking。53 runner 测试环境访问 fonts.googleapis.com 不通(实测 fetch timeout 11s),chromium 的 `domcontentloaded` 永不 fire(30s timeout),导致整页卡白屏。
+
+  **修复**:`<link rel="preload" as="style" href="...fonts.googleapis.com..." onload="this.rel='stylesheet'; this.onload=null;">` —— 预加载但不阻塞渲染,onload 异步切到真正的 stylesheet。`<noscript>` 兜底给禁用 JS 的浏览器。
+
+  **效果**:53 chromium 实测 `domcontentloaded` 1s 内可达;CDN 可达 → Outfit 切到 stylesheet 生效;CDN 不可达 → `font-display: swap` + theme.css `--font-sans` 系统栈 fallback,首屏不白屏也不显示空白字。
 
 ## [0.5.36] - 2026-09-29
 
