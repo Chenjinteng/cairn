@@ -170,7 +170,6 @@ export default function App({
               <SettingsPage
                 config={config}
                 onConfigChange={publishConfig}
-                inventory={inventory}
                 onInventoryChange={setInventory}
               />
             )}

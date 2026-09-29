@@ -28,7 +28,7 @@
 3. **库式后端**：HTTP handler 通过 `cmd/server` 装配，业务逻辑在 `internal/` 下，方便后续挂到别人的服务里
 4. **可观测性**：自带 `/healthz` `/readyz`
 
-## 当前状态:v0.5.34(2026-09-28) —— **设置页加「监听端口」只读显示 + README 加改端口指南**(不暴露修改入口,因 docker 端口映射 cairn 管不到)
+## 当前状态:v0.5.35(2026-09-29) —— **`POST /api/gc` 补 `allowDelete` 门控(与 tag/仓库删除同档)+ 前端清掉 8 个既有类型错误(`api.ts` 缺 import + `settings-page.tsx` 未使用声明)`tsc --noEmit` 由 RC=2 转 RC=0**
 
 ✅ 已实现（v0.1 – v0.4）：
 
@@ -80,7 +80,7 @@
 4. `README.md` 里所有 `docker build/tag/push` 示例
 5. `CHANGELOG.md` 新增一节
 
-当前版本：`0.5.34`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
+当前版本：`0.5.35`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
 
 ## 项目结构
 

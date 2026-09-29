@@ -659,7 +659,19 @@ func (e *ExtraHandlers) DeleteManifestByDigest(w http.ResponseWriter, r *http.Re
 // with no body see no change. The response gains removedEmptyRepos /
 // emptyRepoFreedBytes only when the flag is on, otherwise those fields
 // are omitted (zero-value omitempty).
+// RunGC triggers a storage GC pass. Same AllowDelete gate as
+// DeleteRepository / DeleteManifestByDigest — GC is a destructive op (it
+// drops blobs and, with cleanEmptyRepos=true, whole repositories), so it
+// must obey the same runtime switch as the explicit delete endpoints.
+// Without this gate, allow.delete=false would still allow GC to wipe data,
+// which is the r-open-2 inconsistency noted in the 0.5.34 acceptance
+// report.
 func (e *ExtraHandlers) RunGC(w http.ResponseWriter, r *http.Request) {
+	if !e.allowDelete() {
+		writeError(w, r, http.StatusForbidden,
+			errors.New("gc is disabled (allow.delete=false)"))
+		return
+	}
 	if e.Store == nil {
 		writeError(w, r, http.StatusServiceUnavailable, errors.New("storage backend unavailable"))
 		return

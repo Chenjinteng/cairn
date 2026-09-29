@@ -3,7 +3,6 @@ import {
   Alert,
   App,
   Button,
-  Descriptions,
   Empty,
   Form,
   Input,
@@ -30,12 +29,11 @@ import IgnoreRuleModal from '../components/ignore-rule-modal';
 import LoadError from '../components/load-error';
 import { useAppConfig } from '../config-store';
 import type { ApiResult, AppConfig, IgnoreRules, Inventory } from '../types';
-import { formatDateTime, stripUrlProtocol } from '../utils';
+import { stripUrlProtocol } from '../utils';
 
 interface Props {
   config: AppConfig | null;
   onConfigChange: (config: AppConfig) => void;
-  inventory: Inventory | null;
   onInventoryChange: (inventory: Inventory) => void;
 }
 
@@ -63,7 +61,7 @@ function ReadonlyValue({ value, mono }: { value: string; mono?: boolean }) {
   );
 }
 
-export default function SettingsPage({ config, onConfigChange, inventory, onInventoryChange }: Props) {
+export default function SettingsPage({ config, onConfigChange, onInventoryChange }: Props) {
   const { message, modal } = App.useApp();
   /**
    * v0.5.18（F6/F7）：读取/缓存/单飞都在 config-store；本页只在 config 缺失时
@@ -81,7 +79,6 @@ export default function SettingsPage({ config, onConfigChange, inventory, onInve
   // v0.5.1: 编辑中的 REGISTRY_URL 草稿；提交时 PATCH /api/config，服务器
   // 写 SQLite + 热替换 cfg.Mutable，新值对下一个入队的 pull job 立即生效。
   const [registryUrlDraft, setRegistryUrlDraft] = useState<string>('');
-  const [savingRegistryUrl, setSavingRegistryUrl] = useState(false);
 
   // v0.5.2: drafts for every other editable field. Server-side keys mirror
   // config.MutableKeys so the PATCH payload is just {mutable: {key: val}}.
