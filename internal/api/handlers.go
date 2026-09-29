@@ -63,6 +63,10 @@ type AppConfig struct {
 	// v0.5.34: 暴露 cfg.Port 让 settings page 能只读显示当前监听端口。
 	// 见 settings page 「监听端口」—— 端口本身不可热改。
 	Port                  int      `json:"port"`
+	// v0.5.40: 宿主机侧对外端口,由 docker-compose 把 HOST_PORT env 传进来。
+	// 0 = 与 Port 同值(无端口映射,直接容器访问)。UI 「监听端口」字段同时显示
+	// 「容器内 Port」与「宿主机 HostPort」,让运维一眼分清两件事。
+	HostPort              int      `json:"hostPort"`
 	URL                   string   `json:"url"`
 	Host                  string   `json:"host"`
 	UsingAuth             bool     `json:"usingAuth"`
@@ -180,6 +184,7 @@ func (h *Handlers) GetConfig(w http.ResponseWriter, r *http.Request) {
 		// 端口本身不可热改(改需要 graceful restart + 改 docker-compose 的
 		// HOST_PORT 端口映射),UI 只显示不改 —— 见 settings page 「监听端口」字段。
 		Port:                  h.Cfg.Port,
+		HostPort:              h.Cfg.HostPort,
 		URL:                   displayURL,
 		Host:                  hostOf(displayURL),
 		UsingAuth:             h.Cfg.UsingAuth(),

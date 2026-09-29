@@ -29,14 +29,14 @@ services:
         NODE_IMAGE: ${NODE_IMAGE:-node:22-alpine}
         NPM_REGISTRY: ${NPM_REGISTRY:-}
 
-    image: ${IMAGE:-cairn:0.5.39}
+    image: ${IMAGE:-cairn:0.5.40}
     container_name: cairn
     restart: unless-stopped
 
     ports:
       - "${HOST_PORT:-8787}:8787"
 
-    # 运行时只有这两个环境变量：
+    # 运行时只有这三个环境变量：
     #   - 业务配置（registry 地址/代理/账号/各开关/保留天数…）v0.5.9 起就以
     #     UI → SQLite 为准，.env 里再写 REGISTRY_* 也不会被读；
     #   - 容器内路径（/app/data、/app/data/registry）是编译期常量，不接受 env
@@ -45,6 +45,11 @@ services:
       REGISTRY_CREDENTIAL_KEY: ${REGISTRY_CREDENTIAL_KEY:?请设置 REGISTRY_CREDENTIAL_KEY；任意随机 32+ 字符字符串，启动后切勿丢失}
       # v0.5.23: GO_HUB_ENV → CAIRN_ENV。同名同名,只是换字面。
       CAIRN_ENV: ${CAIRN_ENV:-prod}
+      # v0.5.40: HOST_PORT —— 宿主机侧对外端口。cairn 进程跑在容器里看不到
+      # docker 的 ports 映射,需要把左侧端口显式传进来,UI 才能同时显示
+      # 「容器内 8787 / 宿主机 ${HOST_PORT}」,运维一眼分清两者区别。
+      # 与上方 ports 映射保持一致。
+      HOST_PORT: ${HOST_PORT:-8787}
 
     # 单一 bind mount：数据直接落在宿主机目录，不再是 named volume。
     # /app/data 一个目录装齐全部状态 —— credentials.json（凭据库）、

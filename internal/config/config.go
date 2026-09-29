@@ -4,7 +4,9 @@
 // `settings` table** (which the UI edits via PATCH /api/config). The only
 // env that remains are infrastructure / boot-only:
 //
-//   - PORT                        (HTTP listener port)
+//   - PORT                        (HTTP listener port; container-internal, default 8787)
+//   - HOST_PORT                   (宿主机对外端口;docker-compose 的 ports 左侧;v0.5.40 新增,
+//                                  0 或未设 = 与 PORT 视为同一端口)
 //   - REGISTRY_CREDENTIAL_KEY     (AES-256-GCM key for the vault)
 //   - CAIRN_ENV                   (prod / dev log verbosity; v0.5.23 由 GO_HUB_ENV 改名)
 //
@@ -303,6 +305,13 @@ type Config struct {
 	// HTTP listener. Env only — boot must restart to change.
 	Port int // PORT, default 8787
 
+	// v0.5.40: HOST_PORT — 宿主机侧对外端口。cairn 进程跑在容器内,本来
+	// 看不到 docker-compose 的 ports 映射,UI 显示的「监听端口」永远只能
+	// 是容器内 8787。现在通过 docker-compose 的 environment: 块把
+	// HOST_PORT 传进来,UI 可以同时展示「容器内 / 宿主机」两个端口。
+	// 0 或未设 = 与 Port 同值(直接容器访问,无端口映射)。
+	HostPort int // HOST_PORT, default 0 → use Port
+
 	// Infrastructure-only: storage location + vault key. Neither flows
 	// through the panel; Mutable is the only edit channel for everything
 	// else.
@@ -328,18 +337,21 @@ type Config struct {
 	Mutable *Mutable
 }
 
-// Load reads configuration from process env. Only three infrastructure env
-// are honoured: PORT, REGISTRY_CREDENTIAL_KEY and CAIRN_ENV. Container paths
-// are compile-time constants (DataDirPath / StorageDirPath) — the host side is
-// relocated with a bind mount, not with env. Business fields come from
-// Mutable, hydrated later by server.go from SQLite. There is no env fallback
-// for business fields.
+// Load reads configuration from process env. Only four infrastructure env
+// are honoured: PORT, HOST_PORT, REGISTRY_CREDENTIAL_KEY and CAIRN_ENV.
+// Container paths are compile-time constants (DataDirPath / StorageDirPath) —
+// the host side is relocated with a bind mount, not with env. Business fields
+// come from Mutable, hydrated later by server.go from SQLite. There is no env
+// fallback for business fields.
 //
 // v0.5.23: GO_HUB_ENV → CAIRN_ENV。改名不引入兼容期 —— 见 CHANGELOG
 // 该条目「未触动项」段的说明。
+// v0.5.40: 新增 HOST_PORT —— docker-compose 把 ${HOST_PORT:-8787} 传进来,
+// UI 才能同时显示容器内监听端口和宿主机对外端口。
 func Load() (*Config, error) {
 	c := &Config{
 		Port:           intEnv("PORT", 8787),
+		HostPort:       intEnv("HOST_PORT", 0),
 		CredentialKey:  os.Getenv("REGISTRY_CREDENTIAL_KEY"),
 		CredentialsDir: DataDirPath,
 		StorageDir:     StorageDirPath,
@@ -360,6 +372,10 @@ func Load() (*Config, error) {
 func (c *Config) validate() error {
 	if c.Port <= 0 || c.Port > 65535 {
 		return fmt.Errorf("PORT out of range: %d", c.Port)
+	}
+	// v0.5.40: HOST_PORT 允许 0(「与容器同端口」快捷写法),其余走端口范围检查。
+	if c.HostPort < 0 || c.HostPort > 65535 {
+		return fmt.Errorf("HOST_PORT out of range: %d", c.HostPort)
 	}
 	if c.CredentialKey != "" && len(c.CredentialKey) < 32 {
 		return fmt.Errorf("REGISTRY_CREDENTIAL_KEY should be at least 32 chars when set (got %d); use `openssl rand -hex 32`", len(c.CredentialKey))

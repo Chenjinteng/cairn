@@ -139,6 +139,25 @@ export function stripUrlProtocol(value: string | null | undefined): string {
   return String(value ?? '').replace(/^https?:\/\//, '');
 }
 
+/**
+ * v0.5.40: 从「host:port」中只取 host 部分 —— 自动填仓库地址时用。
+ *
+ * r.Host 里的端口是**当前操作员的访问路径**(可能经反代/隧道/SSH 端口转发),
+ * 不是「对外规范地址」的端口。自动填时把 port 扔掉,留下规范 host。
+ * 例:`cairn.t..io:1122` → `cairn.t..io`;`registry.example.com:8787` →
+ * `registry.example.com`。如果需要显式指定对外端口(比如非标端口映射),用户手动加。
+ */
+export function hostOnly(value: string | null | undefined): string {
+  const v = String(value ?? '').trim();
+  if (!v) return '';
+  // 找最后一个 `:` 后面是纯数字 → 视为端口;IPv6 字面量形如 `[::1]:port` 暂不处理
+  const colon = v.lastIndexOf(':');
+  if (colon > 0 && /^\d{1,5}$/.test(v.slice(colon + 1))) {
+    return v.slice(0, colon);
+  }
+  return v;
+}
+
 /** v0.5.28: 仓库地址校验 —— 字母数字 / [._-] 主机段,可选 :端口。 */
 export const HOST_PORT_PATTERN = /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?(?::\d{1,5})?$/;
 

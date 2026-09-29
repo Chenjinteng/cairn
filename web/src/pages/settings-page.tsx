@@ -30,7 +30,7 @@ import LoadError from '../components/load-error';
 import type { SidebarGroup, SidebarSelection } from '../components/page-sidebar';
 import { useAppConfig } from '../config-store';
 import type { ApiResult, AppConfig, IgnoreRules, Inventory } from '../types';
-import { stripUrlProtocol } from '../utils';
+import { hostOnly, stripUrlProtocol } from '../utils';
 
 interface Props {
   config: AppConfig | null;
@@ -126,8 +126,9 @@ export default function SettingsPage({
     // v0.5.28: 历史值可能还带 http:// 前缀,加载到编辑态时剥掉,完成一次性迁移。
     // v0.5.39: 跟 useEffect 一样的预填逻辑 —— 取消编辑也回到「badge 默认值」,
     // 而不是回到空字符串(避免「取消后再点编辑又回到自动填」的不一致)。
+    // v0.5.40: 自动填用 hostOnly 剥掉 r.Host 里的端口(那是操作员访问路径)。
     const savedUrl = stripUrlProtocol(m.registryUrl);
-    const autoFilled = !savedUrl && config.url ? stripUrlProtocol(config.url) : savedUrl;
+    const autoFilled = !savedUrl && config.url ? hostOnly(stripUrlProtocol(config.url)) : savedUrl;
     setRegistryUrlDraft(autoFilled);
     setRegistryNameDraft(m.registryName ?? '');
     setAllowDeleteDraft(m.allowDelete ?? false);
@@ -150,7 +151,7 @@ export default function SettingsPage({
       const v = registryUrlDraft.trim();
       // v0.5.28: 字段语义改成「裸 host:port」,协议留给 v0.6.0 的 http/https 切换。
       if (v !== '' && !/^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?(?::\d{1,5})?$/.test(v)) {
-        message.error('地址格式:host 或 host:port(如 registry.example.com:8787),不要带协议');
+        message.error('地址格式:host 或 host:port(如 cairn.t..io 或 cairn.t..io:80),不要带协议;port 是对外端口,不是容器内 8787');
         return;
       }
       patch['registry.url'] = v;
@@ -255,8 +256,15 @@ export default function SettingsPage({
     // 出来的 http://host:port)剥掉协议作为草稿默认值。这样 badge 与表单视觉一致,
     // 用户「看到什么就改什么」。用户点 Save 且未改动 → 草稿 == 空 → 不写盘;
     // 用户改后再 Save → 落盘新值,之后草稿来自 mutable.registryUrl(不再自动填)。
+    //
+    // v0.5.40: 自动填时只取 host、剥端口。config.url 的端口是当前请求的 r.Host
+    // 端口(操作员访问路径,可能经反代/隧道),不是「对外规范地址」的端口。例如部署
+    // 是 80→8787 映射,操作员经 :1122 隧道访问,若自动填「cairn.t..io:1122」
+    // 会误导其他用户去 :1122 —— 但 :1122 是你本机的隧道端口,别人根本到不了。
+    // 剥掉 port 留 host,显示「http://cairn.t..io」(默认 80 端口),需要
+    // 别的对外端口手动加。
     const savedUrl = stripUrlProtocol(m.registryUrl);
-    const autoFilled = !savedUrl && config.url ? stripUrlProtocol(config.url) : savedUrl;
+    const autoFilled = !savedUrl && config.url ? hostOnly(stripUrlProtocol(config.url)) : savedUrl;
     setRegistryUrlDraft(autoFilled);
     setRegistryNameDraft(m.registryName ?? '');
     setAllowDeleteDraft(m.allowDelete ?? false);
@@ -513,7 +521,7 @@ export default function SettingsPage({
                       表单会用右上角 badge 同一个值(当前访问地址)预填,
                       做到 badge ↔ 表单视觉一致;点编辑直接覆盖或留默认即可。
                       留空保存 = 回到「跟随当前访问地址」自动识别。 */}
-                  配置本仓库对外暴露的地址（docker login / docker push 用）。示例：<span className="mono">registry.example.com:8787</span> 或 <span className="mono">devhub..io:443</span>。协议 = http（v0.6.0 起可切到 https）,写在前面那个固定 <Tag color="cyan" bordered={false}>http://</Tag> 上,<strong>这里只填 host:port</strong>。未保存时表单会预填右上角 badge 同一个值（当前访问地址）;点「编辑」直接覆盖即可,留空保存则回归自动识别。
+                  配置本仓库对外暴露的地址（docker login / docker push 用）。示例：<span className="mono">cairn.t..io</span>（默认 80）或 <span className="mono">cairn.t..io:1122</span>（非标端口映射）。协议 = http（v0.6.0 起可切到 https）,写在前面那个固定 <Tag color="cyan" bordered={false}>http://</Tag> 上,<strong>这里只填 host[:port]</strong>,port 是<strong>对外端口</strong>(docker-compose 映射的左侧),<strong>不是</strong>容器内 8787。未保存时表单会预填右上角 badge 同一个 host(自动剥端口 —— 你的访问路径端口不等于对外端口);点「编辑」直接覆盖即可,留空保存则回归自动识别。
                 </>
               }
             >
@@ -534,15 +542,14 @@ export default function SettingsPage({
                   />
                 </div>
               ) : (
-                // v0.5.39: 只读视图也跟 badge 同步 —— mutable.registryUrl 为空时,
-                // 显示「http://[自动识别的地址]（跟随访问地址,未保存）」,
-                // 让用户一眼知道右上角的 IP 是哪儿来的、点 Edit 真的能改。
+                // v0.5.40: 只读视图也剥掉端口 —— 端口是操作员访问路径的端口,
+                // 不是对外规范地址的端口(参见下面 help 文字)。
                 <ReadonlyValue
                   value={
                     (() => {
                       const saved = stripUrlProtocol(config?.mutable.registryUrl ?? '');
                       if (saved) return `http://${saved}`;
-                      const auto = stripUrlProtocol(config?.url ?? '');
+                      const auto = hostOnly(stripUrlProtocol(config?.url ?? ''));
                       return auto
                         ? `http://${auto}（跟随访问地址,未保存）`
                         : '(空 — pull 任务回退到 Docker Hub)';
@@ -553,18 +560,31 @@ export default function SettingsPage({
               )}
             </Form.Item>
 
-            {/* v0.5.34: 监听端口只读显示 —— 改端口要走 docker-compose.yml 的
-                HOST_PORT + docker compose up -d 重建容器,UI 不暴露修改入口
-                (改了容器内监听但不改 docker 端口映射,用户视角实际无效)。 */}
+            {/* v0.5.40: 同时显示「容器内 / 宿主机」两个端口 —— 改端口要走 docker-compose.yml
+                的 HOST_PORT + docker compose up -d 重建容器,UI 不暴露修改入口
+                (改了容器内监听但不改 docker 端口映射,用户视角实际无效)。
+                容器内 = PORT(env 固定 8787);宿主机 = HOST_PORT(env,docker-compose
+                把 .env 的 ${HOST_PORT:-8787} 传进来)。两者相等时合并成一个。 */}
             <Form.Item
               label={<span>监听端口</span>}
               extra={
                 config?.port
-                  ? `容器内 cairn 进程监听 ${config.port};宿主机→容器映射在 docker-compose.yml 的 HOST_PORT,改完需要 docker compose up -d 重建容器。`
+                  ? config.hostPort && config.hostPort !== config.port
+                    ? `容器内 cairn 进程监听 ${config.port};宿主机侧对外端口 ${config.hostPort}(来自 docker-compose 的 HOST_PORT env)。改宿主机端口要重启容器(docker compose up -d)。`
+                    : `容器内 cairn 进程监听 ${config.port};宿主机没显式传 HOST_PORT,默认与容器内一致。`
                   : '读取中…'
               }
             >
-              <ReadonlyValue value={config?.port ? String(config.port) : '--'} mono />
+              <ReadonlyValue
+                value={
+                  config?.port
+                    ? config.hostPort && config.hostPort !== config.port
+                      ? `${config.port}（容器内） / ${config.hostPort}（宿主机）`
+                      : String(config.port)
+                    : '--'
+                }
+                mono
+              />
             </Form.Item>
 
             {/* Registry 认证 */}
