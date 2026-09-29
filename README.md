@@ -31,9 +31,11 @@
 3. **库式后端**：HTTP handler 通过 `cmd/server` 装配，业务逻辑在 `internal/` 下，方便后续挂到别人的服务里
 4. **可观测性**：自带 `/healthz` `/readyz`
 
-## 当前状态:v0.5.49(2026-09-29) —— **修拉取页源镜像名校验双弹提示:空值时 `required: true` 和 validator 同时触发同一条「请填写镜像名」→ 红字叠两条;validator 加空值短路后由 required 独占空值提示,validator 只在有值时跑「缺 tag」检查。同时给「代理地址」「凭据 Registry URL」两处同类规则的 validator 也加空值短路(当前不重复但属同一类隐患,以后 message 一改就复发)**
+## 当前状态:v0.5.50(2026-09-29) —— **修 regsync / 所有严格遵循 OCI 的客户端同步时撞 +1 字节 size mismatch:`uploadPatch` / `uploadGet` / `uploadStart` 三处响应 `Range` 头原写 `bytes 0-size`,RFC 7233 byte range 是 inclusive 双端 → 比磁盘真实字节数永远多 1,regsync 据此算下一 chunk 的 Content-Range start,所有 chunk 累积偏移 +1,与上游 manifest size 不匹配即报 `blob content size does not match descriptor, expected 7266, received 7267`。改成 `bytes 0-(size-1)`,空文件用 `bytes 0--1`(suffix range 零长)。skopeo / docker daemon 之所以不撞 —— 它们自己算「已写字节」用 body length,不读 server 的 Range 头,所以从来没暴露这个 bug,但任何严格读 Range 头的客户端(regclient / harbor 同步器 / crane 等)同步到 cairn 时都会炸。新增 5 个字节级单测覆盖整条 PATCH/PUT/HEAD 路径**
 
 ## 历史
+
+## v0.5.49(2026-09-29) —— **修拉取页源镜像名校验双弹提示:空值时 `required: true` 和 validator 同时触发同一条「请填写镜像名」→ 红字叠两条;validator 加空值短路后由 required 独占空值提示,validator 只在有值时跑「缺 tag」检查。同时给「代理地址」「凭据 Registry URL」两处同类规则的 validator 也加空值短路(当前不重复但属同一类隐患,以后 message 一改就复发)**
 
 ## v0.5.48(2026-09-29) —— **知名拉取源预置 + 第三方拉取源可配置:知名公网源(Docker Hub / quay.io / ghcr.io / registry.k8s.io / mcr.microsoft.com / public.ecr.aws 等)预置进代码,设置页新增「第三方拉取源」(pull.known_hosts,UI 热改、后端归一化+校验,不走 .env);拉取页镜像名智能解析认自配主机——无点内网主机(`harbor/team/app`)与强制 http 的镜像站不再被误判成 Docker Hub 仓库路径;「来源 registry 地址」升级为 AutoComplete(知名源+自配源候选),并修复了该输入框一直缺 name 绑定、手动覆盖来源从未生效的老 bug**
 
@@ -87,7 +89,7 @@
 4. `README.md` 里所有 `docker build/tag/push` 示例
 5. `CHANGELOG.md` 新增一节
 
-当前版本：`0.5.49`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
+当前版本：`0.5.50`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
 
 ## 项目结构
 

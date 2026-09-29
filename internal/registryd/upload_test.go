@@ -71,8 +71,11 @@ func TestUploadFlowLocationHeaders(t *testing.T) {
 	if resp.Header.Get("Docker-Upload-UUID") == "" {
 		t.Error("POST upload start: missing Docker-Upload-UUID header")
 	}
-	if got := resp.Header.Get("Range"); got != "0-0" {
-		t.Errorf("POST upload start: Range = %q, want 0-0", got)
+	if got, want := resp.Header.Get("Range"), "0--1"; got != want {
+		// v0.5.50: empty range after POST upload-start is "bytes 0--1"
+		// (suffix range of zero length per RFC 7233). Old code used
+		// "0-0" which advertised one byte more than actually received.
+		t.Errorf("POST upload start: Range = %q, want %q", got, want)
 	}
 
 	// --- 2. PATCH the chunk (this is where skopeo needs Location) ---
@@ -96,10 +99,15 @@ func TestUploadFlowLocationHeaders(t *testing.T) {
 	if !strings.HasPrefix(patchLoc, wantPrefix+"blobs/uploads/") {
 		t.Fatalf("PATCH: Location %q is not absolute under %q", patchLoc, wantPrefix)
 	}
-	// Range semantics match CNCF distribution: "0-<total bytes so far>"
-	// (an empty session reports "0-0", which is also what the OCI spec's
-	// POST example shows). PatchUpload returns the accumulated size.
-	if got, want := resp.Header.Get("Range"), fmt.Sprintf("0-%d", len(payload)); got != want {
+	// Range semantics match CNCF distribution: "0-<last byte received>",
+	// where byte positions are inclusive on both ends (RFC 7233).
+	// PatchUpload returns the accumulated size; the header end is
+	// size-1. (v0.5.50: previously this used `size` itself, advertising
+	// one byte MORE than received — fine for skopeo which doesn't read
+	// the Range header, but regsync took it as authoritative and
+	// computed a +1-byte Content-Range start, breaking every subsequent
+	// chunk.)
+	if got, want := resp.Header.Get("Range"), fmt.Sprintf("0-%d", len(payload)-1); got != want {
 		t.Errorf("PATCH: Range = %q, want %q", got, want)
 	}
 	if resp.Header.Get("Docker-Upload-UUID") == "" {
