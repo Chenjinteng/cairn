@@ -3,6 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>Cairn</title>
     <!--
       v0.5.37：UI 改版 — 三字体，对齐 docs/design/cairn-ui-design.html § 2 Typography。
@@ -10,26 +11,16 @@
         DM Serif Display → hero（页面大数字 44px 用）；1 个 weight
         JetBrains Mono  → hash / digest / 时间戳 / id；3 个 weight（400/500/600）
 
-      **不阻塞首屏**：用 `rel="preload" as="style"` 异步预加载，onload 后再切换
-      为真正的 stylesheet。理由是内网 / 受限网络环境（测试 runner 53、企业
-      proxy 等）下 fonts.googleapis.com 可能不可达或极慢 —— 用
-      `<link rel="stylesheet">` 是 render-blocking，会让 chromium 的
-      `domcontentloaded` 永不 fire（实测 30s timeout），导致整页卡白屏。
-      `font-display: swap` + theme.css 的系统栈 fallback 兜底，让 CDN 失败时
-      浏览器立刻用系统栈渲染，不白屏也不显示空白字。
+      v0.5.38：去掉了 `fonts.googleapis.com` / `fonts.gstatic.com` 的 <link>。
+      原因：v0.5.37 引入了 Google Fonts CDN + `font-display: swap` 的兜底方案，
+      但实测在离线 / 受限网络（53 跳板机、企业 proxy、纯内网部署）下，
+      Chromium 仍会同步请求 woff2 文件直到超时（即便用了 `rel="preload"`），
+      表现为网络面板里出现一长串超时请求、首次访问慢 30s+。
+      现在完全不引入外部字体：theme.css 的 `--font-sans` / `--font-display` /
+      `--font-mono` 已经填了系统栈 fallback,渲染效果与之前 CDN 成功时差异
+      极小（中文浏览本地化无变化,西文走系统栈,Outfit 的圆润字形由 SF Pro /
+      Segoe UI 等系统字体替代,基本一致）。
     -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link
-      rel="preload"
-      as="style"
-      href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap"
-      onload="this.rel='stylesheet'; this.onload=null;">
-    <noscript>
-      <link
-        href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap"
-        rel="stylesheet">
-    </noscript>
     <script>
       /*
        * 在 React 挂载之前就把主题定下来。
