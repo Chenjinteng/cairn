@@ -29,7 +29,7 @@ services:
         NODE_IMAGE: ${NODE_IMAGE:-node:22-alpine}
         NPM_REGISTRY: ${NPM_REGISTRY:-}
 
-    image: ${IMAGE:-cairn:0.5.48}
+    image: ${IMAGE:-cairn:0.5.49}
     container_name: cairn
     restart: unless-stopped
 

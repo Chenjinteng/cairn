@@ -758,18 +758,21 @@ export default function PullPage({ config, sidebarFilter, onPublishGroups }: Pro
             rules={[
               { required: true, message: '请填写镜像名' },
               {
+                // v0.5.49: 空值由上面的 required 独占负责,这条 validator 只在
+                // 有值时跑「缺 tag」检查。旧版本这里也判 !ref,空值时两条规则
+                // 同时触发「请填写镜像名」→ 截图里两条红字叠在一起。
                 validator: (_, value: string) => {
+                  if (!value || !value.trim()) {
+                    return Promise.resolve();
+                  }
                   // 不能用 `value.includes(':')` 判断：主机前缀里也有冒号
                   // （`192.0.2.20:10001/library/alpine` 会被误判为"已有 tag"），
                   // 于是提交后才被后端拒，报错还跟输入对不上。
                   // 正解是先剥掉主机段，再看剩下部分有没有 tag。
-                  const parsed = parseImageReference(value ?? '', userHosts);
+                  const parsed = parseImageReference(value, userHosts);
                   const ref = parsed.sourceRef;
                   const colon = ref.lastIndexOf(':');
                   const tag = colon >= 0 ? ref.slice(colon + 1) : '';
-                  if (!ref) {
-                    return Promise.reject(new Error('请填写镜像名'));
-                  }
                   if (!tag || tag.includes('/')) {
                     return Promise.reject(
                       new Error('缺少 tag，请写成 <repo>:<tag>，例如 alpine:3.19')

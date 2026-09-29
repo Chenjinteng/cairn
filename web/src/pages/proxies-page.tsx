@@ -870,10 +870,15 @@ export default function ProxiesPage({ config, sidebarFilter, onPublishGroups }: 
             rules={[
               { required: true, message: '请填写代理地址' },
               {
-                validator: (_, value: string) =>
-                  /^https?:\/\//i.test(value?.trim() ?? '')
+                // v0.5.49: 空值由上面的 required 独占负责,这条 validator 只在
+                // 有值时跑「必须带协议头」检查。给空值短路也防住以后 message
+                // 被改成跟 required 一样时双弹。
+                validator: (_, value: string) => {
+                  if (!value || !value.trim()) return Promise.resolve();
+                  return /^https?:\/\//i.test(value.trim())
                     ? Promise.resolve()
-                    : Promise.reject(new Error('需要以 http:// 或 https:// 开头，例如 http://proxy.example.com:8080')),
+                    : Promise.reject(new Error('需要以 http:// 或 https:// 开头，例如 http://proxy.example.com:8080'));
+                },
               },
             ]}
             extra="只填 http://主机:端口，不要带路径，也不要把账号密码写进地址。"
