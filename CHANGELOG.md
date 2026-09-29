@@ -6,6 +6,52 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.42] - 2026-09-29
+
+本轮主题:**「仓库地址」字段收紧到只接受 IP / 域名,精简帮助文案,清掉所有 `` 残留。** 来自部署测试反馈 ——「不需要输入端口」「提示太啰嗦」「示例里别出现 」。
+
+### 修复
+
+- **「仓库地址」字段校验收紧:只接受 IP 或域名,禁止端口**(`web/src/utils.ts` + `web/src/pages/settings-page.tsx` + `internal/api/handlers.go`):
+
+  0.5.40 的设计是「允许填 `host[:port]`,port 表示对外端口」,但实际部署里:
+  - 操作员填的 port 经常跟 docker-compose 的 `HOST_PORT` 对不上,容易配错
+  - 「host vs host:port」两种形式让用户得想一会儿
+  - 端口本来就是 docker-compose 配的(`HOST_PORT` env,见 0.5.40 的 env 通路),UI 在「监听端口」字段已经分容器内 / 宿主两层显示
+
+  现在直接禁止 port:
+  - 前端 `HOST_PORT_PATTERN` regex 去掉 `:port` 部分
+  - 前端 `placeholder` 从 `registry.example.com:8787` 改成 `registry.example.com`
+  - 后端 `hostPortRe` regex 同步收紧,`isValidHostPort` 简化(去掉端口范围校验)
+  - 校验错误信息简化为「只接受 IP 或域名,不要带端口或协议」
+
+  历史已保存的带端口值(`mutable.registryUrl` 里遗留的 `host:port`)**不会被自动清洗**——下次编辑保存时如果还带端口会被拒,操作员必须手动去掉端口再保存。
+
+- **帮助文案大幅精简 + 移除所有 `` 字样**(`web/src/pages/settings-page.tsx` + `internal/api/handlers_extra.go`):
+
+  之前的「仓库地址」字段 extra 是 4 行长篇说明(示例 × 2、端口解释、自动填行为、留空语义)。现在压成 1 行:
+  > 供 docker login / docker push / docker pull 使用的对外地址(仅 IP 或域名)。
+
+  字段 label 从「仓库地址(/前缀)」改成「仓库地址」(「/前缀」是 v0.5 早期加的,跟现在的「纯 host」语义不符)。
+
+  `` 字样清理:
+  - `web/src/utils.ts` 注释里的示例
+  - `web/src/pages/settings-page.tsx` 注释 / 错误信息 / 帮助文案示例
+  - `internal/api/handlers_extra.go` 注释里的示例
+  - 一律改成中性描述或抽象示例(`registry.example.com` / `registry.example.com`)
+
+  CHANGELOG 历史条目不动(那是历史记录,改写反而误导)。
+
+### 影响范围(升级须知)
+
+- **行为变化**:
+  - 升级后**不能保存**带端口的「仓库地址」(前后端同步收紧)。如果 `mutable.registryUrl` 之前有 `host:port`,下次编辑保存会被拒,需要手动去掉端口
+  - 帮助文案从 4 行变成 1 行
+- **数据兼容**:**不主动清洗**历史数据 —— 已保存的带端口值仍会显示在表单里(用户能看见「之前填了 `:1122`」),但保存时会被拒。这是有意的:不想静默改用户配置
+- **其他修复**(0.5.38 / 0.5.39 / 0.5.40 / 0.5.41 已就位,本轮不动):去外部字体 / Cairn favicon / 代理测试默认 Docker Hub / 自动填 + HOST_PORT 双端口 / 页面淡入 + 表格骨架 + localStorage 持久化
+
+---
+
 ## [0.5.41] - 2026-09-29
 
 本轮主题:**页面切换观感优化 + 刷新页面保留当前 tab**。来自部署测试的体感反馈 ——「页面切换生硬」「刷新就回首页」。轻量改动(纯前端),无新协议、无新功能。
