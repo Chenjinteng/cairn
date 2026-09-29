@@ -160,7 +160,7 @@ export default function SettingsPage({
       const v = registryUrlDraft.trim();
       // v0.5.28: 字段语义改成「裸 host:port」,协议留给 v0.6.0 的 http/https 切换。
       if (v !== '' && !/^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?(?::\d{1,5})?$/.test(v)) {
-        message.error('地址格式:只接受 IP 或域名(如 registry.example.com 或 registry.example.com),不要带端口或协议');
+        message.error('地址格式:只接受 IP 或域名(如 192.168.1.10 或 registry.example.com),不要带端口或协议');
         return;
       }
       patch['registry.url'] = v;

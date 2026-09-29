@@ -367,9 +367,9 @@ regsync 拿到 `Range: 0-7267` → 内部算"server 已写 7267 bytes" → 下�
 
 - **「仓库地址」自动填时只填 host,不再带端口**(`web/src/utils.ts` 新增 `hostOnly` + `web/src/pages/settings-page.tsx`):
 
-  0.5.39 的自动填把 `r.Host` 整个塞进表单(含端口)。问题是 `r.Host` 的端口是**当前操作员的访问路径**(可能经反代/隧道/SSH 端口转发),不是「对外规范地址」的端口。例:`docker-compose` 是 `80→8787` 映射,操作员经 `:1122` 隧道访问,自动填 `cairn.t..io:1122` 会误导其他用户去访问 `:1122` —— 但 `:1122` 只是你本机的隧道端口。
+  0.5.39 的自动填把 `r.Host` 整个塞进表单(含端口)。问题是 `r.Host` 的端口是**当前操作员的访问路径**(可能经反代/隧道/SSH 端口转发),不是「对外规范地址」的端口。例:`docker-compose` 是 `80→8787` 映射,操作员经 `:1122` 隧道访问,自动填 `cairn.example.com:1122` 会误导其他用户去访问 `:1122` —— 但 `:1122` 只是你本机的隧道端口。
 
-  修法:自动填时用 `hostOnly()` 把端口剥掉,只留 `cairn.t..io`(默认 80 端口)。需要显式指定非标端口时再手填。帮助文本同步澄清「port 是对外端口,不是容器内 8787」。
+  修法:自动填时用 `hostOnly()` 把端口剥掉,只留 `cairn.example.com`(默认 80 端口)。需要显式指定非标端口时再手填。帮助文本同步澄清「port 是对外端口,不是容器内 8787」。
 
 - **「监听端口」同时显示容器内 + 宿主机两个值**(`internal/config/config.go` + `internal/api/handlers.go` + `docker-compose.yml` + `web/src/types.ts` + `web/src/pages/settings-page.tsx`):
 
@@ -394,7 +394,7 @@ regsync 拿到 `Range: 0-7267` → 内部算"server 已写 7267 bytes" → 下�
 ### 影响范围(升级须知)
 
 - **行为变化**:
-    - 「仓库地址」表单刚打开时,从 `cairn.t..io:1122` 变成 `cairn.t..io`(剥端口)。需要非标对外端口的用户手动加。
+    - 「仓库地址」表单刚打开时,从 `cairn.example.com:1122` 变成 `cairn.example.com`(剥端口)。需要非标对外端口的用户手动加。
     - 「监听端口」字段从「8787」变成「8787(容器内) / 80(宿主机)」(如果传了 HOST_PORT 且不等)。不传 HOST_PORT 时仍是单值。
 - **数据兼容**:完全兼容,无 SQLite schema / 凭据库 / 镜像存储层面的改动。
 - **docker-compose.yml 必须升级**:从 0.5.39 升级到 0.5.40 时,docker-compose.yml 的 `environment:` 块新增了 `HOST_PORT: ${HOST_PORT:-8787}`。不升级 compose 文件也能跑,但 UI 只会显示容器内端口。
@@ -445,7 +445,7 @@ regsync 拿到 `Range: 0-7267` → 内部算"server 已写 7267 bytes" → 下�
 
 - **代理测试默认目标改为 `https://registry-1.docker.io/v2/`**(`internal/api/handlers_extra.go` `proxyTestTarget` + `web/src/pages/proxies-page.tsx`):
 
-  之前默认走 `RegistryURL() + "/v2/"`,在 RegistryURL 是裸 hostname(如 `cairn.t..io`,没配 scheme)时会拼出无 scheme 的 URL,Go 的 `http.NewRequest` 报 `unsupported protocol scheme ""`,实测踩过。**默认改成 Docker Hub 公网 /v2/** —— 实际场景里代理测试的目的几乎是「能不能出外网」,用 Docker Hub 更贴合运维直觉;要测本仓库请在「测试目标」字段填完整 URL(含 `https://`)。
+  之前默认走 `RegistryURL() + "/v2/"`,在 RegistryURL 是裸 hostname(如 `cairn.example.com`,没配 scheme)时会拼出无 scheme 的 URL,Go 的 `http.NewRequest` 报 `unsupported protocol scheme ""`,实测踩过。**默认改成 Docker Hub 公网 /v2/** —— 实际场景里代理测试的目的几乎是「能不能出外网」,用 Docker Hub 更贴合运维直觉;要测本仓库请在「测试目标」字段填完整 URL(含 `https://`)。
 
 ### 新增
 

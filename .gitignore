@@ -44,3 +44,13 @@ go.work.sum
 # 本地临时产物统一落这里（补丁脚本 / 探针 / 构建日志 / 验证副本）
 # 该目录整体不进版本库，内容可随时清理
 /tmps/
+
+# 端到端 UI 测试配置（仅内部验收用，含内网部署地址）
+/tests/web-auto/
+
+# 发布脱敏脚本（本地一次性工具）
+/.scrub-publish.sh
+/.scrub-replace.txt
+/.scrub-message.txt
+/.tmp_*.sh
+/.git.bak-pre-filter-repo
