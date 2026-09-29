@@ -6,6 +6,65 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.50] - 2026-09-29
+
+本轮主题:**修 regsync / 严格 OCI 客户端同步时撞 +1 字节 size mismatch** —— UAT 复现:从 proxy.example.com:10001 同步 `bitnami/redis-cluster:8.2.1-debian-12-r0` 到 cairn(registry.example.com),regsync 报 `blob content size does not match descriptor, expected 7266, received 7267`,整图失败。skopeo copy 同样源/目**不撞**(0.5.46 部署后已验证)—— 同一个 cairn、同一个镜像,行为差异指向协议实现细节而非数据问题。
+
+### 根因
+
+RFC 7233 byte range 是 **inclusive 双端**:`bytes 0-N` 表示 N+1 字节。cairn 三处响应头把磁盘 size 当 end 写,等于永远比真实已写字节数多 1:
+
+```go
+// 旧(错):
+w.Header().Set("Range", fmt.Sprintf("0-%d", size))   // 上传 size 字节却报 0-size=size+1 字节
+w.Header().Set("Range", "0-0")                         // 空文件却报 1 字节
+```
+
+修复后统一走新 helper `ociRangeHeader(size)`:
+
+| 文件 size | 旧(错) | 新(对) |
+|---|---|---|
+| 0(空上传) | `0-0`(报 1 byte) | `0--1`(RFC 7233 suffix range 零长) |
+| N > 0 | `0-N`(报 N+1 byte) | `0-(N-1)`(报 N byte) |
+
+### 为什么 skopeo 不撞
+
+| 客户端 | 「已上传字节数」从哪取 |
+|---|---|
+| **skopeo / docker daemon**(containers-image) | **自己 PATCH 请求的 body length**,不读 server 的 Range 头 |
+| **regsync**(regclient) | **server 返回的 Range 头**(把 `0-N` 直接当 lastBytePos+1 用) |
+
+regsync 拿到 `Range: 0-7267` → 内部算"server 已写 7267 bytes" → 下一 chunk Content-Range start=7267 → 后续累积偏移全部 +1 → PUT finalize 时对照上游 manifest 7266 → +1 字节不匹配 → 报错。skopeo 从头到尾用自己 body length 算,与 server Range 无关,所以同一个 blob 同一条链路它从未暴露过。
+
+任何严格读 Range 头的客户端(regclient / harbor 同步器 / crane 等)同步到 cairn 都会撞这个 bug —— 比 regsync 影响面更大,本轮顺手全清。
+
+### 修复
+
+- **`internal/registryd/routes.go` 三处 `Range` 响应头全部走 `ociRangeSize(size)`**:
+  - `uploadStart`(POST) 空文件用 `0--1`
+  - `uploadPatch`(PATCH) 用 `0-(size-1)`
+  - `uploadGet`(GET 上传进度,204) 同上
+- 同步更新 `internal/registryd/upload_test.go` 两条老期望(它们之前把 off-by-one 当正确行为,跟 Range 头一起被这一轮暴露)。
+
+### 测试
+
+**新增 `internal/registryd/blobsize_test.go`,5 个针对性字节级测试**:
+
+1. `TestBlobSize_MonolithicPatch` —— 整体 PATCH 写 7266 字节(对齐 regsync 报错 size),on-disk + HEAD Content-Length 必须精确 7266
+2. `TestBlobSize_MultiChunkNoRange` —— 同 UUID,3 chunk 累加,验证 on-disk + HEAD + 每次 PATCH Range 头(修前 fail,fix 后过)
+3. `TestBlobSize_MultiChunkWithRange` —— 同 UUID,多 chunk 各自带 Content-Range(模拟 regclient),验证 O_APPEND + Seek 在「顺序递增 offset」场景下实际 OK(`Seek` 在 O_APPEND 模式下被 Linux 内核忽略,但 chunk 是按顺序 append 到末尾,结果碰巧正确;只有「覆盖写已存在数据」才会暴露,regsync 不走那条路径,所以这个潜在问题未触)
+4. `TestBlobSize_RangeHeaderAtEachPatch` —— 每次 PATCH 响应 Range 头必须反映**累加** size,不是 stale 值
+5. `TestBlobSize_PATCHReadsExactlyContentLength` —— 服务端只读 Content-Length 字节 body,不多读 1 字节 trailing 数据
+
+### 影响范围(升级须知)
+
+- **行为变化**:Range 头现在 RFC 7233 严格 inclusive end。regsync / 所有严格读 Range 头的客户端同步到 cairn 不再撞 +1。skopeo / docker push/pull 行为不变(它们不读 Range 头)。
+- **不变**:blob 实际写入字节数、Content-Length 头、PATCH/PUT/GET 上传整体流程、HEAD blob 响应、manifest 上传。
+- **数据兼容**:无存储改动;不涉及任何已落盘 blob。
+- **bitnami / cloudpirates 状态**:用户记忆里 bitnami → cloudpirates 迁移中(zookeeper 已验证,redis 家族待迁),bitnami 镜像本来就有「已知坑」。本轮**与 bitnami 上游无关** —— 同一镜像同一链路 skopeo 能过就是反证。
+
+---
+
 ## [0.5.49] - 2026-09-29
 
 本轮主题:**修拉取页源镜像名校验「请填写镜像名」双弹提示** —— 用户截图:输入框空时红字提示叠了两条。根因是同一个 Form.Item 上两条规则撞了同一句话:`{ required: true, message: '请填写镜像名' }` 和自定义 validator 里的 `if (!ref) reject('请填写镜像名')`,空值时两条同时触发 → 两条「请填写镜像名」一起渲染。

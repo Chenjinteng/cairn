@@ -410,7 +410,7 @@ func (h *Handler) uploadStart(w http.ResponseWriter, r *http.Request) {
 	// v0.5.44: 绝对 URL —— skopeo / docker daemon 拒绝相对路径的 Location。
 	w.Header().Set("Location", absoluteLocation(r, fmt.Sprintf("/v2/%s/blobs/uploads/%s", repo, uuid)))
 	w.Header().Set("Docker-Upload-UUID", uuid)
-	w.Header().Set("Range", "0-0")
+	w.Header().Set("Range", ociRangeHeader(0))
 	w.WriteHeader(http.StatusAccepted)
 }
 
@@ -427,7 +427,7 @@ func (h *Handler) uploadGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Docker-Upload-UUID", u.UUID)
-	w.Header().Set("Range", fmt.Sprintf("0-%d", u.Size))
+	w.Header().Set("Range", ociRangeHeader(u.Size))
 	// v0.5.46: GET 上传进度(204)同样要求带 Location,与 PATCH 口径一致。
 	w.Header().Set("Location", absoluteLocation(r, fmt.Sprintf("/v2/%s/blobs/uploads/%s", repo, u.UUID)))
 	w.Header().Set("Content-Length", "0")
@@ -455,7 +455,7 @@ func (h *Handler) uploadPatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Docker-Upload-UUID", uuid)
-	w.Header().Set("Range", fmt.Sprintf("0-%d", size))
+	w.Header().Set("Range", ociRangeHeader(size))
 	// v0.5.46: OCI Distribution Spec 要求 PATCH 202 响应必须带 Location(下一步的
 	// 上传 URL,服务端可以借机重定位会话)。skopeo/containers-image 传完数据后
 	// 从这个头拿 PUT finalize 的地址,缺了直接报
@@ -495,6 +495,34 @@ func (h *Handler) uploadPut(w http.ResponseWriter, r *http.Request) {
 	// v0.5.44: 绝对 URL。
 	w.Header().Set("Location", absoluteLocation(r, fmt.Sprintf("/v2/%s/blobs/%s", repo, digest)))
 	w.WriteHeader(http.StatusCreated)
+}
+
+// ociRangeHeader formats the `Range` value that goes back on POST/PATCH/GET
+// upload responses.
+//
+// RFC 7233 byte ranges are inclusive on BOTH ends — `bytes 0-N` describes
+// N+1 bytes total. So a file that actually contains `size` bytes has to be
+// advertised as `bytes 0-(size-1)`. The empty case (size=0, the moment
+// right after POST upload-start before any bytes have arrived) is
+// `bytes 0--1`, the suffix range of zero length — this is the idiom the
+// Distribution reference impl uses and what strict OCI clients expect.
+//
+// v0.5.50 fix: the previous code wrote `bytes 0-size`, advertising exactly
+// ONE byte more than the file actually contained. regsync treats this
+// header as authoritative for "bytes the server has received so far" and
+// used it to compute the next PATCH's Content-Range start. The +1 then
+// propagated through every subsequent chunk, producing the
+// "expected 7266, received 7267" size mismatch against the upstream
+// manifest that bitnami/redis-cluster exposed. skopeo/containers-image
+// and docker daemon happen to compute their next start from the *body
+// length they just wrote* (not from the Range header) so they were
+// unaffected — that's why skopeo copied the same blob successfully while
+// regsync fell over.
+func ociRangeHeader(size int64) string {
+	if size <= 0 {
+		return "0--1"
+	}
+	return fmt.Sprintf("0-%d", size-1)
 }
 
 // --- helpers ---------------------------------------------------------------
