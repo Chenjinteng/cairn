@@ -31,7 +31,7 @@
 3. **库式后端**：HTTP handler 通过 `cmd/server` 装配，业务逻辑在 `internal/` 下，方便后续挂到别人的服务里
 4. **可观测性**：自带 `/healthz` `/readyz`
 
-## 当前状态:v0.5.44(2026-09-29) —— **修复 OCI Location header 必须是绝对 URL(原 3 处都返回相对路径,导致 skopeo / 严格客户端 fail on `http: no Location header`)**
+## 当前状态:v0.5.45(2026-09-29) —— **修正 0.5.44 的 dispatch bug:`POST /v2/<repo>/blobs/uploads/`(带尾斜杠,OCI spec 推荐写法)被 `CutSuffix("/blobs/uploads")` 漏掉,fall through 到 404 `NAME_UNKNOWN`,Location 还没发就被排查**
 
 ✅ 已实现（v0.1 – v0.4）：
 
@@ -83,7 +83,7 @@
 4. `README.md` 里所有 `docker build/tag/push` 示例
 5. `CHANGELOG.md` 新增一节
 
-当前版本：`0.5.44`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
+当前版本：`0.5.45`（来自 `internal/version.Version`，运行时日志和 `/api/config` 都暴露）。
 
 ## 项目结构
 

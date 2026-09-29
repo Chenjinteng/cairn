@@ -550,6 +550,20 @@ func (h *Handler) dispatchRepoRoute(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Upload session start: POST /v2/<name>/blobs/uploads/
+	// v0.5.44: 同时接受带/不带尾斜杠的写法 —— OCI spec 写的是
+	// `/v2/<name>/blobs/uploads/`(带尾斜杠),但部分客户端省略尾斜杠,
+	// 之前 CutSuffix("/blobs/uploads") 漏了带尾斜杠,请求 fall through 到 404。
+	// 上一个相邻的 (location) "blobs/uploads/<uuid>" 用的是带斜杠的 marker,
+	// 这里保持一致 + 同时容忍无斜杠。
+	if repo, ok := strings.CutSuffix(rest, "/blobs/uploads/"); ok && repo != "" {
+		if r.Method != http.MethodPost {
+			writeV2MethodNotAllowed(w, http.MethodPost)
+			return
+		}
+		injectRouteParams(r, "repo", repo)
+		h.uploadStart(w, r)
+		return
+	}
 	if repo, ok := strings.CutSuffix(rest, "/blobs/uploads"); ok && repo != "" {
 		if r.Method != http.MethodPost {
 			writeV2MethodNotAllowed(w, http.MethodPost)
