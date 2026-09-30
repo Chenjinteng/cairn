@@ -17,7 +17,7 @@ import (
 // Distribution Spec, so cairn↔cairn works (cairn's /v2/* middleware
 // expects Basic) and so does cairn→distribution, etc.
 //
-// v0.6.1: pivoted from bearer to Basic to match cairn's auth model —
+// v0.6.2: pivoted from bearer to Basic to match cairn's auth model —
 // the previous "paste a bearer token" had no source on the receiving
 // cairn (cairn has no bearer-token concept; only Basic auth via
 // cfg.RegistryUsername/Password → /v2/* Basic middleware).
@@ -238,7 +238,7 @@ func (w *Writer) newRequest(ctx context.Context, method, url string, body io.Rea
 		cred := base64.StdEncoding.EncodeToString([]byte(w.username + ":" + w.password))
 		req.Header.Set("Authorization", "Basic "+cred)
 	}
-	req.Header.Set("User-Agent", "cairn-sync/0.6.1")
+	req.Header.Set("User-Agent", "cairn-sync/0.6.2")
 	return req, nil
 }
 
