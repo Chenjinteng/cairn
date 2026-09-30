@@ -125,7 +125,10 @@ export default function ImagesPage({
 
   useEffect(() => {
     if (!inventory) {
-      void load;
+      // v0.6.10 fix: 之前是 `void load(false)` 带参数,改无参后这里漏改成
+      // `void load;`(只读 load 函数引用,不调用),导致首屏永远不会触发
+      // /api/inventory 请求,UI 永远停在 skeleton。
+      void load();
     }
     // 首屏只拉一次；后续刷新由刷新按钮显式触发。
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -427,7 +430,7 @@ export default function ImagesPage({
             </div>
           }
           action={
-            <Button size="small" loading={loading} onClick={() => void load}>
+            <Button size="small" loading={loading} onClick={() => void load()}>
               重试
             </Button>
           }
