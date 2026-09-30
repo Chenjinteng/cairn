@@ -222,20 +222,23 @@ var migrations = map[int]string{
 	CREATE INDEX IF NOT EXISTS sync_runs_task_started ON sync_runs(task_id, started_at DESC);
 	`,
 	6: `
-	-- v0.6.1: pivot sync auth from bearer token to Basic auth. cairn's
+	-- v0.6.2: pivot sync auth from bearer token to Basic auth. cairn's
 	-- own /v2/* Basic middleware doesn't accept Bearer, so the previous
 	-- "paste a bearer token" field had no source on the receiving side.
 	--
-	-- Rename the old remote_token column to remote_username. Any rows
-	-- written under 0.6.0 (unlikely; v5 shipped the same day as this
-	-- hotfix and no one had a chance to populate sync_tasks) end up
-	-- misnamed but harmless — the user just re-edits via PATCH and the
-	-- engine re-prompts for the password.
+	-- 0.6.1's attempt used ALTER TABLE ... RENAME COLUMN remote_token
+	-- → remote_username, which fails on modernc.org/sqlite v1.59.0 with
+	-- "no such column: remote_token" (the parser-side name resolution
+	-- before execution fails on this version). UAT after 0.6.1 deploy
+	-- got the whole cairn wedged on this.
 	--
-	-- Add remote_password as NOT NULL DEFAULT '' so existing rows
-	-- satisfy the schema (and so the engine's "non-empty password"
-	-- check correctly rejects them, prompting the operator to fix).
-	ALTER TABLE sync_tasks RENAME COLUMN remote_token TO remote_username;
+	-- Fix: ADD COLUMN for the two new fields, leaving remote_token as
+	-- an orphaned column. Code reads/writes only the new columns; the
+	-- old remote_token contents become dead weight but no data is lost.
+	-- Any 0.6.0 tasks (with non-empty remote_token = bearer strings)
+	-- have empty remote_username after this migration — Validate()
+	-- correctly rejects them and the operator PATCHes the task.
+	ALTER TABLE sync_tasks ADD COLUMN remote_username TEXT NOT NULL DEFAULT '';
 	ALTER TABLE sync_tasks ADD COLUMN remote_password TEXT NOT NULL DEFAULT '';
 	`,
 }

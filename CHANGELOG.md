@@ -6,7 +6,7 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
-## [0.6.1] - 2026-09-30
+## [0.6.2] - 2026-09-30
 
 本轮主题:**内置 regsync 等价能力 —— cairn↔cairn 镜像同步,UI「镜像同步」Tab + 手动运行 + Basic 鉴权**
 
@@ -14,10 +14,16 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 > 客户端。本轮把「从 / 向另一 cairn 同步一批仓库」这条路径收进 cairn 自身,
 > 操作员在面板上配规则后点「立即运行」即可 —— 不再依赖外部 regsync 进程。
 
-> **v0.6.0.1 hotfix 收录**:首发版用「Bearer Token」鉴权是错的——cairn 自己的
-> /v2/* 只支持 Basic(username/password),没有 bearer token 来源。本轮改成
-> Basic;「Image sync」表单里的「Bearer Token」输入框换成「远端用户名」+
-> 「远端密码」两个字段。
+> **hotfix 历史**:
+> - 0.6.0 首发版用「Bearer Token」鉴权,错——cairn 自己的 /v2/* 只支持
+>   Basic(username/password),没有 bearer token 来源。
+> - 0.6.1 改成 Basic + Bearer 改 username/password,但 schema 迁移用
+>   `ALTER TABLE ... RENAME COLUMN` 在 modernc.org/sqlite v1.59.0 上
+>   报「no such column: remote_token」——整 cairn 启动失败,热度统计
+>   和 /api/sync 都挂。
+> - 0.6.2 (本轮) 用 `ADD COLUMN` 替代 RENAME:加 `remote_username` +
+>   `remote_password` 两列,旧 `remote_token` 列保留为孤儿(无害)。
+>   Go 代码只读写新列,旧数据"自然死亡"。
 
 ### 新增
 
@@ -71,10 +77,28 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ### 修复
 
-- **同步 auth 从 bearer 改 Basic**(本轮 hotfix;首发版写的 Bearer Token 是错的):
+- **DB schema 6 改用 ADD COLUMN 替代 RENAME COLUMN**(本轮 hotfix;0.6.1 的
+  schema 迁移在 modernc.org/sqlite v1.59.0 上挂):
+  - **根因**:0.6.1 用了 `ALTER TABLE sync_tasks RENAME COLUMN remote_token
+    TO remote_username`,在 modernc.org/sqlite v1.59.0 上 SQLite parser
+    报 `no such column: remote_token`(语法解析阶段,执行之前就 fail
+    了)。UAT 拉 0.6.1 后整个 cairn 启动失败 → 热度统计 + /api/sync 都
+    挂,告警界面闪「db: migrate: migration 6: SQL logic error」。
+  - **改法**:把两条 ALTER 都改成 `ADD COLUMN`,新增
+    `remote_username TEXT NOT NULL DEFAULT ''` 和
+    `remote_password TEXT NOT NULL DEFAULT ''` 两列,**不**删原
+    `remote_token` 列(留着作 dead weight,几字节的事)。Go 代码只读写
+    新列;旧 `remote_token` 内容自然死亡。
+  - **迁移路径**:0.6.0/0.6.1 用户的 DB 现在卡在 v5 (sync_tasks 已建、
+    远程 token 列存在)。0.6.2 migration 6 跑起来 → sync_tasks 多两列
+    → 整个 cairn 启动 → 「镜像同步」Tab 出现。
+  - **数据**:0.6.0 用户若有 sync_tasks 行,内容是旧的 bearer 字符串
+    (在新 schema 下无法使用,Validate 拒)。空表则无影响。
+- **同步 auth 从 bearer 改 Basic**(0.6.1 引入;首发版 0.6.0 写的 Bearer Token
+  是错的):
   - **根因**:cairn 自己的 `/v2/*` 只接受 Basic auth(`cfg.RegistryUsername` /
     `RegistryPassword` → `requireBasicAuth` middleware),**没有 bearer token
-    这一说**。首发版让 UI 接收「Bearer Token」字段 → 写到
+    这一说**。0.6.0 首发版让 UI 接收「Bearer Token」字段 → 写到
     `sync_tasks.remote_token` → 引擎发 `Authorization: Bearer ...` →
     对端 cairn middleware 只认 `Basic ` 前缀 → 401,功能压根不可用。
   - **改法**:sync 任务改存 `RemoteUsername` + `RemotePassword` 两个字段(后者
@@ -82,15 +106,12 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
     换成 `Authorization: Basic base64(u:p)`;`internal/sync/engine.go` 删掉
     `bearerTransport` 包装层(回归直接走 `registry.Config{Username, Password}`
     —— 上游 `internal/registry.Client` 原生支持)。
-  - **DB schema v5→v6**:`sync_tasks.remote_token TEXT` 重命名为
-    `remote_username`,新增 `remote_password TEXT NOT NULL DEFAULT ''`;
-    0.6.0 还没 UAT 落地,迁移只动了空表(或 0.6.0 测试中已经建了的空记录),
-    无业务数据损失。
+  - **DB schema v5→v6**:本轮 hotfix;具体见上面 hotfix 一节。
   - **UI**:`SyncTaskInput.remoteToken` → `remoteUsername` + `remotePassword`;
     「镜像同步」Modal 的「Bearer Token」字段拆成「远端用户名」+「远端密码」
     两个;密码 `Input.Password`,编辑时留空 = 保留旧值(语义同 0.6.0 的
     token 字段)。
-- **`/v2/_catalog` 分页死循环**(必须在 0.6.0 之前修 —— sync 强依赖):
+- **`/v2/_catalog` 分页死循环**(0.6.0 引入;sync 强依赖):
   - 客户端 `internal/registry/inventory.go` `ListRepositories` 之前只看
     `len(batch) < pageSize` 一个停止条件,遇到「`?last=` 是包含游标的服务端」
     无限循环。改为 `seen` map 去重 + 三条停止条件(短页 / `newCount==0` /
