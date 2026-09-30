@@ -19,7 +19,7 @@ import (
 // Engine executes sync tasks. One Engine per process; constructed in
 // server.go from the live *db.Db handle + local storage.Storage.
 //
-// Concurrency model (v0.7.0): Start persists the 'running' run row and
+// Concurrency model (v0.6.8): Start persists the 'running' run row and
 // returns immediately; iteration continues on a background goroutine
 // with a context detached from the triggering HTTP request, so neither
 // the response nor a client disconnect/refresh can abort a run mid-way
@@ -34,7 +34,7 @@ import (
 //     mostly hit the remote's rate limit. Parallelism across repos is
 //     a v0.6.2+ follow-up.
 //
-// Credentials (v0.7.0 / SYNC-3): when a task carries a
+// Credentials (v0.6.8 / SYNC-3): when a task carries a
 // RemoteCredentialID, the Basic-auth pair is resolved from the
 // credential library at run time — rotating a password there takes
 // effect on the next run without re-editing the task. A dangling
@@ -195,7 +195,7 @@ func (e *Engine) lockFor(taskID int64) *sync.Mutex {
 }
 
 // resolveCredentials returns the Basic-auth pair to use against the
-// remote (v0.7.0 / SYNC-3):
+// remote (v0.6.8 / SYNC-3):
 //   - RemoteCredentialID set → resolved from the credential library at
 //     run time, so a rotated password takes effect without re-editing
 //     the task.
@@ -467,7 +467,7 @@ func isIndexMediaType(mediaType string) bool {
 // flow through to http.Request.SetBasicAuth on every outbound call, so
 // we don't need a transport wrapper — just hand the creds to NewClient.
 //
-// The pair may come from the credential library (v0.7.0 / SYNC-3) —
+// The pair may come from the credential library (v0.6.8 / SYNC-3) —
 // resolution happens in resolveCredentials before this point.
 
 // newRemoteClient builds a registry.Client pointing at remoteURL with

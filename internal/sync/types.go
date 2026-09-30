@@ -7,7 +7,7 @@
 // per repo. Cron scheduling, per-tag filter, exclude patterns, and live
 // log streaming are deliberately deferred to v0.6.1+ per the 0.6.0 plan.
 //
-// v0.7.0: runs execute asynchronously (Engine.Start returns immediately
+// v0.6.8: runs execute asynchronously (Engine.Start returns immediately
 // with a 'running' row; POST /api/sync/{id}/run answers 202). Auth may
 // reference the encrypted credential library instead of inline fields.
 package sync
@@ -80,7 +80,7 @@ func (s SyncRunStatus) Valid() bool {
 // password edits (empty on PATCH == "don't change" UNLESS both empty,
 // which sets the task to anonymous).
 //
-// v0.7.0 (SYNC-3): auth may instead reference the encrypted credential
+// v0.6.8 (SYNC-3): auth may instead reference the encrypted credential
 // library (internal/credentials) via RemoteCredentialID. The referenced
 // pair is resolved at run time, so rotating a password in the credential
 // library takes effect on the next run without re-editing tasks. Inline
@@ -102,7 +102,7 @@ type SyncTask struct {
 	// a correlated subquery over sync_runs (latest run per task) so the
 	// UI can tell "a run is still in flight" from the list response
 	// alone — this is what keeps the run button disabled across page
-	// refreshes (v0.7.0 SYNC-4). Empty when the task has never run.
+	// refreshes (v0.6.8 SYNC-4). Empty when the task has never run.
 	LastRunStatus SyncRunStatus `json:"lastRunStatus,omitempty"`
 }
 
@@ -110,7 +110,7 @@ type SyncTask struct {
 // mirrors SyncTask but explicitly includes the password field (hidden on
 // SyncTask via json:"-"). handlers convert input → task via ToTask().
 //
-// v0.7.0 (SYNC-3) three-state merge, applied by the UPDATE handler
+// v0.6.8 (SYNC-3) three-state merge, applied by the UPDATE handler
 // before validation:
 //   - RemoteCredentialID != "" → reference mode; inline fields cleared.
 //   - RemoteCredentialID == "" with RemoteUsername != "" → inline mode;
@@ -151,7 +151,7 @@ func (in SyncTaskInput) ToTask() SyncTask {
 // to both create and update; on update, callers may want to also check
 // that t.ID != 0.
 //
-// Credential rule (v0.7.0 — three mutually exclusive states):
+// Credential rule (v0.6.8 — three mutually exclusive states):
 //   - RemoteCredentialID set → reference mode. Inline username/password
 //     must both be empty (the engine resolves the pair from the
 //     credential library at run time).

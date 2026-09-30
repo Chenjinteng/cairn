@@ -182,12 +182,12 @@ func Build(cfg *config.Config) (*Runtime, error) {
 	var syncHandlers *api.SyncHandlers
 	if store_db != nil {
 		syncStore := sync.NewStore(store_db)
-		// v0.7.0 (SYNC-1): close the books on runs that were in flight when
+		// v0.6.8 (SYNC-1): close the books on runs that were in flight when
 		// the previous process died. At boot there is no live engine, so
 		// every 'running' row is by definition a zombie — left alone it
-		// shows up in the UI as a task that spins forever and (pre-0.7.0)
+		// shows up in the UI as a task that spins forever and (pre-0.6.8)
 		// reported "already running" on every retry. Runs execute async
-		// since 0.7.0, which makes this cleanup the counterpart to the
+		// since 0.6.8, which makes this cleanup the counterpart to the
 		// detached context: detached ctx survives the request, this
 		// survives the process.
 		if n, err := syncStore.MarkStaleRunsFailed(context.Background(), time.Now().UTC(),

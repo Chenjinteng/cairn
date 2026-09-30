@@ -3,7 +3,7 @@
 > 2026-09-30 UAT（client.local ↔ runner.local，cairn 0.6.7）实测反馈的 4 个问题。
 > 每条含：现象 / 根因 / 证据（file:line）/ 修复方向。编号 SYNC-1 ~ SYNC-4。
 >
-> **修复状态：SYNC-1 ~ SYNC-4 已于 `0.7.0` 一轮全部修复。**
+> **修复状态：SYNC-1 ~ SYNC-4 已于 `0.6.8` 一轮全部修复。**
 > 下方各条保留原始「现象 / 根因 / 证据」作为回归依据，就地标注了实现要点；
 > 落地方式与「原建议的偏差」见文末「修复状态与落地方式」。
 
@@ -11,7 +11,7 @@
 
 ## SYNC-1 · 「立即运行」10 秒超时中止，但部分镜像实际已同步成功
 
-> ✅ **已修复于 `0.7.0`** —— 实现要点见文末「修复状态与落地方式」。
+> ✅ **已修复于 `0.6.8`** —— 实现要点见文末「修复状态与落地方式」。
 
 **现象**
 
@@ -58,7 +58,7 @@
 
 ## SYNC-2 · 日志大量 `sync: pull repo failed ... context canceled`
 
-> ✅ **已修复于 `0.7.0`** —— 实现要点见文末「修复状态与落地方式」。
+> ✅ **已修复于 `0.6.8`** —— 实现要点见文末「修复状态与落地方式」。
 
 **现象**
 
@@ -91,7 +91,7 @@ blob GET / tags list 全部 `context canceled` → per-repo continue-on-error �
 
 ## SYNC-3 · 远端凭据应引用「凭据管理」库，而不是表单里手填用户名密码
 
-> ✅ **已修复于 `0.7.0`** —— 实现要点见文末「修复状态与落地方式」。
+> ✅ **已修复于 `0.6.8`** —— 实现要点见文末「修复状态与落地方式」。
 
 **现象（用户原话）**
 
@@ -127,7 +127,7 @@ blob GET / tags list 全部 `context canceled` → per-repo continue-on-error �
 
 ## SYNC-4 · 运行中刷新页面后「运行」按钮又可点，会重复发起同步
 
-> ✅ **已修复于 `0.7.0`** —— 实现要点见文末「修复状态与落地方式」。
+> ✅ **已修复于 `0.6.8`** —— 实现要点见文末「修复状态与落地方式」。
 
 **现象**
 
@@ -167,15 +167,15 @@ blob GET / tags list 全部 `context canceled` → per-repo continue-on-error �
 
 ## 修复状态与落地方式
 
-**2026-09-30 一轮修完（`0.7.0`）**。未能拆轮：SYNC-1 / 2 / 4 共享同一条根因链，
+**2026-09-30 一轮修完（`0.6.8`）**。未能拆轮：SYNC-1 / 2 / 4 共享同一条根因链，
 异步化必须一次到位；SYNC-3 的 schema 改动（v7 ADD COLUMN）与该轮同 commit，拆开会造成两次迁移。
 
 | 条目 | 状态 | 落地方式 |
 | --- | --- | --- |
-| SYNC-1 | ✅ `0.7.0` | `POST /api/sync/{id}/run` 改异步受理（202 + running run），执行走 `context.WithoutCancel`；启动 sweep + `defer recover()` 三重保险 |
-| SYNC-2 | ✅ `0.7.0` | 随 detached ctx 消失；另 `errors.Is(err, context.Canceled)` 特判为整轮单条 Info（`sync: pull aborted`），不再逐仓库刷 WARN |
-| SYNC-3 | ✅ `0.7.0` | schema v7 `sync_tasks.remote_credential_id TEXT` + 前端三档 Radio（匿名 / 凭据 / 内联）+ 执行期经 Vault 解析 |
-| SYNC-4 | ✅ `0.7.0` | `TryLock` 失败 → **409 CONFLICT**；列表/详情返回 `lastRunStatus`，前端 running 时按钮置灰 + 3s 轮询 |
+| SYNC-1 | ✅ `0.6.8` | `POST /api/sync/{id}/run` 改异步受理（202 + running run），执行走 `context.WithoutCancel`；启动 sweep + `defer recover()` 三重保险 |
+| SYNC-2 | ✅ `0.6.8` | 随 detached ctx 消失；另 `errors.Is(err, context.Canceled)` 特判为整轮单条 Info（`sync: pull aborted`），不再逐仓库刷 WARN |
+| SYNC-3 | ✅ `0.6.8` | schema v7 `sync_tasks.remote_credential_id TEXT` + 前端三档 Radio（匿名 / 凭据 / 内联）+ 执行期经 Vault 解析 |
+| SYNC-4 | ✅ `0.6.8` | `TryLock` 失败 → **409 CONFLICT**；列表/详情返回 `lastRunStatus`，前端 running 时按钮置灰 + 3s 轮询 |
 
 ### 与原「修复方向」的偏差（实现时调整）
 

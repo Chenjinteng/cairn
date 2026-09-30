@@ -275,7 +275,7 @@ var migrations = map[int]string{
 	PRAGMA foreign_keys = ON;
 	`,
 	7: `
-	-- v0.7.0: sync tasks can reference the credential library instead of
+	-- v0.6.8: sync tasks can reference the credential library instead of
 	-- carrying inline basic-auth fields (SYNC-3). remote_credential_id is
 	-- credentials.Credential.ID (a STRING — hex/random, not an INTEGER),
 	-- hence TEXT. Empty string means "no credential reference": the task

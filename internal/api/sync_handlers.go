@@ -72,7 +72,7 @@ func (s *SyncHandlers) RegisterRoutes(r chi.Router) {
 // Each row also carries lastRunStatus — filled by the store from the newest
 // sync_runs row via a correlated subquery — so the UI can keep the run
 // button disabled across page refreshes while a run is still in flight
-// (v0.7.0 SYNC-4).
+// (v0.6.8 SYNC-4).
 func (s *SyncHandlers) ListTasks(w http.ResponseWriter, r *http.Request) {
 	tasks, err := s.Store.ListTasks(r.Context())
 	if err != nil {
@@ -142,7 +142,7 @@ func (s *SyncHandlers) GetTask(w http.ResponseWriter, r *http.Request) {
 // UpdateTask — PATCH /api/sync/{id}
 //
 // Body shape: SyncTaskInput. The credential fields are merged as a
-// three-state switch BEFORE validation (v0.7.0 SYNC-3):
+// three-state switch BEFORE validation (v0.6.8 SYNC-3):
 //
 //	remoteCredentialId != ""       → reference mode; inline fields cleared
 //	username or password supplied  → inline mode; a blank password keeps the
@@ -151,7 +151,7 @@ func (s *SyncHandlers) GetTask(w http.ResponseWriter, r *http.Request) {
 //	                                 by Validate if no password is stored
 //	everything blank               → anonymous mode; all auth cleared
 //
-// The merge keeps pre-0.7.0 clients working unchanged — they only ever send
+// The merge keeps pre-0.6.8 clients working unchanged — they only ever send
 // inline fields and already rely on "blank password == keep" — while giving
 // the new UI one field to flip between modes.
 //
@@ -247,7 +247,7 @@ func (s *SyncHandlers) DeleteTask(w http.ResponseWriter, r *http.Request) {
 // Starts a run and returns immediately (202 Accepted) with the freshly
 // created run row, status "running". Execution continues on the engine's
 // own goroutine over a detached context, so the run is no longer tied to
-// the HTTP request's lifetime. That is the v0.7.0 SYNC-1 fix: the UI's 10s
+// the HTTP request's lifetime. That is the v0.6.8 SYNC-1 fix: the UI's 10s
 // client-side budget used to cancel the run mid-flight (the "运行失败：
 // 请求超时（10 秒）已中止" toast) and leave a zombie 'running' row behind.
 // Observe the outcome by polling GET /api/sync (lastRunStatus) or
@@ -352,7 +352,7 @@ type SyncTestInput struct {
 //
 // When remoteCredentialId is set, the credential is resolved through the
 // vault first, so testing a reference exercises the same lookup path a run
-// would (v0.7.0 SYNC-3); inline fields are ignored in that case, matching
+// would (v0.6.8 SYNC-3); inline fields are ignored in that case, matching
 // Validate's mutual exclusion.
 //
 // Every probe outcome is HTTP 200 with a sync.ProbeResult body — wrong

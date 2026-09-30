@@ -20,7 +20,7 @@ import (
 // SyncTaskRow is the SQL-side view of one sync_tasks row. Times are
 // stored as INTEGER unix seconds and decoded on read.
 //
-// RemoteCredentialID references a credentials-library entry (v0.7.0 /
+// RemoteCredentialID references a credentials-library entry (v0.6.8 /
 // SYNC-3, schema v7). Empty means the task is either anonymous or uses
 // the legacy inline RemoteUsername / RemotePassword pair.
 //
@@ -274,7 +274,7 @@ func (d *Db) SyncRunListByTask(ctx context.Context, taskID int64, limit int) ([]
 // be running: every 'running' row is a zombie whose process exited
 // (crash / docker restart) before SyncRunUpdate could fire. Without this
 // sweep the UI would render a permanently stuck "running" state and, as
-// of v0.7.0, refuse to start new runs for that task (SYNC-1 / SYNC-4).
+// of v0.6.8, refuse to start new runs for that task (SYNC-1 / SYNC-4).
 //
 // Returns the number of rows fixed (0 on a healthy start).
 func (d *Db) SyncRunMarkRunningFailed(ctx context.Context, finishedAt time.Time, reason string) (int64, error) {
