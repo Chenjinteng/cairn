@@ -42,6 +42,10 @@ type ExtraHandlers struct {
 	Events   *events.Handler
 	Store    storage.Storage
 
+	// v0.6.0: registry sync (regsync 内建). nil when DB / vault isn't
+	// ready — RegisterRoutes handles that case with 503s.
+	Sync *SyncAPI
+
 	// v0.4.0: startup failure reasons for the optional stores ("" when
 	// available). Surfaced by the 503 guards so the UI can explain *why*
 	// a panel is disabled.
@@ -143,6 +147,14 @@ func (e *ExtraHandlers) RegisterRoutes(r chi.Router) {
 		r.Delete("/ignore", e.StatsIgnoreRemove)
 		r.Delete("/heat", e.StatsHeatDelete)
 	})
+
+	// v0.6.0: registry sync (regsync 内建). Phase 1 ships pull direction
+	// only. When Sync is nil (DB / vault not ready at startup), its
+	// RegisterRoutes mounts a 503 catch-all so the UI sees a clear
+	// "not configured" instead of 404.
+	if e.Sync != nil {
+		e.Sync.RegisterRoutes(r)
+	}
 }
 
 // --- guards -----------------------------------------------------------------
