@@ -51,7 +51,7 @@ func newTestRouter(t *testing.T) http.Handler {
 	cfg := &config.Config{Env: "test"}
 	cfg.Mutable = &config.Mutable{}
 	cfg.Mutable.Set("registry.url", "") // initialise the map
-	cfg.Mutable.Set("registry.url", "http://fake")
+	cfg.Mutable.Set("registry.url", "fake")
 	cfg.Mutable.Set("registry.name", "Test")
 	cfg.Mutable.Set("allow.delete", "true")
 	cfg.Mutable.Set("allow.pull", "true")
@@ -67,7 +67,7 @@ func newTestRouterNoDelete(t *testing.T) http.Handler {
 	cfg := &config.Config{Env: "test"}
 	cfg.Mutable = &config.Mutable{}
 	cfg.Mutable.Set("registry.url", "") // initialise the map
-	cfg.Mutable.Set("registry.url", "http://fake")
+	cfg.Mutable.Set("registry.url", "fake")
 	cfg.Mutable.Set("allow.delete", "false")
 	store := newFakeStore(t)
 	h := &api.Handlers{Cfg: cfg, Store: store}
@@ -85,6 +85,69 @@ func TestGetConfig(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), `"name":"Test"`) {
 		t.Errorf("body missing name: %s", rr.Body.String())
+	}
+}
+
+// v0.6.7 hotfix: docker-compose 把容器内 8787 映射到宿主机 10001 时,
+// `registry.url = "client.local"` 走保存后,GET /api/config 必须返
+// host:port 都齐的 URL —— 否则右上角 badge 跟「复制 docker pull」
+// 都漏掉端口,镜像拉不到。回归测试三条路径:
+//
+//   - HostPort != Port + saved URL 无端口 → 应追加 HostPort
+//   - HostPort == Port(无映射) + saved URL 无端口 → 不应追加
+//   - saved URL 已显式带端口 → 不应被 HostPort 覆盖
+func TestGetConfigAppendsHostPortWhenMapped(t *testing.T) {
+	cfg := &config.Config{Env: "test", Port: 8787, HostPort: 10001}
+	cfg.Mutable = &config.Mutable{}
+	cfg.Mutable.Set("registry.url", "client.local")
+	cfg.Mutable.Set("registry.name", "ops")
+	h := &api.Handlers{Cfg: cfg, Store: newFakeStore(t)}
+	mux := api.NewRouterWithExtras(h, nil, cfg).(chi.Router)
+
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/config", nil))
+	if rr.Code != 200 {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, `"url":"http://client.local:10001"`) {
+		t.Errorf("URL missing host:port (want http://client.local:10001): %s", body)
+	}
+	if !strings.Contains(body, `"host":"client.local:10001"`) {
+		t.Errorf("host missing port (want client.local:10001): %s", body)
+	}
+}
+
+func TestGetConfigNoPortWhenNoMapping(t *testing.T) {
+	cfg := &config.Config{Env: "test", Port: 8787, HostPort: 8787}
+	cfg.Mutable = &config.Mutable{}
+	cfg.Mutable.Set("registry.url", "client.local")
+	h := &api.Handlers{Cfg: cfg, Store: newFakeStore(t)}
+	mux := api.NewRouterWithExtras(h, nil, cfg).(chi.Router)
+
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/config", nil))
+	body := rr.Body.String()
+	if !strings.Contains(body, `"url":"http://client.local"`) {
+		t.Errorf("URL should not have port when HostPort==Port: %s", body)
+	}
+	if strings.Contains(body, `"host":"client.local:`) {
+		t.Errorf("host should not have port when HostPort==Port: %s", body)
+	}
+}
+
+func TestGetConfigRespectsExplicitPortInSavedURL(t *testing.T) {
+	cfg := &config.Config{Env: "test", Port: 8787, HostPort: 10001}
+	cfg.Mutable = &config.Mutable{}
+	cfg.Mutable.Set("registry.url", "legacy.example.com:8080") // 迁移期旧值
+	h := &api.Handlers{Cfg: cfg, Store: newFakeStore(t)}
+	mux := api.NewRouterWithExtras(h, nil, cfg).(chi.Router)
+
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/config", nil))
+	body := rr.Body.String()
+	if !strings.Contains(body, `"url":"http://legacy.example.com:8080"`) {
+		t.Errorf("explicit port must win over HostPort (want 8080 not 10001): %s", body)
 	}
 }
 
