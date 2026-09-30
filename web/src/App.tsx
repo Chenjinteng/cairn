@@ -9,6 +9,7 @@ import {
   MoonOutlined,
   SettingOutlined,
   SunOutlined,
+  SwapOutlined,
 } from '@ant-design/icons';
 
 import { ensureConfigLoaded, publishConfig, useAppConfig } from './config-store';
@@ -19,6 +20,7 @@ import CredentialsPage from './pages/credentials-page';
 import ProxiesPage from './pages/proxies-page';
 import SettingsPage from './pages/settings-page';
 import StatsPage from './pages/stats-page';
+import SyncPage from './pages/sync-page';
 import CairnMark from './components/cairn-mark';
 import PageSidebar, {
   type PageKey,
@@ -43,7 +45,7 @@ type PageFilter = Record<PageKey, SidebarSelection>;
 const NO_GROUPS: SidebarGroup[] = [];
 
 /** v0.5.41:localStorage 反序列化出来的 page key 校验,非法值降级。 */
-const PAGE_KEYS: readonly PageKey[] = ['images', 'stats', 'pull', 'credentials', 'proxies', 'settings'];
+const PAGE_KEYS: readonly PageKey[] = ['images', 'stats', 'pull', 'sync', 'credentials', 'proxies', 'settings'];
 function isPageKey(v: unknown): v is PageKey {
   return typeof v === 'string' && (PAGE_KEYS as readonly string[]).includes(v);
 }
@@ -68,6 +70,7 @@ const NAV_ITEMS: { key: PageKey; label: string; icon: ReactNode }[] = [
   { key: 'images', label: '镜像列表', icon: <DockerOutlined /> },
   { key: 'pull', label: '镜像拉取', icon: <CloudDownloadOutlined /> },
   { key: 'stats', label: '镜像热度', icon: <BarChartOutlined /> },
+  { key: 'sync', label: '镜像同步', icon: <SwapOutlined /> },
   { key: 'credentials', label: '凭据管理', icon: <KeyOutlined /> },
   { key: 'proxies', label: '代理管理', icon: <ApiOutlined /> },
   { key: 'settings', label: '设置', icon: <SettingOutlined /> },
@@ -110,6 +113,7 @@ export default function App({
     images: {},
     stats: { window: '30d' },
     pull: {},
+    sync: {},
     credentials: {},
     proxies: {},
     settings: {},
@@ -137,6 +141,7 @@ export default function App({
       images: bind('images'),
       stats: bind('stats'),
       pull: bind('pull'),
+      sync: bind('sync'),
       credentials: bind('credentials'),
       proxies: bind('proxies'),
       settings: bind('settings'),
@@ -305,6 +310,11 @@ export default function App({
                   onConfigChange={publishConfig}
                   sidebarFilter={currentFilter}
                   onPublishGroups={publishHandlers.stats}
+                />
+              ) : page === 'sync' ? (
+                <SyncPage
+                  sidebarFilter={currentFilter}
+                  onPublishGroups={publishHandlers.sync}
                 />
               ) : page === 'credentials' ? (
                 <CredentialsPage

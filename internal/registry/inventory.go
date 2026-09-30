@@ -27,28 +27,47 @@ const (
 
 // ListRepositories calls /v2/_catalog and returns the full repository list.
 //
-// Pagination: we keep requesting until the response length is less than the
-// page size. Per registry-manager's testing, _catalog respects ?n=&last=
-// in both v2.8.3 and v3.x; we ignore the Link header and rely on row count,
-// same as registry-manager.
+// Pagination: we keep requesting until one of three stop conditions is met:
+//  1. Short page (len(batch) < pageSize) — server signals end-of-list
+//  2. All items in this batch are duplicates — server treats ?last= as
+//     inclusive and keeps re-emitting the cursor item, so we got the same
+//     content we already have
+//  3. Safety cap maxCatalogPages — a misbehaving server shouldn't hang us
+//
+// We deduplicate via a `seen` map rather than trusting the server's pagination
+// semantics. This is robust against registries that use either inclusive or
+// exclusive last cursors, and against any short re-emission of items we've
+// already collected. v0.6.1 added the dedupe + safety cap; without them the
+// previous `len(batch) < pageSize`-only loop went into an infinite regress
+// against any registry where the last item of a full page is also the first
+// item of the next page.
 func (c *Client) ListRepositories(ctx context.Context) ([]string, error) {
+	const maxCatalogPages = 5000
+	seen := map[string]struct{}{}
 	var all []string
 	last := ""
-	for {
+	for i := 0; i < maxCatalogPages; i++ {
 		batch, err := c.catalogPage(ctx, defaultCatalogPage, last)
 		if err != nil {
 			return nil, err
 		}
-		all = append(all, batch...)
+		newCount := 0
+		for _, r := range batch {
+			if _, dup := seen[r]; !dup {
+				seen[r] = struct{}{}
+				all = append(all, r)
+				newCount++
+			}
+		}
 		if len(batch) < defaultCatalogPage {
 			return all, nil
 		}
-		if len(batch) > 0 {
-			last = batch[len(batch)-1]
-		} else {
+		if newCount == 0 {
 			return all, nil
 		}
+		last = batch[len(batch)-1]
 	}
+	return all, nil
 }
 
 // catalogPage performs one /v2/_catalog page request.

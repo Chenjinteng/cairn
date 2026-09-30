@@ -42,6 +42,12 @@ type ExtraHandlers struct {
 	Events   *events.Handler
 	Store    storage.Storage
 
+	// v0.6.0: registry sync (cairn↔cairn). nil when DB isn't available
+	// (startup failure); the UI's "镜像同步" tab will show as disabled.
+	// SyncHandlers owns the /api/sync routes; its RegisterRoutes is
+	// invoked below alongside the other route mounts.
+	SyncHandlers *SyncHandlers
+
 	// v0.4.0: startup failure reasons for the optional stores ("" when
 	// available). Surfaced by the 503 guards so the UI can explain *why*
 	// a panel is disabled.
@@ -121,6 +127,13 @@ func (e *ExtraHandlers) RegisterRoutes(r chi.Router) {
 	if e.Events != nil {
 		// Webhook ingest (registry-side notification endpoint).
 		r.Post("/events", e.Events.ServeHTTP)
+	}
+
+	// v0.6.0: registry sync. SyncHandlers.RegisterRoutes owns the
+	// /sync/* routes and is wired in server.go (constructed only when
+	// the DB is up, hence the nil check).
+	if e.SyncHandlers != nil {
+		e.SyncHandlers.RegisterRoutes(r)
 	}
 
 	// v0.5.0: deletion is operational work, so it lives on the API surface

@@ -23,6 +23,7 @@ import (
 	"github.com/Chenjinteng/cairn/internal/pull"
 	"github.com/Chenjinteng/cairn/internal/registryd"
 	"github.com/Chenjinteng/cairn/internal/storage"
+	"github.com/Chenjinteng/cairn/internal/sync"
 )
 
 // Runtime bundles the long-lived dependencies.
@@ -173,6 +174,22 @@ func Build(cfg *config.Config) (*Runtime, error) {
 		eventsHandler.SetEnabled(cfg.AllowRegistryEvents)
 	}
 
+	// v0.6.0: registry sync (cairn↔cairn). Only constructed when the DB
+	// is up; otherwise the UI's "镜像同步" tab is hidden and the /api/sync/*
+	// routes aren't mounted. Engine holds the local Storage handle for the
+	// pull-side writes; remote reads/writes go through internal/registry.Client
+	// and internal/sync.Writer respectively.
+	var syncHandlers *api.SyncHandlers
+	if store_db != nil {
+		syncStore := sync.NewStore(store_db)
+		syncEngine := sync.NewEngine(syncStore, store, slog.Default())
+		syncHandlers = &api.SyncHandlers{
+			Store:  syncStore,
+			Engine: syncEngine,
+			Log:    slog.Default(),
+		}
+	}
+
 	// 8. Admin handlers (browse/delete talk to local storage; pull uses external client).
 	handlers := &api.Handlers{
 		Cfg:        cfg,
@@ -198,9 +215,13 @@ func Build(cfg *config.Config) (*Runtime, error) {
 		DB:         store_db,
 		Events:     eventsHandler,
 		Store:      store,
-		VaultErr:   vaultErr,
-		ProxiesErr: proxiesErr,
-		DBErr:      dbErr,
+		// v0.6.0: registry sync — only constructed when the DB is up.
+		// When nil, the UI's "镜像同步" tab is hidden and the API
+		// surface simply doesn't include /api/sync/* routes.
+		SyncHandlers: syncHandlers,
+		VaultErr:     vaultErr,
+		ProxiesErr:   proxiesErr,
+		DBErr:        dbErr,
 	}
 
 	// 9. Composite router: /api/* + /v2/*

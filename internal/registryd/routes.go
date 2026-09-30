@@ -43,6 +43,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -190,11 +193,70 @@ func challenge(w http.ResponseWriter, realm string) {
 
 // --- /v2/_catalog -----------------------------------------------------------
 
+// catalog serves GET /v2/_catalog.
+//
+// OCI Distribution Spec §_catalog supports two query parameters:
+//   ?n=<max>     — max items per response
+//   ?last=<repo> — exclusive cursor; return items lexicographically AFTER this
+//
+// Implementation notes:
+//   - We always sort first. Some storage backends return repos in arbitrary
+//     order; without a stable order, ?last= is meaningless across requests.
+//   - ?last= uses sort.SearchStrings (O(log n)) to skip up to and including
+//     the cursor, exactly per spec (exclusive).
+//   - ?n= truncates the tail. Invalid / missing / n<=0 falls through (lenient;
+//     spec says "SHOULD" error on n<=0 but old cairn silently ignored and
+//     existing clients depend on it).
+//   - Link header is emitted ONLY when we actually truncated, so clients
+//     that omit `n` (the cairn internal scanner does) don't see pagination
+//     noise.
+//   - repos==nil must serialize as []string{}, not null (spec compliance
+//     for the JSON shape — clients like Docker CLI choke on null repos).
 func (h *Handler) catalog(w http.ResponseWriter, r *http.Request) {
 	repos, err := h.Store.Repositories(r.Context())
 	if err != nil {
 		writeV2Error(w, http.StatusInternalServerError, "UNSUPPORTED", err.Error())
 		return
+	}
+	sort.Strings(repos)
+
+	q := r.URL.Query()
+	if last := q.Get("last"); last != "" {
+		// sort.SearchStrings returns the leftmost insertion point for `last`
+		// in the sorted slice. Two cases:
+		//   a) `last` exists at idx → skip idx+1..end
+		//   b) `last` doesn't exist  → items at idx..end are all > `last`
+		idx := sort.SearchStrings(repos, last)
+		if idx < len(repos) && repos[idx] == last {
+			repos = repos[idx+1:]
+		} else {
+			repos = repos[idx:]
+		}
+	}
+
+	truncated := false
+	n := 0
+	if nStr := q.Get("n"); nStr != "" {
+		if v, err := strconv.Atoi(nStr); err == nil && v > 0 {
+			n = v
+			if n < len(repos) {
+				repos = repos[:n]
+				truncated = true
+			}
+		}
+	}
+
+	if truncated {
+		// Absolute URL is required here too — see absoluteLocation comment
+		// for the v0.5.44 absolute-Location work that this extends. Clients
+		// that follow Link headers generally won't accept relative paths.
+		next := absoluteLocation(r, fmt.Sprintf("/v2/_catalog?n=%d&last=%s",
+			n, url.QueryEscape(repos[len(repos)-1])))
+		w.Header().Set("Link", fmt.Sprintf(`<%s>; rel="next"`, next))
+	}
+
+	if repos == nil {
+		repos = []string{}
 	}
 	writeV2JSON(w, http.StatusOK, map[string]any{"repositories": repos})
 }

@@ -605,3 +605,61 @@ export interface IgnoreRules {
   /** 并集去重后的最终列表；判定与界面回显用的都是它。 */
   effective: string[];
 }
+
+/**
+ * v0.6.0: 镜像同步（cairn↔cairn）。
+ *
+ * 同步任务的方向：pull 把远端 cairn 拉到本地；push 把本地 cairn 推送到远端。
+ * 每个 task 单独配方向，双方向需要两条记录。
+ */
+export type SyncDirection = 'pull' | 'push';
+
+/**
+ * 单条同步任务。`remoteToken` 后端用 json:"-" 屏蔽——UI 永远拿不到明文,
+ * 列表 / 详情响应都不带这个字段。新建必须带,更新可省略(空字符串 = 保留旧的)。
+ */
+export interface SyncTask {
+  id: number;
+  name: string;
+  direction: SyncDirection;
+  remoteUrl: string;
+  /** 换行分隔的 glob 模式（`*` 通配），空 = 全匹配。 */
+  include: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * 新建 / 更新同步任务的请求体。`remoteToken` 在更新时可省略——后端会保留旧值,
+ * 编辑「名称」「远端 URL」「Include」时不必重输一次（UI 也根本没机会拿到）。
+ */
+export interface SyncTaskInput {
+  name: string;
+  direction: SyncDirection;
+  remoteUrl: string;
+  remoteToken: string;
+  include: string;
+  enabled: boolean;
+}
+
+/**
+ * 同步任务的执行记录。`status` 决定后续如何渲染:
+ *   - running : 引擎仍在跑（v0.6.0 同步触发后等返回,这个状态只短暂出现）；
+ *   - success : 全部成功；
+ *   - partial : 有 repo 失败,但整体跑完了；
+ *   - failed  : 启动前就失败了（远端不可达、token 错误等）。
+ */
+export type SyncRunStatus = 'running' | 'success' | 'partial' | 'failed';
+
+export interface SyncRun {
+  id: number;
+  taskId: number;
+  startedAt: string;
+  finishedAt?: string;
+  status: SyncRunStatus;
+  reposTotal: number;
+  reposSynced: number;
+  reposFailed: number;
+  error?: string;
+}
