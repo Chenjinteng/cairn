@@ -1,7 +1,7 @@
 # 管理 API 缺陷（`/api/*`）
 
 > 被测版本：cairn `0.6.11`（commit `f66bd4d`）｜环境：`registry.local:10001`（容器 `cairn:0.6.11`，`env=prod`）
-> 范围：cairn 自有 HTTP 管理 API，编号 `MA-1`、`MA-3`、`MA-4`
+> 范围：cairn 自有 HTTP 管理 API，编号 `MA-1`、`MA-3`、`MA-4`、`MA-5`、`MA-6`
 > 每条包含：现象 / 根因 / 证据（源码 file:line + 实机实测）/ 修复方向
 > 修复状态：**全部未修复**。
 > 编号说明：`MA-2` 号位与 MA-1 同源（同一路由缺陷的另一处表现），已并入 MA-1，故缺号。
@@ -134,3 +134,112 @@ if errors.Is(err, storage.ErrNotFound) {
 ```
 
 顺带扫一遍同文件其他删除/查询端点，确认没有同类漏改。
+
+---
+
+## MA-5 · sync 删除端点返回 `204 No Content`，前端 JSON 信封解析失败 → **删除成功却弹「删除失败」（假阴性）**（High）
+
+**现象**
+
+UI 上删除同步任务/同步定时规则，**后端已经删掉了**，前端却弹红色错误：
+
+```
+删除失败：服务返回了非 JSON 响应（HTTP 204）: /api/sync/2
+删除失败：服务返回了非 JSON 响应（HTTP 204）: /api/sync/2/schedules/2
+```
+
+两条 toast 均在本轮 E2E 场景中**实机截获**。随后以服务端为权威核对：任务确已删除（`GET /api/sync/2` → `404`，`GET /api/sync` 里已无该条），规则确已删除（`GET /api/sync/2/schedules` 随任务级联消失）——**即「失败」提示是假阴性**。
+
+反过来若用户因为这条错误提示而**重试删除**，会得到 `404`，体验上等于「删两次都报错」，无法确认自己到底有没有删成功。
+
+**影响面**
+
+- 同步任务列表、同步定时规则两处删除走同一路由家族（`DELETE /api/sync/{id}`、`DELETE /api/sync/{id}/schedules/{sid}`），**两处都命中**；
+- 前端失败分支**不刷新列表**（`web/src/pages/sync-page.tsx:401-418`、`:529-538`），于是 UI 上被删的行**仍然留在表格里**，与后端的真实状态分裂——用户看到「删不掉」，实际库里已经没了。这一条比 toast 文案本身危害更大：它是**可见状态与真实状态不一致**。
+- CASCADE 语义也被这条缺陷掩蔽：删除任务时 `modal.confirm` 提示「外键 CASCADE」，实测级联清空确实发生了，但用户只看到失败提示。
+
+**根因**
+
+后端与前端对「删除成功」的**响应形态**约定不一致：
+
+1. 后端（sync 两处）`w.WriteHeader(http.StatusNoContent)` —— 返回 **204 空 body**：
+   - `internal/api/sync_handlers.go:248`（`DeleteTask`，函数体 `:235-250`）
+   - `internal/api/sync_handlers.go:574`（`DeleteSchedule`，函数体 `:552-576`）
+2. 前端 `request()` 把**所有**响应都当 JSON 信封解析（`web/src/api.ts:109-179`）：`:140-152` 先 `await response.text()`，对空串执行 `JSON.parse('')` 抛 `SyntaxError`，被兜底成 `INVALID_RESPONSE`，消息模板为 ``服务返回了非 JSON 响应（HTTP ${status}）: ${path}``；`:153-161` 是「非信封」分支，**没有为 204/空 body 预留成功通道**。
+3. 调用方：`deleteSyncTask`（`web/src/api.ts:507-508`）、`deleteSyncSchedule`（`web/src/api.ts:555-558`）直接 `await request(...)`，于是 reject 传到了页面的失败分支。
+
+**这是漏改，不是设计选择**：全仓 `StatusNoContent` 只有 4 处，其中 `internal/api/api.go:132` 是 dev CORS 的 `OPTIONS` 预检（合法），`internal/registryd/routes.go:496` 属于 `/v2/*` 协议侧（不经前端 `request()`）；剩下的就是这 2 处 sync 端点。**其余 6 个删除/写端点全部返回 `200` + JSON 信封**（`internal/api/handlers_extra.go:601`、`:625`、`:848`、`:1056`、`:345`，`internal/api/handlers.go:752`），前端对它们工作正常。同一份前端代码，只有 sync 这两个端点炸——对照关系明确。
+
+**证据**
+
+- 源码（后端）：`internal/api/sync_handlers.go:235-250`、`:552-576`；对照 `internal/api/handlers_extra.go:601/625/848/1056/345`、`internal/api/handlers.go:752`（均 `writeJSON(http.StatusOK, …)`）；`internal/api/api.go:132`（CORS 预检）、`internal/registryd/routes.go:496`（协议侧）为合法 204。
+- 源码（前端）：`web/src/api.ts:109-179`（尤 `:140-152`）、`:507-508`、`:555-558`；`web/src/pages/sync-page.tsx:401-418`（`handleDelete`，失败分支无 `refresh()`）、`:529-538`（`handleDeleteSchedule`，失败分支无 `refreshSchedules()`）。
+- 实测（UI，53 runner，`2026-09-30`）：
+  - `go-hub/sync-page-deltask` → `r-20260930234533-6896` passed，取证 DOM 注入 `SPDELTASKMSG:删除失败：服务返回了非 JSON 响应（HTTP 204）: /api/sync/2`
+  - `go-hub/sync-page-delrule` → `r-20260930234427-b614` passed，取证 `SPDELRULEMSG:删除失败：服务返回了非 JSON 响应（HTTP 204）: /api/sync/2/schedules/2`；同场景另取证 `SPDELRULESTALE:rows=1`（列表未刷新，被删规则仍在表格里）
+- 实测（服务端权威核对，158，`2026-09-30T23:46:06Z`）：`GET /api/sync/2` → **`404`**；`GET /api/sync` 仅剩 `id=1 "Sync 58"`。即后端删除是成功的。
+
+**修复方向**
+
+二选一，**推荐 (a)**（与本仓既有约定一致）：
+
+- **(a) 后端改成 `200` + JSON 信封**：照兄弟端点的写法 `writeJSON(w, http.StatusOK, map[string]any{"deleted": id})`，前端零改动，且响应里能带回被删 id，便于前端乐观更新。同步更新任何文档化的状态码（`204` → `200`）。
+- **(b) 前端为 204 开成功通道**：在 `request()` 的 `:140-152` 里对 `status === 204 || text === ''` 提前返回 `undefined`（并把返回类型放宽为 `T | undefined`），后端不动。改动面小，但会让 `request()` 承担更多分支，且其余 6 个端点永远走不到这条路。
+
+无论选哪条，都要**顺手修列表不刷新**：删除成功（或判定为成功）后必须 `refresh()` / `refreshSchedules()`，否则失败分支的 early-return 会继续把陈旧行留在屏幕上。同时给前端 `request()` 补一条针对「2xx + 空 body」的单测。
+
+---
+
+## MA-6 · `GET /api/sync/{id}/runs` 对**不存在的任务**返回 `200` + `[]` 而非 `404`（Low）
+
+**现象**
+
+任务 id **不存在**时，两个兄弟端点给出**互相矛盾**的答案（158 实测，`2026-09-30T23:47:08Z`，一次命令内取全）：
+
+| 请求 | 实测响应 |
+| --- | --- |
+| `GET /api/sync/2`（已删除的任务） | `404` |
+| `GET /api/sync/2/runs` | **`200` + `[]`** |
+| `GET /api/sync/2/schedules` | `404` |
+| `GET /api/sync/999`（从未存在） | `404` |
+| `GET /api/sync/999/runs` | **`200` + `[]`** |
+| `GET /api/sync/999/schedules` | `404` |
+
+也就是说「任务是否存在」这个问题，`/runs` 说「存在但没跑过」，`/schedules` 说「不存在」。
+
+**影响面**
+
+低，但会**掩蔽 URL 拼写错误**：调用方（前端轮询、脚本、外部集成）把任务 id 打错时拿不到任何错误信号，只会安静地看到空列表，从而误判为「这个任务从未运行过」。调试成本被推给下一次现场排查。前端当前只对已存在的任务拉 `/runs`，所以**用户侧暂未观测到**。
+
+**根因**
+
+`ListRuns` 漏了「先查任务」的守卫，而**兄弟端点 `ListSchedules` 有**，且代码注释已经把理由写清楚了：
+
+- `internal/api/sync_handlers.go:306-325`（`ListRuns`）：直接 `store.ListRuns(taskID)` 返回，**没有 `GetTask` 前置校验**；
+- `internal/api/sync_handlers.go:426-434`（`ListSchedules`）：先 `GetTask`，不存在则 `404`。其注释原文：
+
+  > `// 404 when the task itself doesn't exist (the store would happily return [] otherwise, which masks typos in the URL).`
+
+  —— 痛点描述与 MA-6 现象**逐字对应**，说明作者知情，只是没回头补 `/runs`。典型的漏改。
+
+**证据**
+
+- 源码：`internal/api/sync_handlers.go:306-325`（`ListRuns`，无守卫）对比 `:426-434`（`ListSchedules`，有守卫 + 注释）。
+- 实测：见上表 6 行矩阵（`/api/sync/2*` 与 `/api/sync/999*`），单条命令内取全，避免时序干扰。
+
+**修复方向**
+
+把 `ListSchedules` 的守卫原样复制到 `ListRuns` 开头：
+
+```go
+if _, err := store.GetTask(taskID); err != nil {
+    if errors.Is(err, storage.ErrNotFound) {
+        writeError(w, http.StatusNotFound, "NOT_FOUND", "sync task not found")
+        return
+    }
+    writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+    return
+}
+```
+
+顺带扫一遍 sync 家族其余子路由（`/{id}/run`、`/{id}/test`、`/{id}/logs` 之类），确认没有第三处同类漏改，并把守卫抽成一个 helper（如 `requireTask(w, r, store)`）让漏改无处可藏。

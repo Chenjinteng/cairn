@@ -151,24 +151,43 @@ RUNNER_BASE ?= http://proxy.example.com:8080
 
 ---
 
-## TH-6 · 20 个前端场景零覆盖 Sync 页面（Medium）
+## TH-6 · 前端场景曾零覆盖 Sync 页面 → **本轮部分闭环**（Medium）
 
-**现象**
+**现象（原始）**
 
-本轮 20 个场景全部跑完，**没有任何一个场景打开/操作「同步」页面**。0.6.x 期间新增的 Sync 功能（UI + 后端同步作业）没有 UI 侧回归保护：改坏了不会有人发现。
+首轮 20 个场景全部跑完，**没有任何一个场景打开/操作「同步」页面**。0.6.x 期间新增的 Sync 功能（UI + 后端同步作业）没有 UI 侧回归保护：改坏了不会有人发现。
 
-**根因**
+**本轮进展（2026-09-30）**
 
-场景集合在 Sync 功能上线前成形，后续加功能没有同步补场景；`_smoke-all-pages` 虽然遍历导航，但只做「页面标题出现」级断言，不含 Sync 的关键交互（新建同步、测试连接、触发同步、看历史）。
+补了 6 个 sync 场景（落盘 `/opt/web-auto-runner/web-auto/tests/go-hub/`），其中 5 个已实跑全绿：
+
+| 场景 | runId | 结果 | 覆盖点 |
+| --- | --- | --- | --- |
+| `sync-open` | `r-20260930232233-c936` | passed 4536ms | 打开站点 → 切「镜像同步」页 → 断言页面就绪（被其余 4 个场景 `include` 复用） |
+| `sync-page` | `r-20260930232838-c566` | passed 9783ms，23/23 步 | 「新建同步任务」表单（名称 / `include` / 自动同步）→ 列表行回显 → 行内编辑（改名 + 开自动同步）→ 回显 |
+| `sync-page-schedule` | `r-20260930233238-fab4` | passed 7518ms，20/20 步 | 行内「定时」弹窗：新建 cron 规则（`*/2 * * * *`）→ 规则行回显 → 改 cron → 停用/启用 |
+| `sync-page-delrule` | `r-20260930234427-b614` | passed 7039ms，13/13 步 | 删定时规则（`button:has-text("删")` → Popconfirm → primary），取证 toast 文案 + 表格陈旧行 |
+| `sync-page-deltask` | `r-20260930234533-6896` | passed 6115ms，13/13 步 | 删任务双层确认：Popconfirm → CASCADE `modal.confirm`（断言含「外键 CASCADE」）→ 取证 toast |
+| `sync-page-delete`（**已废弃**） | — | 17/21 步 failed | 早期「删除」合并版；因列表不刷新导致断言无法收敛，已拆成上面 delrule + deltask 两个场景 |
+
+**剩余缺口（故仍记「部分闭环」，不标已闭环）**
+
+- Sync 「历史 / 运行记录」面板（`/api/sync/{id}/runs`）的 UI 入口（本轮刻意不点「运行」「历史」按钮）；
+- `include` 的**排除性负例 / 零匹配**过滤在 UI 侧的可见行为（仅 API 层测过，见 management-api 相关实测）；
+- 同步失败面（源不可达、凭据错误）的 toast 与重试 UI；
+- `_smoke-all-pages` 仍是标题级断言，不含 Sync 关键交互。
 
 **证据**
 
-- 实测：`GET /api/scenarios` → 20 个 `go-hub/*` 场景，名字与内容都不涉及 sync（`_smoke-all-pages` 只做逐页标题断言）。
-- 源码：`web/src/pages/sync-page.tsx` 存在（0.6.x 新功能页面），并被导航引用；后端本轮实测过 `/api/sync*` 与 `/sync/test`（写路径 API 测试全通过），**产品侧本身工作正常，缺的是前端回归覆盖**。
+- 实测（本轮）：上表 runId 全部取自 53 `POST /api/run` 的**同步返回**（含完整 `steps[].status/duration`，无需轮询 `GET /api/run/:id`）。
+- 实测（原始）：`GET /api/scenarios` → 当时 20 个 `go-hub/*` 场景，名字与内容都不涉及 sync。
+- 实测（本轮收尾复核）：`GET /api/scenarios` → `{"count":35}`，其中 **6 项是 macOS AppleDouble 噪声**（`go-hub/._sync-*.yaml`，BSD tar 打包上传的副产物，runner 未过滤）；真实 `go-hub/*` 26 个、`_adhoc/*` 3 个。
+- 源码：`web/src/pages/sync-page.tsx`（0.6.x 新功能页面，被导航引用）。
+- **顺带产出的产品缺陷**：本轮 UI 场景直接截获 **MA-5**（删除已生效却弹「删除失败」）与其副作用「列表不刷新」（场景内取证 `SPDELRULESTALE:rows=1`），详见 [management-api.md](./management-api.md)。
 
 **修复方向**
 
-补一个 `go-hub/sync-page.yaml`：打开同步页 → 断言核心控件（如「新建同步」按钮、列表容器）→ 如有真实目标则跑一次 `/sync/test` 的 UI 入口（无目标时走空态断言）。场景数更新进 Makefile（与 TH-1 一起改）。
+按「剩余缺口」逐项补场景（历史面板 / `include` 负例 / 失败面）；清掉 `._sync-*.yaml` 噪声后把场景总数写进 Makefile（与 TH-1 同批改）。
 
 ---
 

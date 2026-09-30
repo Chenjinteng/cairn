@@ -2,7 +2,7 @@
 
 > **整理日期**：2026-09-30（UTC；本地为 2026-10-01 CST）
 > **被测版本**：cairn `0.6.11`（`internal/version/version.go:18`，commit `f66bd4d`）
-> **测试环境**：registry = `registry.local:10001`（容器 `cairn:0.6.11`，`env=prod`）；前端 E2E = `runner.local:8080` test-runner（`go-hub/*` 场景 20 个）
+> **测试环境**：registry = `registry.local:10001`（容器 `cairn:0.6.11`，`env=prod`）；前端 E2E = `runner.local:8080` test-runner（`go-hub/*` 场景 26 个，其中 Sync 页 6 个为本轮新增）
 > **取证口径**：每条缺陷必须同时有「源码 file:line」与「实机实测」两类证据；只有源码推断、或只有一次偶发失败的项一律降级为观察项（见下文「明确不记为缺陷的观察项」）。
 > **编号分区**：`REG-*` 镜像协议（`/v2/*`）｜`MA-*` 管理 API（`/api/*`）｜`TH-*` 测试脚手架（Makefile / web-auto runner / 场景）
 > **修复状态**：下列条目**均未修复**。本轮唯一的就地改动是 53 上 runner 的 dev `baseUrl`（TH-3，属测试环境修复，非产品改动）。
@@ -12,6 +12,7 @@
 | 编号 | 严重度 | 一句话 | 详情 |
 | --- | --- | --- | --- |
 | **MA-1** | **High** | `/api/repositories/{repo}` 路径参数对含 `/` 的仓库名全失效（158 上 84% 仓库受影响；前端「删除仓库」「按 digest 删 manifest」对这批仓库不可用） | [management-api.md](./management-api.md) |
+| **MA-5** | **High** | sync 删除端点返 `204` 撞前端 JSON 信封 → **删除已生效却弹「删除失败」**，且列表不刷新（UI 状态与后端分裂） | [management-api.md](./management-api.md) |
 | REG-1 | Medium | `PUT` manifest 不校验 payload，任意 JSON 也 `201` 并持久化 | [registry-protocol.md](./registry-protocol.md) |
 | REG-2 | Medium | 未知仓库 `tags/list` 返回 `200` + 空数组（应为 `404 NAME_UNKNOWN`） | [registry-protocol.md](./registry-protocol.md) |
 | REG-4 | Medium | `DELETE` manifest 未命中返回 `404` 但 body 为 0 字节；其余错误 `500` 误用 `UNSUPPORTED` | [registry-protocol.md](./registry-protocol.md) |
@@ -24,6 +25,7 @@
 | REG-5 | Low | blob `GET` 无显式 `Content-Type`（靠 Go 内容嗅探）；不支持 `Range` | [registry-protocol.md](./registry-protocol.md) |
 | REG-6 | Low | 无法取消 upload session（`DELETE` → `405`），遗留孤儿目录只能人工清理 | [registry-protocol.md](./registry-protocol.md) |
 | MA-3 | Low | `POST /api/gc` 非法 JSON body 被静默忽略仍 `200` 并执行 GC | [management-api.md](./management-api.md) |
+| MA-6 | Low | `GET /api/sync/{id}/runs` 对不存在的任务返 `200` + `[]` 而非 `404`（兄弟端点 `/schedules` 已有正确守卫） | [management-api.md](./management-api.md) |
 | TH-4 | Low | `test-frontend-fast` 注释称 9 个场景实际列 8 个，且含写路径 `pull-real` | [test-harness.md](./test-harness.md) |
 | TH-5 | Low | `test-backend` 的期望与 dev 部署不符（写死 `cairn:0.5.18-dev`） | [test-harness.md](./test-harness.md) |
 | TH-7 | Low | runner 超时/诊断一组缺口（超时步不入 `steps[]`、`error` 不含步名、单步预算只用全局 `timeout`…） | [test-harness.md](./test-harness.md) |
@@ -53,6 +55,11 @@ curl --noproxy '*' -sS -i http://registry.local:10001/v2/                       
 curl --noproxy '*' -sS    http://registry.local:10001/v2/qa-norepo/tags/list                 # REG-2
 curl --noproxy '*' -sS -i 'http://registry.local:10001/api/repositories/3proxy%2F3proxy/tags/1.0.0/manifest'   # MA-1（对照 /v2/3proxy/3proxy/manifests/1.0.0 → 200）
 curl --noproxy '*' -sS -i -X DELETE 'http://registry.local:10001/api/repositories/qa-norepo' # MA-4
+curl --noproxy '*' -sS -i http://registry.local:10001/api/sync/999/runs                     # MA-6（200 + []，对照 GET /api/sync/999 → 404）
+# MA-5：需先建一个临时任务（POST /api/sync），再
+#   curl --noproxy '*' -sS -i -X DELETE 'http://registry.local:10001/api/sync/<新建的id>'    # → 204 空 body（前端据此弹「删除失败」，实际已删）
+#   curl --noproxy '*' -sS -i 'http://registry.local:10001/api/sync/<新建的id>'              # → 404，证明删除确实生效
+# ⚠️ 勿对 id=1「Sync 58」执行 DELETE（它是唯一的真实同步任务）
 
 # ── 前端 E2E（53 runner）─────────────────────────────────────
 curl --noproxy '*' -sS -X POST http://runner.local:8080/api/run \
