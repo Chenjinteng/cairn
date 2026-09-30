@@ -6,7 +6,7 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
-## [0.6.2] - 2026-09-30
+## [0.6.3] - 2026-09-30
 
 本轮主题:**内置 regsync 等价能力 —— cairn↔cairn 镜像同步,UI「镜像同步」Tab + 手动运行 + Basic 鉴权**
 
@@ -21,9 +21,15 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 >   `ALTER TABLE ... RENAME COLUMN` 在 modernc.org/sqlite v1.59.0 上
 >   报「no such column: remote_token」——整 cairn 启动失败,热度统计
 >   和 /api/sync 都挂。
-> - 0.6.2 (本轮) 用 `ADD COLUMN` 替代 RENAME:加 `remote_username` +
->   `remote_password` 两列,旧 `remote_token` 列保留为孤儿(无害)。
->   Go 代码只读写新列,旧数据"自然死亡"。
+> - 0.6.2 用 `ADD COLUMN` 替代 RENAME:加 `remote_username` +
+>   `remote_password` 两列。但 UAT 仍报「no such column: remote_url」——
+>   因为某些用户的 DB 里 sync_tasks 是**残缺表**(缺 v5 应有的列,如
+>   `remote_url`),v5 的 `CREATE TABLE IF NOT EXISTS` 不会修补缺列,
+>   v6 ADD COLUMN 也救不回来。
+> - 0.6.3 (本轮) 改 `DROP TABLE + CREATE TABLE` —— `PRAGMA foreign_keys
+>   = OFF` 包住防止 CASCADE 误删 sync_runs,drop 旧表(不管完整还是残缺),
+>   重新按完整 v6 schema 重建。**接受丢 sync_tasks / sync_runs 历史数据**——
+>   这三轮 hotfix 期间根本没真正工作过,没有可保留的运行记录。
 
 ### 新增
 
@@ -77,23 +83,30 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ### 修复
 
-- **DB schema 6 改用 ADD COLUMN 替代 RENAME COLUMN**(本轮 hotfix;0.6.1 的
-  schema 迁移在 modernc.org/sqlite v1.59.0 上挂):
-  - **根因**:0.6.1 用了 `ALTER TABLE sync_tasks RENAME COLUMN remote_token
-    TO remote_username`,在 modernc.org/sqlite v1.59.0 上 SQLite parser
-    报 `no such column: remote_token`(语法解析阶段,执行之前就 fail
-    了)。UAT 拉 0.6.1 后整个 cairn 启动失败 → 热度统计 + /api/sync 都
-    挂,告警界面闪「db: migrate: migration 6: SQL logic error」。
-  - **改法**:把两条 ALTER 都改成 `ADD COLUMN`,新增
-    `remote_username TEXT NOT NULL DEFAULT ''` 和
-    `remote_password TEXT NOT NULL DEFAULT ''` 两列,**不**删原
-    `remote_token` 列(留着作 dead weight,几字节的事)。Go 代码只读写
-    新列;旧 `remote_token` 内容自然死亡。
-  - **迁移路径**:0.6.0/0.6.1 用户的 DB 现在卡在 v5 (sync_tasks 已建、
-    远程 token 列存在)。0.6.2 migration 6 跑起来 → sync_tasks 多两列
-    → 整个 cairn 启动 → 「镜像同步」Tab 出现。
-  - **数据**:0.6.0 用户若有 sync_tasks 行,内容是旧的 bearer 字符串
-    (在新 schema 下无法使用,Validate 拒)。空表则无影响。
+- **DB schema 6 改 DROP+CREATE 重建表**(本轮 hotfix;0.6.2 的 ADD COLUMN
+  对残缺表无能为力):
+  - **根因**:0.6.1 用 `RENAME COLUMN` 在 modernc.org/sqlite v1.59.0 挂;
+    0.6.2 改 `ADD COLUMN` 又被另一类用户的「残缺 sync_tasks」打中——
+    这些 DB 里 sync_tasks 是早期(0.6.0 之前)尝试残留的,**缺 v5 应有的列
+    (如 `remote_url`)**。`v5` 的 `CREATE TABLE IF NOT EXISTS` 不会修
+    补已存在的表;`v6` 的 `ADD COLUMN` 只加新列,也不修补旧缺。
+    结果:`db/sync.go` 的 `SELECT ... remote_url ...` 报
+    `no such column: remote_url`。
+  - **改法**:`PRAGMA foreign_keys = OFF` → `DROP TABLE IF EXISTS sync_tasks`
+    + `DROP TABLE IF EXISTS sync_runs`(顺序无关,CASCADE 关掉了)→
+    `CREATE TABLE sync_tasks (...)` 含完整 v6 schema → `CREATE TABLE
+    sync_runs (...)` + index → `PRAGMA foreign_keys = ON`。无论原表
+    是完整、残缺、还是不存在,DROP+CREATE 都能落到一致状态。
+  - **数据丢失**:任何在 0.6.0/0.6.1/0.6.2 期间写入的 sync_tasks /
+    sync_runs 行都丢了。**这三轮 hotfix 都没真正工作过**(bearer auth
+    错 / migration 错 / 残缺 schema),所以没有可保留的运行历史。
+  - **DB 现状**:跑完 0.6.3 migration 6 后,sync_tasks / sync_runs 是
+    干净的 v6 完整 schema,空表。可正常「新建同步任务」+「Run」。
+- **DB schema 6 改用 ADD COLUMN 替代 RENAME COLUMN**(0.6.2 引入;已被 0.6.3
+  替代):
+  - 0.6.1 的 `ALTER TABLE ... RENAME COLUMN` 在 modernc.org/sqlite v1.59.0
+    parser 阶段报 `no such column`。0.6.2 改 `ADD COLUMN`,但只解决完整表
+    的问题,残缺表仍然 missing columns(见上一条)。
 - **同步 auth 从 bearer 改 Basic**(0.6.1 引入;首发版 0.6.0 写的 Bearer Token
   是错的):
   - **根因**:cairn 自己的 `/v2/*` 只接受 Basic auth(`cfg.RegistryUsername` /
