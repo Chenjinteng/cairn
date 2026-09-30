@@ -23,7 +23,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-export type PageKey = 'images' | 'stats' | 'pull' | 'credentials' | 'proxies' | 'settings';
+export type PageKey = 'images' | 'stats' | 'pull' | 'sync' | 'credentials' | 'proxies' | 'settings';
 
 export interface SidebarItem {
   /** 组内唯一。`'all'` 是保留值：表示这一组不过滤。anchor 模式下就是目标区块的 DOM id。 */

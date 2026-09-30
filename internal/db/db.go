@@ -25,7 +25,7 @@ import (
 
 // SCHEMA_VERSION is bumped together with new migrations.
 // Bump rule: +1 per migration; never reuse a number; never delete a migration.
-const SCHEMA_VERSION = 4
+const SCHEMA_VERSION = 5
 
 // Db is the SQLite wrapper. All exported methods are safe for concurrent use.
 type Db struct {
@@ -177,6 +177,49 @@ var migrations = map[int]string{
 		counted       INTEGER NOT NULL DEFAULT 0
 	) WITHOUT ROWID;
 	CREATE INDEX IF NOT EXISTS event_seen_last_seen ON event_seen(last_seen_at DESC);
+	`,
+	5: `
+	-- v0.6.0: registry sync (cairn↔cairn) — persisted task config + run history.
+	--
+	-- sync_tasks: one row per configured sync. Inline bearer token (MVP);
+	-- switching to credential-library references is a v0.6.2+ follow-up.
+	-- include is a single TEXT column of newline-separated glob patterns
+	-- (* wildcard). The engine expands each line into a regex matcher.
+	--
+	-- sync_runs: one row per execution. status meanings:
+	--   running  — engine still iterating (engine.UpdateRun flips it on finish)
+	--   success  — every repo synced, zero failures
+	--   partial  — at least one repo failed but the run finished iterating
+	--   failed   — run aborted before completion (remote unreachable, etc.)
+	-- repos_total/synced/failed are the summary counters the UI shows.
+	-- INTEGER (unix seconds) for times so the UI can compute durations cheaply.
+	--
+	-- FK CASCADE: deleting a task removes its run history. The engine never
+	-- creates runs without a task, so no orphans are possible.
+	CREATE TABLE IF NOT EXISTS sync_tasks (
+		id           INTEGER PRIMARY KEY,
+		name         TEXT    NOT NULL UNIQUE,
+		direction    TEXT    NOT NULL CHECK(direction IN ('pull','push')),
+		remote_url   TEXT    NOT NULL,
+		remote_token TEXT    NOT NULL,
+		include      TEXT    NOT NULL DEFAULT '',
+		enabled      INTEGER NOT NULL DEFAULT 1,
+		created_at   INTEGER NOT NULL,
+		updated_at   INTEGER NOT NULL
+	);
+	CREATE TABLE IF NOT EXISTS sync_runs (
+		id            INTEGER PRIMARY KEY,
+		task_id       INTEGER NOT NULL,
+		started_at    INTEGER NOT NULL,
+		finished_at   INTEGER,
+		status        TEXT    NOT NULL CHECK(status IN ('running','success','failed','partial')),
+		repos_total   INTEGER NOT NULL DEFAULT 0,
+		repos_synced  INTEGER NOT NULL DEFAULT 0,
+		repos_failed  INTEGER NOT NULL DEFAULT 0,
+		error         TEXT    NOT NULL DEFAULT '',
+		FOREIGN KEY(task_id) REFERENCES sync_tasks(id) ON DELETE CASCADE
+	);
+	CREATE INDEX IF NOT EXISTS sync_runs_task_started ON sync_runs(task_id, started_at DESC);
 	`,
 }
 

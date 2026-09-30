@@ -6,6 +6,81 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.6.0] - 2026-09-30
+
+本轮主题:**内置 regsync 等价能力 —— cairn↔cairn 镜像同步,UI「镜像同步」Tab + 手动运行 + Bearer 鉴权**
+
+> 之前 `docker pull` / `skopeo copy` / regsync(regclient)是与本节点独立部署的
+> 客户端。本轮把「从 / 向另一 cairn 同步一批仓库」这条路径收进 cairn 自身,
+> 操作员在面板上配规则后点「立即运行」即可 —— 不再依赖外部 regsync 进程。
+
+### 新增
+
+- **DB schema v5**(两表 + CASCADE):
+  - `sync_tasks`(配置) —— 名称 / 方向 / 远端 URL / Bearer token / include /
+    启用 / created_at / updated_at;`name` UNIQUE。
+  - `sync_runs`(历史) —— task_id FK CASCADE / started_at / finished_at /
+    status / repos_total / 三个 synced/failed 计数 / error。
+  - `internal/db/sync.go` 提供 8 个 CRUD 方法,`internal/db/db.go` 的 `SCHEMA_VERSION`
+    从 4 升到 5。旧 v4 实例启动时自动迁移,无需手动干预。
+- **`internal/sync` 包**(cairn↔cairn 同步核心,~1300 行):
+  - `types.go` —— `Direction`(`pull`|`push`)、`SyncRunStatus`(`running`/`success`/
+    `partial`/`failed`)、`SyncTask` / `SyncRun` 域类型 + `Validate()`,
+    bearer token 用 `json:"-"` 屏蔽(列表 / 详情 API 永远不返明文)。
+  - `store.go` —— domain 类型 ↔ DB row 类型适配;`ErrTaskNameConflict` /
+    `ErrTaskNotFound` / `ErrRunNotFound` 等 sentinel errors,handlers
+    `errors.Is` 一次分流 400 / 404 / 409 / 500。
+  - `filter.go` —— `include` 行分隔 glob 解析(`*` 通配,空 = 全匹配),
+    复用 `path/filepath.Match`,无 exclude(MVP 限制)。
+  - `writer.go` —— 推送方向 HTTP 客户端:`EnsureBlob` 走 OCI spec 单块
+    `POST → PATCH → PUT` 三步法(HEAD 跳过已存在 blob),`PutManifest` 单步
+    PUT 返 digest。所有请求由构造时定下的 bearer token 盖章,无 401 challenge
+    流程(节省一次 round-trip)。
+  - `engine.go` —— pull + push 双执行路径:`Engine.Run(ctx, task)` 同步返
+    terminal `SyncRun`;per-task `sync.Mutex` 保证同 task 不并发;`per-repo
+    continue-on-error`(一个仓库失败不中断整轮);仅抓 pre-ignited bearer —— 包
+    `bearerTransport` 套在 `registry.Client.HTTP().Transport` 外面,
+    跳过上游 `Client` 的 401→token-fetch 流程。多架构 manifest list / image index
+    在 0.6.0 显式拒绝(后续 0.6.x 加)。
+- **`internal/api/sync_handlers.go` + 路由**:
+  - `GET /api/sync` 列表、`POST /api/sync` 新建、`GET /api/sync/{id}` 详情、
+    `PATCH /api/sync/{id}` 更新、`DELETE /api/sync/{id}` 删除(CASCADE 删 runs)、
+    `POST /api/sync/{id}/run` 同步运行、`GET /api/sync/{id}/runs` 历史(默认 50 条)。
+  - 更新时 `remoteToken` 空 = 保留旧值(UI 编辑其他字段时不必重输 secret,
+    UI 也根本没机会拿到明文)。
+  - run 终态映射:`success` / `partial` → 200 OK,`failed` → 502 BAD_GATEWAY
+    (上游问题,不是我们)。
+  - `internal/server/server.go` 在 `store_db != nil` 时构造 sync store + engine +
+    `api.SyncHandlers`,挂到 `extras.SyncHandlers`;DB 启动失败时整组不挂,
+    UI 「镜像同步」Tab 不会出现。
+- **UI「镜像同步」页**(`web/src/pages/sync-page.tsx` + App.tsx 注册):
+  - 顶栏插入「镜像同步」Tab(在「镜像热度」↔「凭据管理」之间);`PageKey`
+    union + `PAGE_KEYS` + `publishHandlers.sync` 同步扩展。
+  - 列表表 + 新建 / 编辑 Modal(name / direction Radio / 远端 URL / Bearer token
+    `Input.Password` / Include TextArea / 启用 Switch)+ 立即运行按钮 +
+    历史 Modal(按 task 懒拉取,不主表预取避免一屏打满请求)。
+  - 状态徽标:`success` 绿 / `partial` 金 / `failed` 红 / `running` 蓝。
+  - 侧栏按 direction 分组(全部 / 拉 / 推)切视图。
+  - 「立即运行」按钮点击后 spinner → 同步返结果 → message 提示
+    「同步成功 / 部分失败 / 同步失败」(分别 success / warning / error)。
+
+### 修复
+
+- **`/v2/_catalog` 分页死循环**(必须在 0.6.0 之前修 —— sync 强依赖):
+  - 客户端 `internal/registry/inventory.go` `ListRepositories` 之前只看
+    `len(batch) < pageSize` 一个停止条件,遇到「`?last=` 是包含游标的服务端」
+    无限循环。改为 `seen` map 去重 + 三条停止条件(短页 / `newCount==0` /
+    `maxCatalogPages=5000` 安全上限)。
+  - 服务端 `internal/registryd/routes.go` `catalog` 之前**完全忽略**
+    `?n=&last=`,无脑返全量列表。改为 OCI Distribution Spec §_catalog
+    标准实现:`sort.Strings` 防御性排序 → `?last=` 排他游标(`sort.SearchStrings`,
+    O(log n))→ `?n=` 截断(缺省 / 非数字 / `<=0` = 全量,向后兼容)→
+    仅截断时发绝对 URL `Link: <next>; rel="next"` → `repos==nil` 置
+    `[]string{}`(避免 JSON `repositories: null`)。
+  - 双向都修,cairn↔cairn 同步两端都要走 `_catalog`,不修 sync 必死循环。
+
+---
+
 ## [0.5.53] - 2026-09-30
 
 本轮主题:**浏览器标签页 `<title>` 同步设置页的「展示名称」,多 tab 一眼分清**

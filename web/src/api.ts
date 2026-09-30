@@ -28,6 +28,9 @@ import type {
   StatsSummary,
   StatsTop,
   StatsTopBy,
+  SyncRun,
+  SyncTask,
+  SyncTaskInput,
 } from './types';
 
 /**
@@ -460,3 +463,62 @@ export const removeIgnoreRule = (useragent: string) =>
     method: 'DELETE',
     body: JSON.stringify({ useragent }),
   });
+
+// ── 镜像同步（v0.6.0）─────────────────────────────────────────────
+// cairn↔cairn 同步任务 CRUD + 立即运行 + 历史查看。
+// 后端写 token 是同步任务 — 调 POST /api/sync 必填,
+// PATCH 时省略视为「保留旧值」,UI 编辑其他字段不需要重输一次 token。
+
+export const listSyncTasks = () =>
+  request<SyncTask[]>('/api/sync');
+
+export const getSyncTask = (id: number) =>
+  request<SyncTask>(`/api/sync/${id}`);
+
+/**
+ * 新建同步任务。
+ *
+ * HTTP 状态：
+ *   201 Created        — 任务入库成功
+ *   400 BAD_REQUEST    — 校验失败（缺字段 / direction 非法等）
+ *   409 CONFLICT       — name 已存在
+ *
+ * 错误处理走统一的 request<T>() 包装,code/message 在 ApiFailureInfo 里,
+ * 页面可直接根据 code 分流提示（"任务名已存在" vs "URL 不合法"）。
+ */
+export const createSyncTask = (input: SyncTaskInput) =>
+  request<SyncTask>('/api/sync', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+
+/**
+ * 更新同步任务。`input.remoteToken` 为空时后端保留旧值——所以 UI 在
+ * 编辑「名称」「远端 URL」「Include」这类非凭据字段时,可以直接用当前
+ * 缓存的 input 提交,不需要也无法获取明文 token。
+ */
+export const updateSyncTask = (id: number, input: SyncTaskInput) =>
+  request<SyncTask>(`/api/sync/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
+
+export const deleteSyncTask = (id: number) =>
+  request<void>(`/api/sync/${id}`, { method: 'DELETE' });
+
+/**
+ * 立即同步一次。同步执行：
+ *   200 OK          — 成功或部分成功（看 body.run.status）
+ *   502 BAD_GATEWAY  — 失败（远端不可达 / token 错误 / 整体异常）
+ *
+ * v0.6.0 是阻塞调用——前端按钮触发后等结果。v0.6.1+ 加 cron 后会改为
+ * 立即返 202 + poll URL,届时需要新增 `getSyncRun(id, runId)` 方法。
+ */
+export const runSyncTask = (id: number) =>
+  request<SyncRun>(`/api/sync/${id}/run`, { method: 'POST' });
+
+/**
+ * 拉某任务的运行历史,默认 50 条;`limit` 显式传 0 表示不限（不传列表 UI）
+ */
+export const listSyncRuns = (id: number, limit = 50) =>
+  request<SyncRun[]>(`/api/sync/${id}/runs?limit=${limit}`);
