@@ -6,7 +6,7 @@
  * + /api/sync/test（探测远端 cairn 连通 + 认证状态）。
  *
  * 复杂度说明：v0.6.0 只支持「手动 + Basic auth + include 过滤」,v0.6.5 新增「测试连接」,
- * v0.6.9 修 SYNC-1~4——
+ * v0.6.10 修 SYNC-1~4——
  *   - 选错方向时镜像会从对端被覆盖/反覆盖,UI 上 direction 走 Radio 而非下拉,
  *     减少误操作（pull 是「我拉对端」,push 是「我推对端」,含义相反但都是英文短词,
  *     单字面下拉很容易选反）。
@@ -94,7 +94,7 @@ interface Props {
 }
 
 /**
- * v0.6.9（SYNC-3）：远端凭据三档。
+ * v0.6.10（SYNC-3）：远端凭据三档。
  *   anonymous  — 对端没配 auth,引擎不发 Authorization header
  *   credential — 引用「凭据管理」库里的一条凭据（推荐）
  *   inline     — 沿用任务里原有的内嵌用户名密码（只在编辑老任务时出现,新建不提供）
@@ -105,7 +105,7 @@ interface FormValues {
   name: string;
   direction: SyncDirection;
   remoteUrl: string;
-  /** v0.6.9：credMode === 'credential' 时选中的凭据库 id。 */
+  /** v0.6.10：credMode === 'credential' 时选中的凭据库 id。 */
   remoteCredentialId?: string;
   /** 远端 cairn 的 Basic-auth 用户名（只在 inline 档渲染）。 */
   remoteUsername?: string;
@@ -195,12 +195,12 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
   const [testing, setTesting] = useState(false);
 
   /**
-   * v0.6.9（SYNC-3）：Modal 里的远端凭据档位。放本地 state 而不是 Form 字段——
+   * v0.6.10（SYNC-3）：Modal 里的远端凭据档位。放本地 state 而不是 Form 字段——
    * 条件渲染要读它,而 `Form.useWatch` 在 destroyOnClose 的 Modal 上有挂载时序坑;
    * 本地 state 是稳定的真值来源（submit 直接读,不再从 validateFields 里拿）。
    */
   const [credMode, setCredMode] = useState<CredMode>('anonymous');
-  /** v0.6.9（SYNC-3）：凭据库列表（Modal 打开时拉一次;凭据是低频数据,不轮询）。 */
+  /** v0.6.10（SYNC-3）：凭据库列表（Modal 打开时拉一次;凭据是低频数据,不轮询）。 */
   const [credentials, setCredentials] = useState<Credential[]>([]);
   const [credLoading, setCredLoading] = useState(false);
 
@@ -220,7 +220,7 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
   }, [refresh]);
 
   /**
-   * v0.6.9（SYNC-1/4）：有任务在后台跑时每 3s 刷一次列表,把 running 追成终态
+   * v0.6.10（SYNC-1/4）：有任务在后台跑时每 3s 刷一次列表,把 running 追成终态
    * （跑完自动解锁「立即运行」+ 出新状态）。**没有 running 任务时不建定时器**——
    * 空闲页不该每 3s 打一次 /api/sync。
    *
@@ -237,7 +237,7 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
   }, [hasRunning, refresh]);
 
   /**
-   * v0.6.9（SYNC-3）：拉凭据库列表。失败只提示不阻断——用户仍可切「匿名」档保存,
+   * v0.6.10（SYNC-3）：拉凭据库列表。失败只提示不阻断——用户仍可切「匿名」档保存,
    * 不该因为凭据库读不到就把整条新建流程卡死。
    */
   const loadCredentials = async () => {
@@ -292,7 +292,7 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
       include: '',
       enabled: true,
     });
-    setCredMode('anonymous');  // v0.6.9（SYNC-3）：新建默认匿名,要认证就选「引用凭据」
+    setCredMode('anonymous');  // v0.6.10（SYNC-3）：新建默认匿名,要认证就选「引用凭据」
     setProbe(null);  // 新建时清掉上次探测结果——避免「A 任务的探测结果留在 B 任务 Modal 上」
     setModalOpen(true);
     void loadCredentials();  // 让「引用凭据」档的选择框一开就有数据
@@ -301,9 +301,9 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
   const openEdit = (task: SyncTask) => {
     setEditing(task);
     /**
-     * v0.6.9（SYNC-3）：按任务现状推断档位,**不强行**把老任务迁到凭据引用——
+     * v0.6.10（SYNC-3）：按任务现状推断档位,**不强行**把老任务迁到凭据引用——
      *   remoteCredentialId 非空 → credential（已经在用凭据库）
-     *   内联用户名非空          → inline（0.6.9 之前建的,保留原内嵌凭据）
+     *   内联用户名非空          → inline（0.6.10 之前建的,保留原内嵌凭据）
      *   都空                    → anonymous
      */
     setCredMode(
@@ -352,7 +352,7 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
     setSubmitting(true);
     try {
       /**
-       * v0.6.9（SYNC-3）：按档位组装**互斥**的三态。后端 Validate 会把「引用 + 内联」
+       * v0.6.10（SYNC-3）：按档位组装**互斥**的三态。后端 Validate 会把「引用 + 内联」
        * 判为冲突、把「用户名密码只填一个」判为不完整,所以这里必须只发一档。
        * 后端合并语义（sync_handlers.go UpdateTask）：引用非空 → 清内联;内联任一非空 →
        * 清引用;三者全空 → 匿名。
@@ -375,7 +375,7 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
         closeModal();
         await refresh();
       } else if (!formError(form, result)) {
-        // v0.6.9：字段级映射没兜住时必须给全局提示,否则「点了保存什么都没发生」。
+        // v0.6.10：字段级映射没兜住时必须给全局提示,否则「点了保存什么都没发生」。
         message.error(`保存失败：${result.message}`);
       }
     } finally {
@@ -412,7 +412,7 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
       const result = await runSyncTask(task.id);
       if (result.success && result.data) {
         /**
-         * v0.6.9（SYNC-1/4）：run 接口改成**异步受理**——后端 TryLock + 落 running 行
+         * v0.6.10（SYNC-1/4）：run 接口改成**异步受理**——后端 TryLock + 落 running 行
          * 后立刻返 202,真正的同步跑在后台 goroutine（不再挂在请求上,所以不会被前端
          * 10s 超时中止）。这里只提示「已受理」;终态由上面的列表轮询追出来
          * （lastRunStatus 从 running 变终态时自动刷新 + 解锁按钮）。
@@ -462,11 +462,11 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
         <Space size={4} align="center">
           <SwapOutlined />
           <span style={{ fontWeight: 500 }}>{name}</span>
-          {/* v0.6.9（SYNC-1/4）：以 DB 为准的「运行中」标记——刷新页面后依然在。 */}
+          {/* v0.6.10（SYNC-1/4）：以 DB 为准的「运行中」标记——刷新页面后依然在。 */}
           {row.lastRunStatus === 'running' && (
             <Tag color="processing" icon={<ClockCircleOutlined />}>运行中</Tag>
           )}
-          {/* v0.6.9：当前正在拉的 (repo, tag) — 解「卡住了?」的可视化。*/}
+          {/* v0.6.10：当前正在拉的 (repo, tag) — 解「卡住了?」的可视化。*/}
           {row.lastRunStatus === 'running' && row.lastRunCurrentRepo && (
 <Tooltip title={`当前正在拉取${row.lastRunCurrentTag ? ` ${row.lastRunCurrentRepo}:${row.lastRunCurrentTag}` : ` ${row.lastRunCurrentRepo} (列出 tag 中)`}`}>
               <Tag color="blue" style={{ fontFamily: 'monospace', fontSize: 11 }}>
@@ -526,7 +526,7 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
       key: 'actions',
       width: 280,
       render: (_, task) => {
-        /** v0.6.9（SYNC-1/4）：后台还在跑 → 按钮置灰,防重复发起（后端 409 兜底）。 */
+        /** v0.6.10（SYNC-1/4）：后台还在跑 → 按钮置灰,防重复发起（后端 409 兜底）。 */
         const running = task.lastRunStatus === 'running';
         return (
         <Space size={4}>
@@ -538,7 +538,7 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
             }
           >
             {/*
-              v0.6.9（SYNC-4）：disabled 的 Button 自身不派发 mouseenter,Tooltip 会失效——
+              v0.6.10（SYNC-4）：disabled 的 Button 自身不派发 mouseenter,Tooltip 会失效——
               必须包一层 <span>,「为什么点不了」才显示得出来。
             */}
             <span>
@@ -621,7 +621,7 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
               <span style={{ color: '#cf1322' }}>· 失败 <strong>{run.reposFailed}</strong></span>
             )}
           </Space>
-          {/* v0.6.9：失败 / 运行中 run 显示最后/当前位置——避免「卡住了?」+ 失败定位。*/}
+          {/* v0.6.10：失败 / 运行中 run 显示最后/当前位置——避免「卡住了?」+ 失败定位。*/}
           {run.currentRepo && run.status !== 'success' && (
             <span style={{ fontSize: 11, color: run.status === 'running' ? '#1677ff' : '#cf1322', fontFamily: 'monospace' }}>
               {run.status === 'running' ? '正在' : '死在'} {run.currentRepo}{run.currentTag ? `:${run.currentTag}` : ''}
@@ -725,7 +725,7 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
                   return;
                 }
                 /**
-                 * v0.6.9（SYNC-3）：按当前档位前置拦截——探测得真拿得到用户名密码,
+                 * v0.6.10（SYNC-3）：按当前档位前置拦截——探测得真拿得到用户名密码,
                  * 否则只会得到「required_but_missing」这种误导性结论。
                  *   credential 档没选凭据 → 先让选（后端只会回 400）
                  *   inline 档没填密码     → 编辑态的旧密码前端拿不到,必须重输才能测
@@ -859,7 +859,7 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
           </Form.Item>
 
           {/*
-            v0.6.9（SYNC-3）：远端凭据改成「三档 Radio + 条件渲染」。
+            v0.6.10（SYNC-3）：远端凭据改成「三档 Radio + 条件渲染」。
             背景：原来手填用户名密码,换密码要回每条任务里改、密码也没法在任务间复用。
             现在推荐先去「凭据管理」建凭据,再来这里选;换密码只动凭据,任务不动。
           */}
@@ -987,7 +987,7 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
 /**
  * 把后端错误翻译到表单字段错误上（name 重名 / 凭据冲突等）。
  *
- * v0.6.9：改成返回「是否已定位到字段」。调用方在失败且返回 false 时补一条全局
+ * v0.6.10：改成返回「是否已定位到字段」。调用方在失败且返回 false 时补一条全局
  * message —— 否则（比如错误指向一个当前没渲染的条件字段）点了保存会毫无反馈。
  */
 function formError(form: FormInstance<FormValues>, result: ApiResult<unknown>): boolean {
@@ -998,7 +998,7 @@ function formError(form: FormInstance<FormValues>, result: ApiResult<unknown>): 
     return true;
   }
   /**
-   * v0.6.9（SYNC-3）：凭据三态的冲突 / 找不到。带 "credential" 的两种文案
+   * v0.6.10（SYNC-3）：凭据三态的冲突 / 找不到。带 "credential" 的两种文案
    * （ErrCredentialConflict / ErrCredentialNotFound）都指回选择框。
    * 顺序必须在下面 username/password 之前——ErrCredentialConflict 原文同时含
    * "credential",先匹配更具体的一档。

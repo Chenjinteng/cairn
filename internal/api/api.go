@@ -79,7 +79,6 @@ func NewRouterWithExtras(h *Handlers, extras *ExtraHandlers, cfg *config.Config)
 		r.Patch("/config", h.UpdateConfig)
 		r.Post("/probe", h.Probe)
 		r.Get("/inventory", h.GetInventory)
-		r.Post("/refresh", h.RefreshInventory)
 		r.Delete("/tags", h.DeleteTag)
 		r.Get("/repositories/{repo}/tags/{tag}/manifest", h.GetManifest)
 

@@ -39,7 +39,12 @@ type Registry interface {
 // Pattern matches registry-manager/server/inventory.mjs:
 //   - first call hits the registry, populates cache
 //   - subsequent calls within TTL return the cached Inventory
-//   - POST /api/refresh (or TTL expiry) invalidates the cache
+//   - TTL expiry invalidates the cache
+//
+// (Prior versions documented POST /api/refresh as the manual invalidation
+// hook; that endpoint was removed in v0.6.10 — it didn't actually call
+// Invalidate, just rebuilt the inventory on demand — so callers today
+// must wait out the TTL or restart the process for a forced refresh.)
 //
 // Cache misses and scan errors return the underlying error rather than a
 // stale cached value; the UI's "scan started at" timestamp shows freshness.
@@ -83,7 +88,9 @@ func (c *CachedRegistry) Inventory(ctx context.Context) (*Inventory, error) {
 	return inv, nil
 }
 
-// Invalidate drops the cached inventory. Called by /api/refresh.
+// Invalidate drops the cached inventory. Public so a future explicit
+// "force refresh" endpoint can call it; today nothing in main wires it
+// up — TTL expiry is the only natural invalidation (see type comment).
 func (c *CachedRegistry) Invalidate() {
 	c.mu.Lock()
 	c.cache = nil

@@ -462,8 +462,10 @@ func isValidHostPort(val string) bool {
 
 // --- inventory ---------------------------------------------------------------
 
-// Inventory is the JSON shape returned by GET /api/inventory and
-// POST /api/refresh. Field-for-field the UI's Inventory type.
+// Inventory is the JSON shape returned by GET /api/inventory. Field-for-field
+// the UI's Inventory type. (v0.6.10: prior POST /api/refresh alias was removed —
+// it was identical to this endpoint and conflated "refresh view" with
+// "rescan registry" in the UI.)
 type Inventory struct {
 	RefreshedAt  time.Time        `json:"refreshedAt"`
 	APIVersion   string           `json:"apiVersion"`
@@ -514,19 +516,6 @@ func (h *Handlers) GetInventory(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, inv)
 }
-
-// RefreshInventory rebuilds the inventory synchronously. Local storage has
-// no cache, so this is identical to GetInventory — kept as its own endpoint
-// because the UI treats "rescan" as an explicit action.
-func (h *Handlers) RefreshInventory(w http.ResponseWriter, r *http.Request) {
-	inv, err := buildInventory(r.Context(), h.Store, hostOf(h.registryURL(r)))
-	if err != nil {
-		writeError(w, r, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, inv)
-}
-
 // buildInventory walks local storage to assemble the inventory.
 func buildInventory(ctx context.Context, store storage.Storage, host string) (*Inventory, error) {
 	start := time.Now()

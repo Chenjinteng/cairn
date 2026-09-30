@@ -19,10 +19,10 @@ import type { ColumnsType } from 'antd/es/table';
 
 import {
   fetchIgnoreRules,
+  fetchInventory,
   fetchStatsEvents,
   probeRegistry,
   purgeHeat,
-  refreshInventory,
   removeIgnoreRule,
   updateConfig,
 } from '../api';
@@ -256,11 +256,11 @@ export default function SettingsPage({
     setRefreshing(true);
     setNotice(null);
     try {
-      const result = await refreshInventory();
+      const result = await fetchInventory();
       setNotice(result);
       if (result.success && result.data) {
         onInventoryChange(result.data);
-        message.success(`扫描完成，用时 ${result.data.durationMs} ms`);
+        message.success(`清单刷新完成，用时 ${result.data.durationMs} ms`);
       }
     } finally {
       setRefreshing(false);
@@ -448,7 +448,7 @@ export default function SettingsPage({
 
   /**
    * v0.5.18（F7）：页头与提示条提前算好，供早退分支与主分支共用。
-   * 两个按钮（测试连接 / 重新扫描）不依赖 config，所以早退分支里也保留。
+   * 两个按钮（测试连接 / 刷新清单）不依赖 config，所以早退分支里也保留。
    */
   const header = (
     <div className="page-header">
@@ -461,7 +461,7 @@ export default function SettingsPage({
           测试连接
         </Button>
         <Button type="primary" icon={<ReloadOutlined />} loading={refreshing} onClick={() => void handleRefresh()}>
-          重新扫描
+          刷新清单
         </Button>
       </div>
     </div>

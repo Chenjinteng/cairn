@@ -6,7 +6,6 @@ import {
   DeleteOutlined,
   HddOutlined,
   ReloadOutlined,
-  SyncOutlined,
   TagsOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
@@ -14,7 +13,6 @@ import type { ColumnsType } from 'antd/es/table';
 import {
   fetchInventory,
   fetchRepositoryStats,
-  refreshInventory,
   runGC,
 } from '../api';
 import ImageDetailDrawer from '../components/image-detail-drawer';
@@ -105,11 +103,14 @@ export default function ImagesPage({
     }
   }, []);
 
+  // v0.6.10：「刷新」=「重新扫描」—— 后端只有一个 inventory 端点,
+  // 区别只在 UI 文案。两个按钮会让用户以为「重新扫描」会触发远端
+  // registry 操作,实际啥也没做,只读本地 SQLite + 走 storage 拼 inventory。
   const load = useCallback(
-    async (force: boolean) => {
+    async () => {
       setLoading(true);
       setError(null);
-      const result = force ? await refreshInventory() : await fetchInventory();
+      const result = await fetchInventory();
       if (result.success && result.data) {
         onInventoryChange(result.data);
       } else {
@@ -124,7 +125,7 @@ export default function ImagesPage({
 
   useEffect(() => {
     if (!inventory) {
-      void load(false);
+      void load;
     }
     // 首屏只拉一次；后续刷新由刷新按钮显式触发。
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -318,9 +319,10 @@ export default function ImagesPage({
             />
           ) : null}
           <Button
+            type="primary"
             icon={<ReloadOutlined />}
             onClick={() => {
-              void load(false);
+              void load();
               if (statsEnabled) {
                 void loadHeat(statsDays);
               }
@@ -328,9 +330,6 @@ export default function ImagesPage({
             loading={loading}
           >
             刷新
-          </Button>
-          <Button type="primary" icon={<SyncOutlined />} loading={loading} onClick={() => void load(true)}>
-            重新扫描
           </Button>
           {config?.allowDelete ? (
             // v0.5.24: 长 GC 解释从「? 图标的 Tooltip」搬到「运行 GC 按钮的 Tooltip」,
@@ -395,7 +394,7 @@ export default function ImagesPage({
                     // v0.5.20: 删了空仓库之后镜像清单会变短,主动刷一次。
                     // 不在 cleanEmptyRepos=false 时刷,避免无谓的网络往返。
                     if (cleanEmptyRepos && data.removedEmptyRepos?.length) {
-                      await load(false);
+                      await load;
                     }
                   } catch (e) {
                     message.error(`GC 失败：${(e as Error).message ?? e}`);
@@ -428,7 +427,7 @@ export default function ImagesPage({
             </div>
           }
           action={
-            <Button size="small" loading={loading} onClick={() => void load(false)}>
+            <Button size="small" loading={loading} onClick={() => void load}>
               重试
             </Button>
           }
@@ -520,7 +519,7 @@ export default function ImagesPage({
                     description={
                       inventory
                         ? '该 registry 没有匹配的镜像'
-                        : '还没有清单，点击「重新扫描」从 registry 拉取'
+                        : '还没有清单，点击「刷新」从本地 storage 加载'
                     }
                   />
                 ),

@@ -6,6 +6,22 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.6.10] - 2026-09-30
+
+### 变更
+
+- **「刷新」与「重新扫描」合并为一个「刷新」按钮**。两者后端实际是同一个 `GetInventory` 端点（`/api/refresh` 是 `identical to GetInventory` 的旧保留别名）,两个按钮会让用户以为「重新扫描」会触发远端 registry 操作,实际啥也没做。
+  - 后端:删除 `POST /api/refresh` 路由与 `Handlers.RefreshInventory`(后端早就自己注释了「identical to GetInventory」,保留它纯属 UI 误用)。修两处过期注释:`internal/registry/registry.go` 的 `CachedRegistry` 块 + `Invalidate` 注释都提到 `/api/refresh` 会失效缓存,实际从未连过,改成「TTL 过期是唯一自然失效」。
+  - 前端:`web/src/pages/images-page.tsx` 砍「重新扫描」按钮,「刷新」接管,文案保留「刷新」;`web/src/pages/settings-page.tsx`「重新扫描」按钮改为「刷新清单」(同样是同一个端点)。
+  - `web/src/api.ts` 删除 `refreshInventory` export;`web/src/pages/settings-page.tsx` 的 `handleRefresh` 改用 `fetchInventory`;顺手修 `web/src/components/load-error.tsx` 注释里把 `/api/refresh` 当成「非幂等接口」的例子(`/api/refresh` 其实是幂等读,被错归类了)。
+
+### 兼容性
+
+- **API 破坏性变更**:`POST /api/refresh` 端点删除。任何仍调用该端点的客户端会收到 404。本次只 cairn 自己用,UI 已同步更新,无第三方客户端。
+- UI:两个页面各少一个按钮,无功能损失。
+
+---
+
 ## [0.6.9] - 2026-09-30
 
 ### 新增
