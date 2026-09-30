@@ -259,17 +259,27 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
     } catch {
       return; // antd form 已内的错误提示
     }
+    /**
+     * v0.6.6 hotfix:把 setSubmitting(true) + input 构造 + if/else 全包在同一个
+     * try/finally 里。原来的写法 setSubmitting(true) 在 try 外面,一旦 .trim()
+     * 抛 TypeError,finally 永远不会执行,保存按钮一直转圈「卡着」。
+     *
+     * 同时三个 string 字段全做 ?? '' ——`remoteUsername` 是匿名模式的核心场景
+     * (0.6.4 起 username/password 都空 = 匿名),openCreate 不初始化该字段,
+     * antd Form.getFieldsValue() 会回 undefined;不 null-safe 一调用就崩。
+     * name / remoteUrl 理论上 required 校验保证非空,但防御性写一下也不亏。
+     */
     setSubmitting(true);
-    const input: SyncTaskInput = {
-      name: values.name.trim(),
-      direction: values.direction,
-      remoteUrl: values.remoteUrl.trim(),
-      remoteUsername: values.remoteUsername.trim(),
-      remotePassword: values.remotePassword ?? '',
-      include: values.include ?? '',
-      enabled: values.enabled,
-    };
     try {
+      const input: SyncTaskInput = {
+        name: (values.name ?? '').trim(),
+        direction: values.direction,
+        remoteUrl: (values.remoteUrl ?? '').trim(),
+        remoteUsername: (values.remoteUsername ?? '').trim(),
+        remotePassword: values.remotePassword ?? '',
+        include: values.include ?? '',
+        enabled: values.enabled,
+      };
       if (editing) {
         const result = await updateSyncTask(editing.id, input);
         if (result.success) {
@@ -599,23 +609,28 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
                 }
                 setProbe(null);
                 setTesting(true);
-                const result = await testSyncConnection({
-                  remoteUrl: cur.remoteUrl ?? '',
-                  remoteUsername: cur.remoteUsername ?? '',
-                  remotePassword: cur.remotePassword ?? '',
-                });
-                if (result.success && result.data) {
-                  setProbe(result.data);
-                } else {
-                  message.error(`探测失败：${result.message}`);
-                  setProbe({
-                    reachable: false,
-                    authStatus: 'unknown',
-                    httpStatus: 0,
-                    message: result.message,
+                try {
+                  const result = await testSyncConnection({
+                    remoteUrl: cur.remoteUrl ?? '',
+                    remoteUsername: cur.remoteUsername ?? '',
+                    remotePassword: cur.remotePassword ?? '',
                   });
+                  if (result.success && result.data) {
+                    setProbe(result.data);
+                  } else {
+                    message.error(`探测失败：${result.message}`);
+                    setProbe({
+                      reachable: false,
+                      authStatus: 'unknown',
+                      httpStatus: 0,
+                      message: result.message,
+                    });
+                  }
+                } finally {
+                  // v0.6.6 hotfix:与 submit 同样原因 —— 探测请求本身抛错时,
+                  // setTesting(false) 必跑,否则「测试连接」按钮一直转圈。
+                  setTesting(false);
                 }
-                setTesting(false);
               }}
             >
               测试连接

@@ -6,6 +6,44 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.6.6] - 2026-09-30
+
+本轮主题:**hotfix —— 修复「保存同步任务」按钮在匿名模式下抛 `Cannot read properties of undefined (reading 'trim')` 一直转圈**
+
+UAT 反馈 (`10.11.27.58`)：
+
+1. **新建同步任务,留空「远端用户名」「远端密码」(匿名对端场景),点保存** →
+   控制台 `Uncaught (in promise) TypeError: Cannot read properties of undefined (reading 'trim')`，
+   保存按钮一直转圈不退出。
+2. 已 mv 旧 `cairn.db` 重启 (测试环境的 0.6.1/0.6.2 hotfix 残留 schema) —— **不是本轮回归**,
+   0.6.5 已经在 DROP+CREATE 后正常建表,生产 DB 没有问题。
+
+### 修复
+
+- **`web/src/pages/sync-page.tsx` `submit` 函数**:
+  - **null-safe trim**:`name` / `remoteUrl` / `remoteUsername` 三个字段都从 `values.X.trim()`
+    改成 `(values.X ?? '').trim()`。`remoteUsername` 是匿名模式的核心场景 (0.6.4 起
+    username + password 都空 = 匿名),但 `openCreate` 没通过 `setFieldsValue` 初始化该字段,
+    antd Form 的 `getFieldsValue()` 对未触摸的 Form.Item 返回 `undefined` —— 一调 `.trim()`
+    就崩。`name` / `remoteUrl` 理论上 required 校验保证非空,但写防御代码没坏处。
+  - **`try/finally` 包住 `setSubmitting`**:
+    原写法 `setSubmitting(true)` 在 try 块外,一旦 `.trim()` 抛 TypeError,内层
+    `finally { setSubmitting(false) }` 永远不执行,按钮一直转圈。改成把
+    `setSubmitting(true)` + `input` 构造 + if/else 全包进同一个 `try/finally`。
+- **`web/src/pages/sync-page.tsx` 「测试连接」按钮 `onClick`**:
+  - 同样问题:`setTesting(true)` 后 `await testSyncConnection(...)` 如果抛同步异常
+    (目前 wrapper 应该 catch,但兜底),`setTesting(false)` 不跑 —— 「测试连接」按钮
+    一直转。加 `try/finally` 保险。
+
+### 未变更
+
+- Go 后端 / DB schema / 0.6.5 引入的探测功能全部保持不变,纯前端 trim + try/finally 改写。
+- User-Agent 串保持 `cairn-sync/0.6.5` + `cairn-sync-probe/0.6.5` 不变 —— 仅前端代码改,
+    outbound HTTP header 也顺手升到 0.6.6 (跟 binary 版本对齐),让上游 registry 日志
+    能精确到 commit。
+
+---
+
 ## [0.6.5] - 2026-09-30
 
 本轮主题:**「测试连接」按钮 —— 新建/编辑同步任务表单可在保存前验证远端 cairn URL + Basic 凭据**
