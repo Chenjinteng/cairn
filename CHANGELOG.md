@@ -6,6 +6,53 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.54] - 2026-09-30
+
+本轮主题:**hotfix —— 修复 docker-compose 端口映射非默认时，「右上角 UI badge」与「复制 docker pull 命令」漏掉端口导致镜像拉不到**
+
+UAT 反馈 (`10.11.27.58`)：docker-compose 把容器内 `8787` 映射到宿主机 `10001`
+(`HOST_PORT=10001`)，同时设置页「仓库地址」填 `10.11.27.58`（裸 host，无端口）。
+两个下游表现都漏掉端口：
+
+- 顶部 badge：`大运维内部镜像库(27.58) (http://10.11.27.58)` —— 应是 `(http://10.11.27.58:10001)`
+- 「复制 docker pull」：`docker pull 10.11.27.58/bklite/cloud-ide:latest` —— 应是 `docker pull 10.11.27.58:10001/...`
+
+`docker pull 10.11.27.58/...` 默认走 80/443；docker daemon 命中 10001 上的 registry
+必须显式带端口 —— 操作员复制出去拉不到镜像，只能再手动改一次。
+
+### 根因
+
+`internal/api/handlers.go` `GetConfig` 构造 `displayURL` 时只做 `"http://" + RegistryURL()`。
+而 `UpdateConfig` 的 `HOST_PORT_PATTERN` 只接受裸 host（拒绝端口、拒绝协议前缀），
+所以保存后永远是 `<host>` —— 容器内 8787 ↔ 宿主机非标准端口映射时，badge + `docker pull` 都漏端口。
+
+### 修复
+
+- **`internal/api/handlers.go` `GetConfig`**：
+  当 saved `registry.url` **没有端口**且 `HostPort != Port`（即存在宿主机端口映射）时，
+  在 `displayURL` 上 append `:HostPort`。三条路径都已覆盖：
+  - bare host + 有映射 → `:HostPort`
+  - bare host + 无映射（`HostPort == Port`，例如直接跑容器无端口映射） → 不 append
+  - legacy 值带端口（`legacy.example.com:8080`，迁移期残留） → 不被 HostPort 覆盖
+- **`hasExplicitPort` helper**：能识别 `:digits` 端口后缀，同时区分协议前缀 `://`
+  （防「v0.5 早期值带 `http://` 时 append 出一个 `http://host:hostPort:hostPort`」）。
+- **回归测试** `internal/api/api_test.go` 新增 3 个 case（端口映射 / 无映射 / 显式端口），
+  全部 assert `config.url` + `config.host` 的 host:port 形式。
+
+### 与 0.6.x 同步
+
+同一修复同期落在 0.6.7 main (`9dc301d`) —— 见该条 CHANGELOG。本次 backport
+到 0.5.x 是为了 `10.11.27.58` 的 0.5.53 生产环境热升级，无需先升级到 0.6.x。
+
+### 未变更
+
+- 前端 `web/src/utils.ts` `buildPullCommand` / `web/src/components/image-detail-drawer.tsx`
+  都不需要改 —— 它们接 `config.host` 直接拼，**修后端即生效**。
+- `web/src/pages/settings-page.tsx` 只读视图（`http://<savedUrl>`）保留设计 —— 端口
+  在「监听端口」字段单独显示，操作员能看到完整信息。
+
+---
+
 ## [0.5.53] - 2026-09-30
 
 本轮主题:**浏览器标签页 `<title>` 同步设置页的「展示名称」,多 tab 一眼分清**

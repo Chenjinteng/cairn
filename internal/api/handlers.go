@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -174,11 +175,22 @@ func (h *Handlers) GetConfig(w http.ResponseWriter, r *http.Request) {
 	// 看到什么就改什么。恢复 r.Host 兜底,前端设置页在编辑态会用这个值预填表单
 	// (见 web/src/pages/settings-page.tsx 的 draftState 初始化),做到 badge ↔
 	// 表单视觉一致。
+	//
+	// v0.5.54 hotfix: 当 saved URL 没有端口时,append HostPort —— UpdateConfig 的
+	// HOST_PORT_PATTERN 只接受裸 host(端口由 docker-compose 的 HOST_PORT env 决定),
+	// 导致 displayURL = "http://<host>" 不带端口。但 docker daemon 默认走 80/443,
+	// 容器内 8787 映射到宿主机非标准端口(如 10001)时,「复制 docker pull 命令」
+	// 直接拷贝 host 而不带端口 → 镜像拉不到。补救:如果 saved URL 没端口 + HostPort
+	// 与 Port 不同(即存在端口映射),在前面构造 URL 时拼上 HostPort。
+	// 同样的修也在 0.6.7 (main) 上 —— 见 0.5.54 CHANGELOG + 0.6.7 CHANGELOG。
 	displayURL := h.Cfg.RegistryURL()
 	if displayURL != "" {
+		if !hasExplicitPort(displayURL) && h.Cfg.HostPort != 0 && h.Cfg.HostPort != h.Cfg.Port {
+			displayURL = fmt.Sprintf("%s:%d", displayURL, h.Cfg.HostPort)
+		}
 		displayURL = "http://" + displayURL
 	} else {
-		displayURL = "http://" + r.Host // cairn manages itself; no upstream set
+		displayURL = "http://" + r.Host // cairn manages itself; no upstream set; r.Host 自带端口
 	}
 	writeJSON(w, http.StatusOK, AppConfig{
 		// v0.5.4: every field the settings page can edit is read through
@@ -412,6 +424,31 @@ func hostOf(rawURL string) string {
 		return u.Host
 	}
 	return rawURL
+}
+
+// hasExplicitPort reports whether value carries a `:port` suffix. The
+// current UpdateConfig validation (HOST_PORT_PATTERN) only accepts bare
+// host, so freshly-saved values never have a port — but legacy values
+// from before v0.5.42 might still carry one or even a scheme prefix
+// (e.g., "http://registry.example.com:8787"); handle both so the v0.5.54
+// port-append fix doesn't double-up "http://host:hostPort:hostPort".
+//
+// Distinguishes scheme `:` (e.g. "http://") from port `:` (followed by
+// digits) by stripping the scheme first, then checking the last `:`.
+func hasExplicitPort(value string) bool {
+	v := value
+	if i := strings.Index(v, "://"); i >= 0 {
+		v = v[i+3:]
+	}
+	if i := strings.LastIndex(v, ":"); i >= 0 {
+		rest := v[i+1:]
+		if rest != "" {
+			if _, err := strconv.Atoi(rest); err == nil {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // v0.5.28 + v0.5.42: 仓库地址 = 裸 host(只 IP 或域名),不带 http(s):// 也不带端口。
