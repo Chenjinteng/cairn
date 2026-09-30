@@ -1,16 +1,20 @@
 /**
- * v0.6.0: 镜像同步（cairn↔cairn）页面。
+ * v0.6.5: 镜像同步（cairn↔cairn）页面。
  *
  * 列任务表 + 新建/编辑 Modal + 立即运行 + 历史查看 Modal。后端路由为
- * /api/sync（CRUD）+ /api/sync/{id}/run（同步执行,等返回）+ /api/sync/{id}/runs（历史）。
+ * /api/sync（CRUD）+ /api/sync/{id}/run（同步执行,等返回）+ /api/sync/{id}/runs（历史）
+ * + /api/sync/test（探测远端 cairn 连通 + 认证状态）。
  *
- * 复杂度说明：v0.6.0 只支持「手动 + Basic auth + include 过滤」,所以页面相对克制——
+ * 复杂度说明：v0.6.0 只支持「手动 + Basic auth + include 过滤」,v0.6.5 新增「测试连接」——
  *   - 选错方向时镜像会从对端被覆盖/反覆盖,UI 上 direction 走 Radio 而非下拉,
  *     减少误操作（pull 是「我拉对端」,push 是「我推对端」,含义相反但都是英文短词,
  *     单字面下拉很容易选反）。
  *   - remotePassword 后端用 json:"-" 屏蔽——UI 永远拿不到明文。新建必填、编辑可省略
  *     （保留旧值,详见 sync_handlers.go UpdateTask）。remoteUsername 可见、可编辑
  *     （用户名不敏感,编辑时 UI 能预填）。
+ *   - 「测试连接」按钮（v0.6.5 新增）走 POST /api/sync/test——填错 URL / 凭据时,
+ *     提交前就能看到「远端不可达 / 401 缺凭据 / 凭据错 / OK」四档分类,
+ *     避免「Save 后才看到第一行 sync run 失败」的长反馈环。
  *   - 历史 Modal 按 task 懒加载,不在主列表预取——避免一屏打满请求。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -32,6 +36,7 @@ import {
 } from 'antd';
 import type { FormInstance } from 'antd';
 import {
+  ApiOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
   CloseCircleOutlined,
@@ -52,11 +57,14 @@ import {
   listSyncRuns,
   listSyncTasks,
   runSyncTask,
+  testSyncConnection,
   updateSyncTask,
 } from '../api';
 import type {
   ApiResult,
   SyncDirection,
+  SyncProbeAuthStatus,
+  SyncProbeResult,
   SyncRun,
   SyncRunStatus,
   SyncTask,
@@ -156,6 +164,15 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
   /** 立即运行中的 task id（按钮 spinner）。 */
   const [runningId, setRunningId] = useState<number | null>(null);
 
+  /**
+   * 「测试连接」结果（v0.6.5 新增）。null = 没测过 / 改了表单字段被自动清空；
+   * 非空 = 后端最后一次探测结果,顶部 Alert 渲染。改表单字段不清,让操作员看到
+   * 上一次结果对照现在的输入——改完「远端 URL」再点「测试连接」覆盖。
+   */
+  const [probe, setProbe] = useState<SyncProbeResult | null>(null);
+  /** 「测试连接」进行中——按钮 loading + 顶部 Alert 收起。 */
+  const [testing, setTesting] = useState(false);
+
   const refresh = useCallback(async () => {
     const result = await listSyncTasks();
     if (result.success && result.data) {
@@ -209,6 +226,7 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
       include: '',
       enabled: true,
     });
+    setProbe(null);  // 新建时清掉上次探测结果——避免「A 任务的探测结果留在 B 任务 Modal 上」
     setModalOpen(true);
   };
 
@@ -224,6 +242,7 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
       include: task.include,
       enabled: task.enabled,
     });
+    setProbe(null);  // 编辑同上——避免上一个任务的探测残留
     setModalOpen(true);
   };
 
@@ -562,7 +581,89 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
         cancelText="取 消"
         width={600}
         destroyOnClose
+        // 测试连接按钮放在 footer 左侧;ok 按钮保持原状。
+        // onClick 闭包从 form 取实时值,不需要等用户先点 Save。
+        footer={
+          <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+            <Button
+              icon={<ApiOutlined />}
+              loading={testing}
+              disabled={testing}
+              onClick={async () => {
+                // 用 form.getFieldsValue() 拿实时值,不依赖 Validate
+                // 全部通过(用户名/密码可以空 = 匿名测试)。
+                const cur = form.getFieldsValue() as Partial<FormValues>;
+                if (!cur.remoteUrl) {
+                  message.warning('先填「远端 cairn 地址」再测');
+                  return;
+                }
+                setProbe(null);
+                setTesting(true);
+                const result = await testSyncConnection({
+                  remoteUrl: cur.remoteUrl ?? '',
+                  remoteUsername: cur.remoteUsername ?? '',
+                  remotePassword: cur.remotePassword ?? '',
+                });
+                if (result.success && result.data) {
+                  setProbe(result.data);
+                } else {
+                  message.error(`探测失败：${result.message}`);
+                  setProbe({
+                    reachable: false,
+                    authStatus: 'unknown',
+                    httpStatus: 0,
+                    message: result.message,
+                  });
+                }
+                setTesting(false);
+              }}
+            >
+              测试连接
+            </Button>
+            <Space>
+              <Button onClick={closeModal} disabled={submitting}>
+                取 消
+              </Button>
+              <Button
+                type="primary"
+                loading={submitting}
+                disabled={testing}
+                onClick={submit}
+              >
+                保 存
+              </Button>
+            </Space>
+          </Space>
+        }
       >
+        {/* probe 结果挂在最顶部,操作员改完 URL/凭据可立刻重测看变化 */}
+        {probe && (
+          <Alert
+            type={probeAlertType(probe.authStatus)}
+            showIcon
+            style={{ marginBottom: 16 }}
+            message={
+              <Space size={4}>
+                {probe.authStatus === 'ok' || probe.authStatus === 'no_auth_required' ? (
+                  <Tag color="green">OK</Tag>
+                ) : probe.authStatus === 'wrong_creds' || probe.authStatus === 'required_but_missing' ? (
+                  <Tag color="red">认证</Tag>
+                ) : probe.authStatus === 'not_registry' ? (
+                  <Tag color="orange">URL</Tag>
+                ) : (
+                  <Tag>HTTP {probe.httpStatus}</Tag>
+                )}
+                <span>{probe.message}</span>
+              </Space>
+            }
+            description={
+              probe.reachable
+                ? `可达,HTTP ${probe.httpStatus}`
+                : '远端不可达 (网络问题 / URL 错 / 防火墙)'
+            }
+          />
+        )}
+
         <Form<FormValues> form={form} layout="vertical" requiredMark="optional">
           <Form.Item
             name="name"
@@ -726,5 +827,27 @@ function statusIcon(status: SyncRunStatus) {
     case 'failed':  return <CloseCircleOutlined />;
     case 'running': return <ClockCircleOutlined />;
     default:        return <PauseCircleOutlined />;
+  }
+}
+
+/**
+ * probe.authStatus → antd Alert 的视觉等级（v0.6.5 新增）。
+ *   ok / no_auth_required → success（绿）
+ *   wrong_creds / required_but_missing → error（红）
+ *   not_registry → warning（黄）
+ *   unknown → info（蓝灰）—— 兜底,后端目前不会出这个,留着
+ */
+function probeAlertType(status: SyncProbeAuthStatus): 'success' | 'error' | 'warning' | 'info' {
+  switch (status) {
+    case 'ok':
+    case 'no_auth_required':
+      return 'success';
+    case 'wrong_creds':
+    case 'required_but_missing':
+      return 'error';
+    case 'not_registry':
+      return 'warning';
+    default:
+      return 'info';
   }
 }
