@@ -611,18 +611,26 @@ export interface IgnoreRules {
  *
  * 同步任务的方向：pull 把远端 cairn 拉到本地；push 把本地 cairn 推送到远端。
  * 每个 task 单独配方向，双方向需要两条记录。
+ *
+ * v0.6.1 hotfix：认证从 bearer 改成 Basic（匹配 cairn 自己的 /v2/* Basic
+ * middleware）。远端 cairn 的 basic-auth 用户名 + 密码存在 `remoteUsername` /
+ * `remotePassword` 两个字段里——`remotePassword` 后端用 json:"-" 屏蔽（API
+ * 永远不返明文），`remoteUsername` 可见（让 UI 编辑时能预填）。新建密码必填，
+ * 更新时密码字段空 = 保留旧值（编辑其他字段不必重输 secret）。
  */
 export type SyncDirection = 'pull' | 'push';
 
 /**
- * 单条同步任务。`remoteToken` 后端用 json:"-" 屏蔽——UI 永远拿不到明文,
- * 列表 / 详情响应都不带这个字段。新建必须带,更新可省略(空字符串 = 保留旧的)。
+ * 单条同步任务。`remotePassword` 后端用 json:"-" 屏蔽——UI 永远拿不到明文,
+ * 列表 / 详情响应都不带这个字段。新建必填,更新可省略(空字符串 = 保留旧的)。
  */
 export interface SyncTask {
   id: number;
   name: string;
   direction: SyncDirection;
   remoteUrl: string;
+  /** 远端 cairn 的 Basic-auth 用户名；不敏感，API 可见，UI 编辑时可预填。 */
+  remoteUsername: string;
   /** 换行分隔的 glob 模式（`*` 通配），空 = 全匹配。 */
   include: string;
   enabled: boolean;
@@ -631,14 +639,15 @@ export interface SyncTask {
 }
 
 /**
- * 新建 / 更新同步任务的请求体。`remoteToken` 在更新时可省略——后端会保留旧值,
- * 编辑「名称」「远端 URL」「Include」时不必重输一次（UI 也根本没机会拿到）。
+ * 新建 / 更新同步任务的请求体。`remotePassword` 在更新时可省略——后端会保留
+ * 旧值,编辑「名称」「远端 URL」「Include」时不必重输一次（UI 也根本没机会拿到）。
  */
 export interface SyncTaskInput {
   name: string;
   direction: SyncDirection;
   remoteUrl: string;
-  remoteToken: string;
+  remoteUsername: string;
+  remotePassword: string;
   include: string;
   enabled: boolean;
 }

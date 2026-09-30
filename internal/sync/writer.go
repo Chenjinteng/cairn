@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"encoding/base64"
 	"io"
 	"net/http"
 	"net/url"
@@ -11,9 +12,15 @@ import (
 )
 
 // Writer is the *outbound* side of the sync engine — it pushes blobs
-// and manifests to a remote OCI registry, presenting a bearer token
-// on every request. The HTTP shape matches the OCI Distribution Spec,
-// so cairn↔cairn works and so does cairn→distribution, etc.
+// and manifests to a remote OCI registry, presenting Basic auth
+// credentials on every request. The HTTP shape matches the OCI
+// Distribution Spec, so cairn↔cairn works (cairn's /v2/* middleware
+// expects Basic) and so does cairn→distribution, etc.
+//
+// v0.6.1: pivoted from bearer to Basic to match cairn's auth model —
+// the previous "paste a bearer token" had no source on the receiving
+// cairn (cairn has no bearer-token concept; only Basic auth via
+// cfg.RegistryUsername/Password → /v2/* Basic middleware).
 //
 // Lifecycle for one blob (EnsureBlob):
 //
@@ -32,17 +39,19 @@ import (
 // for blobs > the HTTP body limit on the receiver (rare in practice;
 // v0.6.2+ follow-up if needed).
 type Writer struct {
-	baseURL *url.URL
-	token   string
-	hc      *http.Client
+	baseURL  *url.URL
+	username string
+	password string
+	hc       *http.Client
 }
 
-// NewWriter builds a Writer for the given remote URL with bearer auth.
+// NewWriter builds a Writer for the given remote URL with Basic auth.
 //
 // remoteURL must include scheme + host (e.g. "https://cairn-b.example.com").
-// token is the bearer string sent on every request's Authorization
-// header; pass "" for anonymous (the remote must allow it).
-func NewWriter(remoteURL, token string) (*Writer, error) {
+// username + password are sent on every request's Authorization header
+// as `Basic base64(user:pass)`. Pass "" for both to talk to an
+// anonymous registry (the receiving middleware must allow it).
+func NewWriter(remoteURL, username, password string) (*Writer, error) {
 	u, err := url.Parse(remoteURL)
 	if err != nil {
 		return nil, err
@@ -51,8 +60,9 @@ func NewWriter(remoteURL, token string) (*Writer, error) {
 		return nil, ErrInvalidURL
 	}
 	return &Writer{
-		baseURL: u,
-		token:   token,
+		baseURL:  u,
+		username: username,
+		password: password,
 		hc: &http.Client{
 			// Blob uploads can move a lot of bytes for big images; 10 min
 			// covers a 1 GB blob on a 20 Mbps link. Manifests are small
@@ -212,19 +222,23 @@ func (w *Writer) finalizeBlob(ctx context.Context, uploadURL, digest string) err
 	return nil
 }
 
-// newRequest builds an *http.Request, stamping Authorization (when a
-// token is set) and our User-Agent on every outbound call. The token
-// is the only auth we send — basic auth would only matter against
-// registries that don't speak bearer (cairn isn't one of them).
+// newRequest builds an *http.Request, stamping Authorization (when
+// both username and password are non-empty) and our User-Agent on every
+// outbound call. The Authorization header is `Basic base64(user:pass)`,
+// which is exactly what cairn's requireBasicAuth middleware expects.
 func (w *Writer) newRequest(ctx context.Context, method, url string, body io.Reader) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
 		return nil, err
 	}
-	if w.token != "" {
-		req.Header.Set("Authorization", "Bearer "+w.token)
+	if w.username != "" || w.password != "" {
+		// base64 std encoding, no padding ambiguity for any UTF-8 user/pass
+		// (cairn accepts any bytes per its current Basic parsing). Both
+		// empty == anonymous (skip header); either set == use Basic.
+		cred := base64.StdEncoding.EncodeToString([]byte(w.username + ":" + w.password))
+		req.Header.Set("Authorization", "Basic "+cred)
 	}
-	req.Header.Set("User-Agent", "cairn-sync/0.6.0")
+	req.Header.Set("User-Agent", "cairn-sync/0.6.1")
 	return req, nil
 }
 

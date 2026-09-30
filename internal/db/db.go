@@ -25,7 +25,7 @@ import (
 
 // SCHEMA_VERSION is bumped together with new migrations.
 // Bump rule: +1 per migration; never reuse a number; never delete a migration.
-const SCHEMA_VERSION = 5
+const SCHEMA_VERSION = 6
 
 // Db is the SQLite wrapper. All exported methods are safe for concurrent use.
 type Db struct {
@@ -220,6 +220,23 @@ var migrations = map[int]string{
 		FOREIGN KEY(task_id) REFERENCES sync_tasks(id) ON DELETE CASCADE
 	);
 	CREATE INDEX IF NOT EXISTS sync_runs_task_started ON sync_runs(task_id, started_at DESC);
+	`,
+	6: `
+	-- v0.6.1: pivot sync auth from bearer token to Basic auth. cairn's
+	-- own /v2/* Basic middleware doesn't accept Bearer, so the previous
+	-- "paste a bearer token" field had no source on the receiving side.
+	--
+	-- Rename the old remote_token column to remote_username. Any rows
+	-- written under 0.6.0 (unlikely; v5 shipped the same day as this
+	-- hotfix and no one had a chance to populate sync_tasks) end up
+	-- misnamed but harmless — the user just re-edits via PATCH and the
+	-- engine re-prompts for the password.
+	--
+	-- Add remote_password as NOT NULL DEFAULT '' so existing rows
+	-- satisfy the schema (and so the engine's "non-empty password"
+	-- check correctly rejects them, prompting the operator to fix).
+	ALTER TABLE sync_tasks RENAME COLUMN remote_token TO remote_username;
+	ALTER TABLE sync_tasks ADD COLUMN remote_password TEXT NOT NULL DEFAULT '';
 	`,
 }
 

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -133,7 +132,7 @@ func (e *Engine) lockFor(taskID int64) *sync.Mutex {
 // --- pull: read remote, write local ---------------------------------------
 
 func (e *Engine) runPull(ctx context.Context, task SyncTask, run *SyncRun) error {
-	rc, err := newRemoteClient(task.RemoteURL, task.RemoteToken)
+	rc, err := newRemoteClient(task.RemoteURL, task.RemoteUsername, task.RemotePassword)
 	if err != nil {
 		return fmt.Errorf("build remote client: %w", err)
 	}
@@ -233,7 +232,7 @@ func (e *Engine) uploadBlobToLocal(ctx context.Context, repo, digest string, bod
 // --- push: read local, write remote ---------------------------------------
 
 func (e *Engine) runPush(ctx context.Context, task SyncTask, run *SyncRun) error {
-	writer, err := NewWriter(task.RemoteURL, task.RemoteToken)
+	writer, err := NewWriter(task.RemoteURL, task.RemoteUsername, task.RemotePassword)
 	if err != nil {
 		return fmt.Errorf("build remote writer: %w", err)
 	}
@@ -347,57 +346,22 @@ func isIndexMediaType(mediaType string) bool {
 		strings.Contains(mediaType, "image.index")
 }
 
-// --- pre-issued bearer transport wrapper ----------------------------------
+// --- Basic-auth remote client construction --------------------------------
 //
-// The upstream registry.Client has its own bearer flow: on first 401 it
-// fetches a token from the realm in WWW-Authenticate, caches it, and
-// retries. That works fine for interactive use but burns an extra round
-// trip per session — and in the sync case we already have the token
-// (it came out of sync_tasks.remote_token). Wrapping the http.Transport
-// is the smallest change to upstream that lets us present the header
-// unconditionally without forking Client or modifying internal/registry.
+// v0.6.1: pivoted from bearer to Basic to match cairn's /v2/* Basic
+// middleware. registry.Config already has Username + Password fields that
+// flow through to http.Request.SetBasicAuth on every outbound call, so
+// we don't need a transport wrapper — just hand the creds to NewClient.
 
-// newRemoteClient builds a registry.Client pointing at remoteURL with a
-// pre-issued bearer token stamped on every outbound request. An empty
-// token means anonymous; the wrapping is skipped in that case so we
-// don't shadow any auth the underlying transport might add.
-func newRemoteClient(remoteURL, token string) (*registry.Client, error) {
-	rc, err := registry.NewClient(registry.Config{
-		BaseURL: remoteURL,
-		Timeout: 5 * time.Minute,
+// newRemoteClient builds a registry.Client pointing at remoteURL with
+// the destination's Basic-auth credentials stamped on every outbound
+// request. Both fields empty = anonymous (skip auth header); the
+// underlying registry.Client does the same.
+func newRemoteClient(remoteURL, username, password string) (*registry.Client, error) {
+	return registry.NewClient(registry.Config{
+		BaseURL:  remoteURL,
+		Username: username,
+		Password: password,
+		Timeout:  5 * time.Minute,
 	})
-	if err != nil {
-		return nil, err
-	}
-	if token != "" {
-		rc.HTTP().Transport = &bearerTransport{
-			token: token,
-			base:  rc.HTTP().Transport,
-		}
-	}
-	return rc, nil
-}
-
-// bearerTransport stamps `Authorization: Bearer <token>` on every
-// outbound request, then delegates to the wrapped transport (the one
-// registry.NewClient configured). We clone the request before mutating
-// headers so the caller's request isn't polluted for retry paths —
-// http.Client mutates headers in place, and the 401-retry path inside
-// Client would otherwise see our bearer on the retry too (which is
-// actually fine, but cloning is the convention here).
-type bearerTransport struct {
-	token string
-	base  http.RoundTripper
-}
-
-func (t *bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if t.token != "" {
-		req = req.Clone(req.Context())
-		req.Header.Set("Authorization", "Bearer "+t.token)
-	}
-	base := t.base
-	if base == nil {
-		base = http.DefaultTransport
-	}
-	return base.RoundTrip(req)
 }

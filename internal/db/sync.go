@@ -6,23 +6,30 @@ import (
 	"time"
 )
 
-// v0.6.0 sync DB methods. Row types live here (not in internal/sync)
+// v0.6.1 sync DB methods. Row types live here (not in internal/sync)
 // to avoid the "internal/db imports its consumer" anti-pattern; the
 // domain types in internal/sync/types.go are constructed by
 // internal/sync/store.go via the rowToTask / rowToRun converters.
+//
+// v0.6.1: schema is now v6 (see migrations in db.go). The auth columns
+// pivoted from `remote_token TEXT` (single bearer token) to
+// `remote_username TEXT` + `remote_password TEXT` (basic-auth pair, matching
+// cairn's own registry middleware). The migration renames the old column
+// and adds the new one with DEFAULT ''.
 
 // SyncTaskRow is the SQL-side view of one sync_tasks row. Times are
-// stored as INTEGER unix seconds (see schema v5) and decoded on read.
+// stored as INTEGER unix seconds and decoded on read.
 type SyncTaskRow struct {
-	ID          int64
-	Name        string
-	Direction   string // 'pull' | 'push' — string at this layer, enum upstream
-	RemoteURL   string
-	RemoteToken string
-	Include     string
-	Enabled     bool
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID             int64
+	Name           string
+	Direction      string // 'pull' | 'push' — string at this layer, enum upstream
+	RemoteURL      string
+	RemoteUsername string
+	RemotePassword string
+	Include        string
+	Enabled        bool
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // SyncRunRow is the SQL-side view of one sync_runs row.
@@ -47,9 +54,9 @@ func (d *Db) SyncTaskCreate(ctx context.Context, t SyncTaskRow) (int64, error) {
 		enabled = 1
 	}
 	res, err := d.conn.ExecContext(ctx, `
-		INSERT INTO sync_tasks(name, direction, remote_url, remote_token, include, enabled, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`, t.Name, t.Direction, t.RemoteURL, t.RemoteToken, t.Include, enabled,
+		INSERT INTO sync_tasks(name, direction, remote_url, remote_username, remote_password, include, enabled, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, t.Name, t.Direction, t.RemoteURL, t.RemoteUsername, t.RemotePassword, t.Include, enabled,
 		t.CreatedAt.Unix(), t.UpdatedAt.Unix())
 	if err != nil {
 		return 0, err
@@ -67,9 +74,9 @@ func (d *Db) SyncTaskGet(ctx context.Context, id int64) (SyncTaskRow, error) {
 	var enabled int
 	var createdAt, updatedAt int64
 	err := d.conn.QueryRowContext(ctx, `
-		SELECT id, name, direction, remote_url, remote_token, include, enabled, created_at, updated_at
+		SELECT id, name, direction, remote_url, remote_username, remote_password, include, enabled, created_at, updated_at
 		FROM sync_tasks WHERE id = ?
-	`, id).Scan(&t.ID, &t.Name, &t.Direction, &t.RemoteURL, &t.RemoteToken, &t.Include, &enabled,
+	`, id).Scan(&t.ID, &t.Name, &t.Direction, &t.RemoteURL, &t.RemoteUsername, &t.RemotePassword, &t.Include, &enabled,
 		&createdAt, &updatedAt)
 	if err != nil {
 		return SyncTaskRow{}, err
@@ -84,7 +91,7 @@ func (d *Db) SyncTaskGet(ctx context.Context, id int64) (SyncTaskRow, error) {
 // as tiebreaker — same-second inserts sort by insertion order).
 func (d *Db) SyncTaskList(ctx context.Context) ([]SyncTaskRow, error) {
 	rows, err := d.conn.QueryContext(ctx, `
-		SELECT id, name, direction, remote_url, remote_token, include, enabled, created_at, updated_at
+		SELECT id, name, direction, remote_url, remote_username, remote_password, include, enabled, created_at, updated_at
 		FROM sync_tasks ORDER BY created_at DESC, id DESC
 	`)
 	if err != nil {
@@ -96,7 +103,7 @@ func (d *Db) SyncTaskList(ctx context.Context) ([]SyncTaskRow, error) {
 		var t SyncTaskRow
 		var enabled int
 		var createdAt, updatedAt int64
-		if err := rows.Scan(&t.ID, &t.Name, &t.Direction, &t.RemoteURL, &t.RemoteToken, &t.Include, &enabled,
+		if err := rows.Scan(&t.ID, &t.Name, &t.Direction, &t.RemoteURL, &t.RemoteUsername, &t.RemotePassword, &t.Include, &enabled,
 			&createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
@@ -108,17 +115,17 @@ func (d *Db) SyncTaskList(ctx context.Context) ([]SyncTaskRow, error) {
 	return out, rows.Err()
 }
 
-// SyncTaskUpdate replaces name/direction/url/token/include/enabled for the
-// given ID. created_at is preserved; updated_at is overwritten.
+// SyncTaskUpdate replaces name/direction/url/credentials/include/enabled
+// for the given ID. created_at is preserved; updated_at is overwritten.
 func (d *Db) SyncTaskUpdate(ctx context.Context, t SyncTaskRow) error {
 	enabled := 0
 	if t.Enabled {
 		enabled = 1
 	}
 	res, err := d.conn.ExecContext(ctx, `
-		UPDATE sync_tasks SET name=?, direction=?, remote_url=?, remote_token=?, include=?, enabled=?, updated_at=?
+		UPDATE sync_tasks SET name=?, direction=?, remote_url=?, remote_username=?, remote_password=?, include=?, enabled=?, updated_at=?
 		WHERE id=?
-	`, t.Name, t.Direction, t.RemoteURL, t.RemoteToken, t.Include, enabled,
+	`, t.Name, t.Direction, t.RemoteURL, t.RemoteUsername, t.RemotePassword, t.Include, enabled,
 		t.UpdatedAt.Unix(), t.ID)
 	if err != nil {
 		return err
