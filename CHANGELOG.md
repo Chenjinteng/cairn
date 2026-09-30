@@ -6,6 +6,93 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.6.0] - 2026-09-30
+
+本轮主题:**registry 同步 (regsync 内建) —— 拉方向骨架落地**
+
+> **本版本是 0.6.0 系列首个发布,只包含 4 阶段拆解里的 Phase 1 (拉方向骨架)。**
+> 推方向 (Phase 2)、cron 调度 (Phase 3)、UI (Phase 4) 仍待落地 —— 见
+> [`docs/ROADMAP.md` § 0.6.0](./docs/ROADMAP.md#060--registry-同步regsync-内建新模块中版本)。
+> 用户决定 0.6.0 直接发,不拆 0.5.x 过渡版;后续小修走 0.6.1 / 0.6.2 …
+
+### 新增
+
+- **db v5: `sync_tasks` + `sync_runs` 表**(`internal/db/db.go` schema v5):
+  - `sync_tasks`:任务配置 —— id / name UNIQUE / direction / source_url /
+    source_repo_prefix (源端子树过滤,如 `library/`) /
+    target_repo_prefix (M2 目标前缀映射,如 `mirrored/`) /
+    deny_list (JSON 数组,精确匹配) / credential_id (引用 v0.2 凭据库) /
+    schedule (5 字段 cron,Phase 3 用) / enabled /
+    last_run_at / last_run_status / last_run_error / 时间戳
+  - `sync_runs`:执行历史 —— id / task_id CASCADE / state (success / failed / skipped) /
+    started_at / finished_at / manifests_copied / blobs_copied / blobs_skipped /
+    bytes_total / error
+  - `sync_runs(task_id, started_at DESC)` 索引,加速 `GET /api/sync/{id}/runs`
+  - 启动自动迁移 (schema v4 → v5),老数据 (activity_daily / pull_jobs /
+    settings / event_seen / stats_ignore) 不破坏
+
+- **`internal/sync/` 新包**(cairn 内置 regsync 的核心):
+  - `types.go`: `Direction` (pull/push) / `RunState` (success/failed/skipped) /
+    `Task` / `Run` / `Counts`
+  - `store.go`: SQLite CRUD,deny_list JSON 编解码
+  - `filter.go`: `DenyFilter` (精确匹配,无正则) + `PrefixFilter` (源端子树过滤)
+  - `engine.go`: `Engine.Run(ctx, task) (Run, error)` —— 复用
+    `internal/registry/client.go` 走源 V2 协议,复用
+    `internal/storage` 写本地 V2;`transferBlob` / `PutManifest` 全链路。
+    `ClientFactory` + `CredentialLookup` 两个注入点,Engine 不直接依赖
+    proxy / vault。
+
+- **`/api/sync/*` REST 端点**(`internal/api/sync_handlers.go`):
+  - `GET /api/sync/` —— 列出所有任务
+  - `POST /api/sync/` —— 创建任务 (direction 锁 pull,credentialId 缺 vault 时 400)
+  - `GET /api/sync/{id}` —— 取一个
+  - `PATCH /api/sync/{id}` —— 部分更新 (nil 字段不写)
+  - `DELETE /api/sync/{id}` —— 删任务,ON DELETE CASCADE 清 runs
+  - `POST /api/sync/{id}/run` —— 立即触发,同步等待返回本次 run 视图;`runMu`
+    单任务闸门,Phase 3 的 cron tick 共用同一闸
+  - `GET /api/sync/{id}/runs` —— 历史 (newest first,`?limit=N`)
+
+- **`internal/credentials.VaultLookup` 适配器**(`internal/sync/engine.go`):
+  把 v0.2 凭据库的 `Vault` 转成 `CredentialLookup`,凭据 ID 引用 Phase 1
+  就打通 —— 私有 Basic Auth 源端到端可跑(决策 3)。
+
+### 决策定稿
+
+3 个开工前边界决策在 [`docs/ROADMAP.md`](./docs/ROADMAP.md) 里锁死:
+
+1. **手写 5 字段 cron 解析**(不引入 `github.com/robfig/cron/v3`):严守
+   `AGENTS.md` 「仅 stdlib + chi + x/sync」原则。180 行内可解,Phase 3 实现。
+2. **不发 0.5.53-0.5.55 过渡号位**:Phase 1-3 跑通后直接发 0.6.0。中间
+   UAT 跟 git main 走。
+3. **凭据库 ID 引用在 Phase 1 打通**:否则私有 Basic Auth 源端到端跑不通。
+
+### 已知不做(0.6.0 范围)
+
+- ❌ **推方向 (Phase 2)** —— `direction=push` 当前 400,Phase 2 实现同一
+  engine.copy(src, dst) 通用化覆盖。
+- ❌ **cron 调度 (Phase 3)** —— schedule 字段已存,UI 还没接;手写解析器
+  Phase 3 写。
+- ❌ **UI (Phase 4)** —— 顶部 tab「同步」、Sync.tsx 任务列表 + 新建/编辑/
+  立即运行 UI 都没做。当前只能 curl 驱动,见 CHANGELOG 末尾的
+  UAT 操作命令。
+- ❌ **同步循环检测告警 / dry-run / 实时进度推送** —— ROADMAP 已记不在 0.6.x。
+- ❌ **代理支持** —— 内部 `ClientFactory` 暂不接 proxy,Phase 2 看是否补。
+- ❌ **远端 ↔ 远端中转 / 多 registry 聚合** —— 违反「单 registry」原则,永不做。
+
+### 影响范围(升级须知)
+
+- **数据迁移**:升级后首次启动,db 自动跑 schema v5。`activity_daily` /
+  `pull_jobs` / `settings` / `event_seen` / `stats_ignore` 老数据全部保留。
+- **API 新增**:`/api/sync/*` 全套端点(列表/CRUD/触发/历史)。无 UI 时
+  curl 即可驱动,见 README 与本 CHANGELOG 的同步测试步骤。
+- **设置**:无新 UI 开关;`REGISTRY_CREDENTIAL_KEY` 环境变量含义不变,仅
+  在配置私有源同步任务时被引用。
+- **行为**:`sync_tasks.name` UNIQUE 约束撞名时 400;同一任务并发触发
+  第二次返回 409;`direction=push` 返回 400 直到 Phase 2 落地。
+- **下一步**:Phase 2 (push) → Phase 3 (调度) → Phase 4 (UI) → 0.6.1。
+
+---
+
 ## [0.5.52] - 2026-09-30
 
 本轮主题:**「见过的客户端」面板落 SQLite,重启不丢 —— 用于发现有没有非法的在打**
