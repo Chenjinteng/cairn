@@ -28,9 +28,11 @@ import type {
   StatsSummary,
   StatsTop,
   StatsTopBy,
+  SyncProbeResult,
   SyncRun,
   SyncTask,
   SyncTaskInput,
+  SyncTestInput,
 } from './types';
 
 /**
@@ -522,3 +524,25 @@ export const runSyncTask = (id: number) =>
  */
 export const listSyncRuns = (id: number, limit = 50) =>
   request<SyncRun[]>(`/api/sync/${id}/runs?limit=${limit}`);
+
+/**
+ * v0.6.5: 「测试连接」按钮 — 不需先 Save 任务,
+ * 直接用当前表单里的 remoteUrl / 远端用户名 / 远端密码探测对端。
+ *
+ * 永远返 200,结果在 body 的 reachable + authStatus + httpStatus +
+ * message 字段(见 types.ts SyncProbeResult)。后端根据 HTTP 状态
+ * + WWW-Authenticate 头归类,前端按 authStatus 选 Alert type/icon。
+ *
+ * 与 save / run 区别:
+ *   save: 走 Validate 链,要求字段语义完整;
+ *        校验失败返 4xx。
+ *   run : 真正拉/推镜像,要 SyncTask 已存;
+ *        失败返 502 + run.status=。
+ *   test: 纯连通性 + 认证姿态的 smoke test;
+ *        永远 200,语义是否"能跑"看 body.authStatus。
+ */
+export const testSyncConnection = (input: SyncTestInput) =>
+  request<SyncProbeResult>('/api/sync/test', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });

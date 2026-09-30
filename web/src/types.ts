@@ -672,3 +672,37 @@ export interface SyncRun {
   reposFailed: number;
   error?: string;
 }
+
+/**
+ * v0.6.5: 「测试连接」按钮的返回结构。后端打 `{remoteUrl}/v2/` 探测,
+ * 按 HTTP 状态 + WWW-Authenticate 头归类成 AuthStatus。前端按这个
+ * 字段选图标 / 颜色 / 文案,统一渲染。HTTP 200 = 探测请求本身成功,
+ * 但语义是否「能跑同步」要看 AuthStatus:
+ *   ok                  — Basic 认证通过,可以 Run
+ *   no_auth_required    — 匿名访问通过,可以 Run
+ *   required_but_missing— 对端要求认证,用户名密码留空了 → 改表单
+ *   wrong_creds         — 401,凭据被拒 → 改密码
+ *   not_registry        — /v2/ 404,URL 不是 OCI registry → 改 URL
+ *   unknown             — 其它(401 但 WWW-Auth 不是 Basic / 5xx 等)
+ */
+export type SyncProbeAuthStatus =
+  | 'ok'
+  | 'no_auth_required'
+  | 'required_but_missing'
+  | 'wrong_creds'
+  | 'not_registry'
+  | 'unknown';
+
+export interface SyncProbeResult {
+  reachable: boolean;
+  authStatus: SyncProbeAuthStatus;
+  httpStatus: number;
+  /** 中文一句话,UI 直接 Alert 显示;后端已经填好,前端不翻译。 */
+  message: string;
+}
+
+export interface SyncTestInput {
+  remoteUrl: string;
+  remoteUsername: string;
+  remotePassword: string;
+}

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -30,15 +31,19 @@ type SyncHandlers struct {
 //
 // Routes:
 //
-//	GET    /sync               — list tasks
-//	POST   /sync               — create task
-//	GET    /sync/{id}          — fetch one task
-//	PATCH  /sync/{id}          — update task (token field is optional;
-//	                             empty == keep current token)
-//	DELETE /sync/{id}          — delete task (cascades runs)
-//	POST   /sync/{id}/run      — trigger a sync run; blocks until done
-//	GET    /sync/{id}/runs     — list recent runs (newest first,
-//	                             default limit 50)
+//	GET    /sync                  — list tasks
+//	POST   /sync                  — create task
+//	GET    /sync/{id}             — fetch one task
+//	PATCH  /sync/{id}             — update task (password field is optional;
+//	                                empty == keep current password; both empty
+//	                                == set to anonymous)
+//	DELETE /sync/{id}             — delete task (cascades runs)
+//	POST   /sync/{id}/run         — trigger a sync run; blocks until done
+//	GET    /sync/{id}/runs        — list recent runs (newest first,
+//	                                default limit 50)
+//	POST   /sync/test             — probe remote reachability + auth posture;
+//	                                powers the new-task form's "测试连接"
+//	                                button. Does NOT require a saved task.
 func (s *SyncHandlers) RegisterRoutes(r chi.Router) {
 	r.Route("/sync", func(r chi.Router) {
 		r.Get("/", s.ListTasks)
@@ -48,6 +53,7 @@ func (s *SyncHandlers) RegisterRoutes(r chi.Router) {
 		r.Delete("/{id}", s.DeleteTask)
 		r.Post("/{id}/run", s.RunTask)
 		r.Get("/{id}/runs", s.ListRuns)
+		r.Post("/test", s.TestConnection)
 	})
 }
 
@@ -287,4 +293,42 @@ func parseID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 		return 0, false
 	}
 	return id, true
+}
+
+// SyncTestInput is the JSON shape for POST /api/sync/test. Just the
+// fields needed to probe — name / direction / include are irrelevant
+// for a reachability check.
+type SyncTestInput struct {
+	RemoteURL      string `json:"remoteUrl"`
+	RemoteUsername string `json:"remoteUsername"`
+	RemotePassword string `json:"remotePassword"`
+}
+
+// TestConnection — POST /api/sync/test
+//
+// Powers the "测试连接" button on the new-sync-task form. Does NOT
+// require a saved task — takes the same remote fields the user is
+// currently typing and pings `{remoteUrl}/v2/` with the configured
+// (or no) Basic auth, returning a structured result the UI renders
+// as an inline Alert.
+//
+// This is purely a smoke test; it doesn't validate Include patterns,
+// doesn't pre-fetch _catalog, and doesn't reserve any DB state.
+//
+// Returns 200 OK with a sync.ProbeResult body. Even a "failed" probe
+// (wrong creds, 404, unreachable) is still HTTP 200 — the result is
+// in the JSON body's AuthStatus field. Only genuine handler-level
+// errors (decode failure, body too large) return non-2xx.
+func (s *SyncHandlers) TestConnection(w http.ResponseWriter, r *http.Request) {
+	var in SyncTestInput
+	if err := json.NewDecoder(io.LimitReader(r.Body, 8<<10)).Decode(&in); err != nil {
+		writeError(w, r, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(in.RemoteURL) == "" {
+		writeError(w, r, http.StatusBadRequest, errors.New("remoteUrl is required"))
+		return
+	}
+	result := sync.ProbeConnection(r.Context(), in.RemoteURL, in.RemoteUsername, in.RemotePassword)
+	writeJSON(w, http.StatusOK, result)
 }

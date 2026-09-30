@@ -6,6 +6,59 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.6.5] - 2026-09-30
+
+本轮主题:**「测试连接」按钮 —— 新建/编辑同步任务表单可在保存前验证远端 cairn URL + Basic 凭据**
+
+0.6.4 把 cairn↔cairn 同步做通了,但操作员填完任务 → 保存 → 点「立即运行」→ 看到第一行 sync_run 失败
+才知道 URL 写错 / 凭据错 / 远端根本没起来。反馈环太长(尤其是第一次配对端,凭据都是手工抄的)。
+
+本轮在「新建/编辑同步任务」Modal 加一个 **「测试连接」** 按钮(footer 左侧,跟「取消」「保存」并列)——
+填好 URL(用户名密码可空,代表匿名测试)后点一下,后端用 5s timeout 对 `{remoteUrl}/v2/` 发一次
+带/不带 Basic auth 的 GET,根据 HTTP 状态 + `WWW-Authenticate` 头分到 4 档之一,
+UI 用一个 antd `<Alert>` 在 Modal 顶部渲染结果。结果是 JSON body 里的 `authStatus` 字段,**永远 HTTP 200**
+(即使是「远端不可达」「凭据错」也算探测结果;只有 handler 层错误才非 2xx)。
+
+> **设计抉择**:
+> - 永远 200 + body 分类:符合「探测就是探测,语义在 body 不在 status」——前端只需要判断 `result.success` 决定要不要显示。
+> - 不预拉 `_catalog`:避免把整个仓库列表拉一遍(那才是「立即运行」的活);`/v2/` 端点足够验证连通 + auth posture。
+> - 不写 DB / 不 Validate:`Validate` 强制「用户名密码都空 = 匿名、都填 = Basic、混合 = 错」;测试期允许「填一半」(常见于
+>   「我先填 URL 测一下,再补凭据」的工作流),但 `Writer` / `Engine` 的执行期判断仍走严格 Validate。
+> - 清掉上次探测结果:打开新建/编辑 Modal 时 `setProbe(null)`,避免「A 任务的探测结果留在 B 任务 Modal 上」的脏读。
+
+### 新增
+
+- **`internal/sync/probe.go`**(`ProbeResult` + `ProbeConnection`):
+  - `ProbeResult{Reachable, AuthStatus, HTTPStatus, Message}` 四字段;`Reachable=false` 时
+    `AuthStatus`/`HTTPStatus` 不可靠(网络层失败)。
+  - `ProbeConnection(ctx, baseURL, username, password)`:5s 总 timeout(connect + TLS + request + read),
+    `GET {baseURL}/v2/`;`username` 或 `password` 任一非空就发 `Authorization: Basic ...` 头
+    (允许混搭 —— 操作员中途在打字)。
+  - 分类:
+    - 200 + 发了 header → `ok`;200 + 没发 header → `no_auth_required`。
+    - 401 + `WWW-Authenticate: Basic ...` + 没发 header → `required_but_missing`;401 + 发了 header → `wrong_creds`。
+    - 404 → `not_registry`(这个 URL 不是 OCI registry)。
+    - 401 但 WWW-Auth 不是 Basic / 5xx → `unknown`(兜底)。
+- **`POST /api/sync/test`**(`internal/api/sync_handlers.go` `TestConnection`):
+  - 不依赖 task ID,接受 `SyncTestInput{RemoteURL, RemoteUsername, RemotePassword}`;只读 URL 必填,
+    其他可空。永远返 HTTP 200 + `ProbeResult`。body 限 8 KiB(防滥用)。
+  - 路由在 `/sync/test`(同 `/sync/{id}/...` 同一组 chi router)。
+- **Web UI**(`sync-page.tsx`):
+  - Modal footer 改三按钮:「测试连接」(loading 用 `testing` state)+ 「取消」+ 「保存」。
+  - Modal 顶部(在 Form 上面)渲染 `<Alert>`,根据 `authStatus` 分级颜色 + 一句话描述:
+    `ok`/`no_auth_required` 绿色、`wrong_creds`/`required_but_missing` 红色、`not_registry` 橙色、
+    其他灰色;Alert 的 `description` 字段给一句「可达,HTTP N」或「远端不可达」。
+  - 「测试连接」按钮直接读 `form.getFieldsValue()`(不依赖 `Validate`),允许「填一半」组合;
+    改完表单再点覆盖 probe 结果。
+- **类型与 API 客户端**:`web/src/types.ts` 加 `SyncProbeAuthStatus`(`ok`|`no_auth_required`|
+  `required_but_missing`|`wrong_creds`|`not_registry`|`unknown`)+ `SyncProbeResult` + `SyncTestInput`;
+  `web/src/api.ts` 加 `testSyncConnection(input)`。
+- **User-Agent 微调**:`internal/sync/writer.go` outbound header 从 `cairn-sync/0.6.4` 升到
+  `cairn-sync/0.6.5`;`internal/sync/probe.go` 新增独立 header `cairn-sync-probe/0.6.5`,
+  让远端 registry 日志能区分「探测流量」与「真实同步流量」。
+
+---
+
 ## [0.6.4] - 2026-09-30
 
 本轮主题:**内置 regsync 等价能力 —— cairn↔cairn 镜像同步,UI「镜像同步」Tab + 手动运行 + Basic 鉴权（含匿名对端）**
