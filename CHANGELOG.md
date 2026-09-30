@@ -6,6 +6,66 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.5.52] - 2026-09-30
+
+本轮主题:**「见过的客户端」面板落 SQLite,重启不丢 —— 用于发现有没有非法的在打**
+
+### 新增
+
+- **`event_seen` 表**(`internal/db/db.go` schema v4):
+  ```sql
+  CREATE TABLE event_seen (
+      useragent     TEXT PRIMARY KEY,
+      first_seen_at TEXT NOT NULL,
+      last_seen_at  TEXT NOT NULL,
+      events        INTEGER NOT NULL DEFAULT 0,
+      counted       INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX event_seen_last_seen ON event_seen(last_seen_at DESC);
+  ```
+  每个 User-Agent 一行,首/末次时间 + 事件计数 + 计入热度计数。索引按 `last_seen_at DESC` 排,让"最近活跃"的查询走索引。
+
+- **`db.LoadAllEventSeen` / `db.BatchUpsertEventSeen`**:启动加载 + 异步批量 UPSERT。
+  `events/counted` 用 `excluded.events / excluded.counted` 直接覆盖(不是累加)—— 避免"flush 窗口双计"陷阱(详见 `internal/db/db.go` 注释)。
+
+- **`events.Handler.RunFlushLoop`**:后台 goroutine 每 5s 刷一次 dirty 的 per-UA 聚合到 SQLite。Shutdown 时 `r.PullCancel` 触发 `flushSeen(context.Background())` 最后一次兜底。宕机最多丢 5s 内的增量,可接受。
+
+- **`/api/stats/clients?days=all`(默认) / `?days=N`**:新增 `all` 模式不 filter,返回 event_seen 全表。`N` 仍是数字,行为跟 0.5.51 一样按 `LastSeenAt` 过滤。`days` 字段在响应里是 `number | "all"`。
+
+- **「见过的客户端」UI 加时间窗 Select**:默认 "全部时间",提供 "近 7/30/90 天" 切换看趋势,跟时间窗对齐。
+
+### 变更
+
+- **`events.recordClient` 不再收 self / ignore UA**(`internal/events/events.go`):
+  `processOne` 在调用 `recordClient` 之前先 gate `dec.Ignored || self`。结果:操作员面板里的"见过的客户端"再也不会被自家请求或被忽略规则的 UA 污染。
+
+- **`db.PurgeAll` 签名**:从 `(int64, error)` 改为 `(activity, seen int64, err error)`,分别报告两条删除数。`StatsHeatDelete` UI 响应 `{activity, seen}` 不再硬编码 `seen: 0`。
+
+- **`events.Handler.ClearSeen`**:`PurgeAll` 后清内存 `h.clients`,保证 UI 不残留 stale 行。
+
+- **`retention` 与 activity_daily 共用 cutoff**(`internal/server/server.go` `retentionLoop`):
+  `db.RetentionCleanup` 现在同时清 `activity_daily WHERE day < ?` 和 `event_seen WHERE last_seen_at < ?`,共用 `cfg.StatsRetentionDays()`(默认 365)。注释同步。
+
+### 修复
+
+- **`stats-page.tsx:815` 误导文案"想看更早的请用上面的「见过的客户端」"** —— 之前 0.5.51 写这句话时根本没落盘,实际重启后两块都空。本轮 0.5.52 落盘之后,这句话才真正成立。
+
+### 测试(`internal/events/local_test.go`)
+
+- `TestNewHandler_LoadsPersistedSeen` —— 预先 INSERT 一行,`NewHandler` 后 `SnapshotClients()` 看得到(重启不丢的 load-bearing 测试)。
+- `TestFlushSeen_Persists` —— 多次 `IngestLocal` → 同步 `flushSeen` → 重新 `NewHandler` → 数据还在(端到端持久化)。
+- `TestIgnoreUA_NotPersisted` —— kubelet 触发 ignore 规则 → flush → event_seen 没这行。
+- `TestSelfUA_NotPersisted` —— `cairn/0.5.52` 自家 UA → flush → event_seen 没这行。
+
+### 影响范围(升级须知)
+
+- **数据迁移**:升级后首次启动,db 走 schema v4 migration 自动建 `event_seen` 表 + 索引。`activity_daily` / `settings` / `pull_jobs` / `stats_ignore` 老数据不动。
+- **API**:`/api/stats/clients` 接受 `days=all`(新默认)或 `days=N`(老用法)。`/api/stats/heat` DELETE 响应 `seen` 字段从 0 变成实际删除行数。
+- **设置**:无新 UI 开关,retention 沿用 `stats.retention.days`(默认 365 天)。
+- **行为**:操作员重启 cairn 后,「见过的客户端」面板继续显示重启前的 UA,不再因内存清零而丢失。
+
+---
+
 ## [0.5.51] - 2026-09-30
 
 本轮主题:**产品介绍页同 tab 打开 + 上一轮改名收敛补 CHANGELOG + 公开仓库脚手架治理**

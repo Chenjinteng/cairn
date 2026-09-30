@@ -5,6 +5,7 @@ import {
   Collapse,
   Empty,
   Segmented,
+  Select,
   Space,
   Table,
   Tag,
@@ -126,6 +127,12 @@ export default function StatsPage({
   const [points, setPoints] = useState<StatsSeriesPoint[]>([]);
   const [events, setEvents] = useState<StatsEventItem[]>([]);
   const [clients, setClients] = useState<StatsClientItem[]>([]);
+  /**
+   * v0.5.52: 「见过的客户端」 默认 "all" —— 该面板落 SQLite 之后,主用途是
+   * "看看有没有非法的在打",限定时间窗反而把"上次重启前那个可疑客户端"挡掉了。
+   * 仍提供 7/30/90 切换,跟时间窗对齐看趋势。
+   */
+  const [clientsDays, setClientsDays] = useState<number | 'all'>('all');
   const [eventTotals, setEventTotals] = useState<StatsEvents['totals'] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<ApiResult<unknown> | null>(null);
@@ -222,7 +229,7 @@ export default function StatsPage({
           // 日历固定看 12 个月，与上面的时间窗无关（原因见 HEATMAP_DAYS 的注释）。
           fetchStatsSeries(HEATMAP_DAYS),
           fetchStatsEvents(50),
-          fetchStatsClients(days),
+          fetchStatsClients(clientsDays),
         ]);
       if (cancelled) {
         return;
@@ -726,10 +733,28 @@ export default function StatsPage({
       */}
       <div className="panel" style={{ padding: 16 }}>
         <div className="stats-panel-head">
-          <h3 className="stats-panel-title">见过的客户端（近 {days} 天）</h3>
-          <span style={{ fontSize: 12, color: 'var(--color-text-3)' }}>
-            「计入 0」= 收到过但被规则排掉了；这一行不存在才是真的没来过
-          </span>
+          <h3 className="stats-panel-title">
+            见过的客户端（
+            {clientsDays === 'all' ? '全部时间' : `近 ${clientsDays} 天`}
+            ）
+          </h3>
+          <Space size={12}>
+            <Select
+              size="small"
+              value={clientsDays}
+              style={{ width: 120 }}
+              onChange={(v) => setClientsDays(v)}
+              options={[
+                { value: 'all', label: '全部时间' },
+                { value: 7, label: '近 7 天' },
+                { value: 30, label: '近 30 天' },
+                { value: 90, label: '近 90 天' },
+              ]}
+            />
+            <span style={{ fontSize: 12, color: 'var(--color-text-3)' }}>
+              「计入 0」= 收到过但被规则排掉了；这一行不存在才是真的没来过
+            </span>
+          </Space>
         </div>
         {loading && clients.length === 0 ? (
           <TableSkeleton rows={6} columns={3} title={false} description={false} />

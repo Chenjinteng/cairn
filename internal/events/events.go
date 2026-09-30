@@ -255,9 +255,10 @@ type RecentEvent struct {
 	Counted    bool      `json:"counted"`
 }
 
-// clientAgg accumulates per-User-Agent totals (in-memory; resets on
-// restart). Row count is bounded by distinct UAs, so it stays small even
-// for slow-dripping clients the ring buffer would have evicted.
+// clientAgg accumulates per-User-Agent totals. The in-memory map is a
+// hot cache: it's loaded from event_seen at startup and flushed to
+// SQLite every 5s. Row count is bounded by distinct UAs, so it stays
+// small even for slow-dripping clients the ring buffer would have evicted.
 type clientAgg struct {
 	UserAgent   string
 	FirstSeenAt time.Time
@@ -265,6 +266,10 @@ type clientAgg struct {
 	Events      int64
 	Counted     int64
 	Self        bool
+
+	// v0.5.52: marked by recordClient; cleared after flush. Keeps the
+	// flush goroutine from re-writing rows that haven't changed.
+	dirty bool
 }
 
 // ClientStat is the public per-client view (/api/stats/clients items).
@@ -292,7 +297,7 @@ func NewHandler(store *db.Db, token string, ignoreUAs []string, recentCap int) *
 	if recentCap <= 0 {
 		recentCap = 200
 	}
-	return &Handler{
+	h := &Handler{
 		Store:     store,
 		Token:     token,
 		ignoreUAs: append([]string{}, ignoreUAs...),
@@ -300,6 +305,33 @@ func NewHandler(store *db.Db, token string, ignoreUAs []string, recentCap int) *
 		recentCap: recentCap,
 		clients:   map[string]*clientAgg{},
 	}
+	// v0.5.52: load persisted client aggregates at startup so the
+	// "seen clients" panel survives restarts. Loaded rows are NOT
+	// dirty — they'll become dirty on the next observed event.
+	if store != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		rows, err := store.LoadAllEventSeen(ctx)
+		if err != nil {
+			slog.Warn("events: load event_seen failed", "err", err)
+		} else {
+			h.mu.Lock()
+			for _, r := range rows {
+				h.clients[r.UserAgent] = &clientAgg{
+					UserAgent:   r.UserAgent,
+					FirstSeenAt: r.FirstSeenAt,
+					LastSeenAt:  r.LastSeenAt,
+					Events:      r.Events,
+					Counted:     r.Counted,
+				}
+			}
+			h.mu.Unlock()
+			if len(rows) > 0 {
+				slog.Info("events: loaded event_seen", "rows", len(rows))
+			}
+		}
+	}
+	return h
 }
 
 // SetIgnoreUAs replaces the live (effective = env ∪ panel) ignore list.
@@ -388,10 +420,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// recordClient updates the per-UA aggregate. Every received event counts
-// toward Events (including ignored ones — "events > 0 but counted == 0"
-// is how the UI shows "seen but filtered").
-func (h *Handler) recordClient(ua string, now time.Time, counted, self bool) {
+// recordClient updates the per-UA aggregate for non-ignored, non-self
+// events. processOne (the only caller) gates on dec.Ignored and
+// IsSelfUserAgent before getting here, so the row count of h.clients
+// only reflects operators' "real" clients.
+//
+// Every received event counts toward Events; only counted ones bump
+// Counted. So "events > 0 && counted == 0" means "filtered by some
+// other rule, but still came through as a real client" — useful signal
+// for the UI.
+func (h *Handler) recordClient(ua string, now time.Time, counted bool) {
 	if ua == "" {
 		ua = "(empty)"
 	}
@@ -399,7 +437,7 @@ func (h *Handler) recordClient(ua string, now time.Time, counted, self bool) {
 	defer h.mu.Unlock()
 	c, ok := h.clients[ua]
 	if !ok {
-		c = &clientAgg{UserAgent: ua, FirstSeenAt: now, Self: self}
+		c = &clientAgg{UserAgent: ua, FirstSeenAt: now}
 		h.clients[ua] = c
 	}
 	c.LastSeenAt = now
@@ -407,6 +445,9 @@ func (h *Handler) recordClient(ua string, now time.Time, counted, self bool) {
 	if counted {
 		c.Counted++
 	}
+	// v0.5.52: mark dirty so the background flush goroutine knows to
+	// UPSERT this row into event_seen.
+	c.dirty = true
 }
 
 // appendRecent pushes an event into the bounded ring; oldest evicted when full.
@@ -445,7 +486,13 @@ func (h *Handler) processOne(ctx context.Context, ev Event, now time.Time, ignor
 	dec := ShouldCount(ev, ignore)
 	self := IsSelfUserAgent(ev.Request.UserAgent)
 
-	h.recordClient(ev.Request.UserAgent, now, dec.Count, self)
+	// v0.5.52: ignore-rule UAs and self (cairn-internal) UAs don't enter
+	// the per-UA aggregate. recordClient previously fired unconditionally
+	// — that polluted the "seen clients" panel with filtered / internal
+	// noise that operators would have to ignore manually.
+	if !dec.Ignored && !self {
+		h.recordClient(ev.Request.UserAgent, now, dec.Count)
+	}
 
 	recent := RecentEvent{
 		At:         now,
@@ -494,6 +541,72 @@ func (h *Handler) processOne(ctx context.Context, ev Event, now time.Time, ignor
 	return true
 }
 
+// flushSeen drains dirty client aggregates to SQLite. Lock window is
+// the row scan only — the SQL write happens unlocked so concurrent
+// recordClient calls are never blocked on disk I/O. A write failure
+// re-marks rows dirty so the next tick retries.
+//
+// v0.5.52: replaces the previous in-memory-only design so the "seen
+// clients" panel survives restarts.
+func (h *Handler) flushSeen(ctx context.Context) {
+	h.mu.Lock()
+	rows := make([]db.EventSeenRow, 0, len(h.clients))
+	for _, c := range h.clients {
+		if !c.dirty {
+			continue
+		}
+		rows = append(rows, db.EventSeenRow{
+			UserAgent:   c.UserAgent,
+			FirstSeenAt: c.FirstSeenAt,
+			LastSeenAt:  c.LastSeenAt,
+			Events:      c.Events,
+			Counted:     c.Counted,
+		})
+		c.dirty = false
+	}
+	h.mu.Unlock()
+
+	if len(rows) == 0 || h.Store == nil {
+		return
+	}
+	if err := h.Store.BatchUpsertEventSeen(ctx, rows); err != nil {
+		slog.Error("events: flush event_seen failed", "err", err, "rows", len(rows))
+		// Re-mark dirty so the next tick retries. Cheaper than a
+		// transaction-style retry queue for a workload this small.
+		h.mu.Lock()
+		for _, r := range rows {
+			if c, ok := h.clients[r.UserAgent]; ok {
+				c.dirty = true
+			}
+		}
+		h.mu.Unlock()
+	}
+}
+
+// RunFlushLoop ticks every interval until ctx is cancelled; one final
+// flush on shutdown. Spawned by server.go at startup; its goroutine
+// exits cleanly when the server's lifecycle ctx is cancelled.
+//
+// interval defaults to 5s (the volume of distinct UAs is small; we
+// don't need sub-second durability for a panel whose primary purpose
+// is "did any unknown client hit us yesterday").
+func (h *Handler) RunFlushLoop(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			h.flushSeen(context.Background())
+			return
+		case <-t.C:
+			h.flushSeen(ctx)
+		}
+	}
+}
+
 // SnapshotTotals returns the lifetime counters plus current ring occupancy.
 func (h *Handler) SnapshotTotals() Totals {
 	h.mu.Lock()
@@ -538,6 +651,20 @@ func SetBaseIgnoreUAs(cfg []string) []string {
 		}
 	}
 	return out
+}
+
+// ClearSeen empties the in-memory per-UA aggregate map. Companion to
+// db.PurgeAll — operators expect "clear heat data" to clear both the
+// calendar and the seen-clients panel in one click. The DB half is
+// handled by the api caller; we only own the in-memory hot cache.
+//
+// v0.5.52: the seen-clients panel can now actually be cleared (before
+// this, persistence didn't exist so there was nothing to clear; the
+// map reset was implicit on restart only).
+func (h *Handler) ClearSeen() {
+	h.mu.Lock()
+	h.clients = map[string]*clientAgg{}
+	h.mu.Unlock()
 }
 
 // --- tiny helpers: the webhook speaks plain JSON to the registry, NOT the

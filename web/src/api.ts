@@ -424,8 +424,12 @@ export const fetchRepositoryStats = (days: number) =>
 export const fetchStatsEvents = (limit = 50) =>
   request<StatsEvents>(`/api/stats/events?limit=${limit}`);
 
-/** 按客户端聚合的"见过的客户端"。`days=0` 表示不限（当前实现里由页面传时间窗）。 */
-export const fetchStatsClients = (days: number) =>
+/**
+ * 按客户端聚合的"见过的客户端"。
+ * v0.5.52+："all" 表示无时间过滤,返回 event_seen 里的全部行(重启不丢);
+ * 数字 N 表示只看最近 N 天内 LastSeenAt 的客户端。
+ */
+export const fetchStatsClients = (days: number | 'all') =>
   request<StatsClients>(`/api/stats/clients?days=${days}`);
 
 /**

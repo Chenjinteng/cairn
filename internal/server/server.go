@@ -263,6 +263,13 @@ func (r *Runtime) Start(ctx context.Context) error {
 	if r.DB != nil && r.Cfg != nil {
 		go r.retentionLoop(r.PullCtx)
 	}
+	// v0.5.52: flush dirty per-UA aggregates to event_seen every 5s.
+	// Without this, the "seen clients" panel only sees what arrived
+	// since the last restart. The goroutine exits when PullCtx is
+	// cancelled (Stop), doing one final flush on shutdown.
+	if r.Events != nil {
+		go r.Events.RunFlushLoop(r.PullCtx, 5*time.Second)
+	}
 	// v0.5.9: background proxy reachability loop. Probes each registered
 	// proxy every 60s so the management page can show live status without
 	// forcing operators to wait for a failed pull to find out the entry
@@ -294,11 +301,12 @@ func (r *Runtime) Start(ctx context.Context) error {
 	return nil
 }
 
-// retentionLoop prunes activity_daily rows older than the runtime
-// stats.retention.days setting. It runs once shortly after startup (so a
-// restart applies the current value) and then every 24h. The setting is
-// re-read on each pass, so changing it on the settings page takes effect on
-// the next pass without a restart.
+// retentionLoop prunes activity_daily + event_seen rows older than the
+// runtime stats.retention.days setting (v0.5.52: event_seen joined the
+// same retention horizon — both tables share cutoff). Runs once shortly
+// after startup (so a restart applies the current value) and then every
+// 24h. The setting is re-read on each pass, so changing it on the
+// settings page takes effect on the next pass without a restart.
 //
 // The DB call gets its own short-lived context: using r.PullCtx directly
 // would turn a normal shutdown into a scary "cleanup failed" warning.
