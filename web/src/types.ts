@@ -543,7 +543,9 @@ export interface StatsClientItem {
 }
 
 export interface StatsClients {
-  days: number;
+  /** "all" (v0.5.52+) = no time filter, every persisted client;
+   *  number = limit to LastSeenAt within the last N days. */
+  days: number | 'all';
   items: StatsClientItem[];
 }
 

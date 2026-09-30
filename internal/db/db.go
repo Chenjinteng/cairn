@@ -25,7 +25,7 @@ import (
 
 // SCHEMA_VERSION is bumped together with new migrations.
 // Bump rule: +1 per migration; never reuse a number; never delete a migration.
-const SCHEMA_VERSION = 3
+const SCHEMA_VERSION = 4
 
 // Db is the SQLite wrapper. All exported methods are safe for concurrent use.
 type Db struct {
@@ -161,6 +161,22 @@ var migrations = map[int]string{
 		value      TEXT NOT NULL,
 		updated_at INTEGER NOT NULL        -- unix seconds
 	) WITHOUT ROWID;
+	`,
+	4: `
+	-- v0.5.52: persist per-UA aggregates across restarts.
+	-- Source of truth for the "seen clients" panel (stats page). The
+	-- in-memory h.clients map in internal/events is just a hot cache
+	-- loaded at startup and flushed every 5s.
+	-- Self (cairn-internal) and ignore-rule UAs are filtered upstream by
+	-- events.recordClient — they never reach this table.
+	CREATE TABLE IF NOT EXISTS event_seen (
+		useragent     TEXT PRIMARY KEY,
+		first_seen_at TEXT NOT NULL,       -- RFC3339 UTC
+		last_seen_at  TEXT NOT NULL,       -- RFC3339 UTC, used by retention cleanup
+		events        INTEGER NOT NULL DEFAULT 0,
+		counted       INTEGER NOT NULL DEFAULT 0
+	) WITHOUT ROWID;
+	CREATE INDEX IF NOT EXISTS event_seen_last_seen ON event_seen(last_seen_at DESC);
 	`,
 }
 
@@ -330,7 +346,11 @@ func (d *Db) GetSeries(ctx context.Context, since time.Time, limit int) ([]Activ
 	return out, rows.Err()
 }
 
-// RetentionCleanup deletes activity older than cutoff (days). Idempotent.
+// RetentionCleanup deletes activity + seen-client aggregates older than
+// cutoff (days). Idempotent. Both tables share the same retention
+// horizon (cfg.StatsRetentionDays()) so the "seen clients" panel never
+// outlives the heat data it was derived from. Returns total rows removed
+// across both tables.
 func (d *Db) RetentionCleanup(ctx context.Context, cutoff time.Time) (int64, error) {
 	res, err := d.conn.ExecContext(ctx, `
 		DELETE FROM activity_daily WHERE day < ?
@@ -338,20 +358,130 @@ func (d *Db) RetentionCleanup(ctx context.Context, cutoff time.Time) (int64, err
 	if err != nil {
 		return 0, err
 	}
-	return res.RowsAffected()
-}
-
-// PurgeAll deletes every heat row (settings page "clear heat data").
-// Idempotent; returns the number of activity_daily rows removed.
-//
-// There is no event_seen table in this schema (dedup lives in the events
-// ring buffer), so the API layer reports seen=0 alongside this count.
-func (d *Db) PurgeAll(ctx context.Context) (int64, error) {
-	res, err := d.conn.ExecContext(ctx, `DELETE FROM activity_daily`)
+	n1, err := res.RowsAffected()
 	if err != nil {
 		return 0, err
 	}
-	return res.RowsAffected()
+
+	res2, err := d.conn.ExecContext(ctx, `
+		DELETE FROM event_seen WHERE last_seen_at < ?
+	`, cutoff.UTC().Format(time.RFC3339))
+	if err != nil {
+		return n1, err
+	}
+	n2, err := res2.RowsAffected()
+	if err != nil {
+		return n1, err
+	}
+	return n1 + n2, nil
+}
+
+// PurgeAll deletes every heat row + every seen-client row (settings
+// page "clear heat data"). Idempotent. Returns separate counts so the
+// UI can report what was cleared (activity rows vs seen-client rows
+// aren't the same kind of data and operators want both numbers).
+func (d *Db) PurgeAll(ctx context.Context) (activity, seen int64, err error) {
+	res, err := d.conn.ExecContext(ctx, `DELETE FROM activity_daily`)
+	if err != nil {
+		return 0, 0, err
+	}
+	activity, err = res.RowsAffected()
+	if err != nil {
+		return 0, 0, err
+	}
+
+	res2, err := d.conn.ExecContext(ctx, `DELETE FROM event_seen`)
+	if err != nil {
+		return activity, 0, err
+	}
+	seen, err = res2.RowsAffected()
+	if err != nil {
+		return activity, seen, err
+	}
+	return activity, seen, nil
+}
+
+// EventSeenRow is one row from event_seen (per-UA aggregate). It mirrors
+// internal/events.clientAgg's persisted shape.
+type EventSeenRow struct {
+	UserAgent   string
+	FirstSeenAt time.Time
+	LastSeenAt  time.Time
+	Events      int64
+	Counted     int64
+}
+
+// LoadAllEventSeen returns every persisted client aggregate. Used by
+// events.NewHandler at startup to populate the in-memory hot cache so
+// the "seen clients" panel survives restarts.
+func (d *Db) LoadAllEventSeen(ctx context.Context) ([]EventSeenRow, error) {
+	rows, err := d.conn.QueryContext(ctx, `
+		SELECT useragent, first_seen_at, last_seen_at, events, counted
+		FROM event_seen
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []EventSeenRow
+	for rows.Next() {
+		var r EventSeenRow
+		var first, last string
+		if err := rows.Scan(&r.UserAgent, &first, &last, &r.Events, &r.Counted); err != nil {
+			return nil, err
+		}
+		r.FirstSeenAt, _ = time.Parse(time.RFC3339, first)
+		r.LastSeenAt, _ = time.Parse(time.RFC3339, last)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// BatchUpsertEventSeen writes (or replaces) multiple event_seen rows in
+// one transaction. events / counted are absolute values tracked by the
+// caller from startup load onward; SQL uses ON CONFLICT to overwrite,
+// not accumulate — keeps the math simple and avoids the "flush window
+// double-count" trap.
+//
+// Self and ignore-rule UAs are filtered by events.recordClient upstream
+// and never reach here.
+func (d *Db) BatchUpsertEventSeen(ctx context.Context, rows []EventSeenRow) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	tx, err := d.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var sb strings.Builder
+	sb.WriteString(`INSERT INTO event_seen (useragent, first_seen_at, last_seen_at, events, counted) VALUES `)
+	args := make([]any, 0, len(rows)*5)
+	for i, r := range rows {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString("(?, ?, ?, ?, ?)")
+		args = append(args,
+			r.UserAgent,
+			r.FirstSeenAt.UTC().Format(time.RFC3339),
+			r.LastSeenAt.UTC().Format(time.RFC3339),
+			r.Events,
+			r.Counted,
+		)
+	}
+	sb.WriteString(` ON CONFLICT(useragent) DO UPDATE SET
+		first_seen_at = excluded.first_seen_at,
+		last_seen_at  = excluded.last_seen_at,
+		events        = excluded.events,
+		counted       = excluded.counted`)
+
+	if _, err := tx.ExecContext(ctx, sb.String(), args...); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // GetFirstDay returns the earliest day present in activity_daily, or ""

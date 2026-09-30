@@ -192,3 +192,112 @@ func TestNewHandler_EmptyIgnore(t *testing.T) {
 	// touch httptest so the import isn't flagged in code-rotation.
 	_ = httptest.NewRecorder
 }
+
+// ──────────────────────────────────────────────────────────────────────
+// v0.5.52: event_seen persistence tests
+//
+// The "seen clients" panel previously lived only in h.clients (memory,
+// reset on restart). These tests pin the new behaviour:
+//   - startup loads persisted rows
+//   - flushSeen writes dirty rows
+//   - ignore-rule UAs and self UAs never reach event_seen
+// ──────────────────────────────────────────────────────────────────────
+
+// eventSeenCount is a tiny helper for the v0.5.52 tests: returns the
+// row count of event_seen via the only API the package exposes for
+// bulk reads (LoadAllEventSeen).
+func eventSeenCount(t *testing.T, d *db.Db) int {
+	t.Helper()
+	rows, err := d.LoadAllEventSeen(context.Background())
+	if err != nil {
+		t.Fatalf("LoadAllEventSeen: %v", err)
+	}
+	return len(rows)
+}
+
+// LoadersPersistedSeen asserts the "seen clients" panel survives
+// restarts: a row written directly via BatchUpsertEventSeen must
+// appear in SnapshotClients() right after NewHandler, before any
+// request has been observed.
+func TestNewHandler_LoadsPersistedSeen(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "heat.db"))
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer d.Close()
+	now := time.Now().UTC()
+	if err := d.BatchUpsertEventSeen(context.Background(), []db.EventSeenRow{
+		{UserAgent: "kubelet/v1.30", LastSeenAt: now, FirstSeenAt: now, Events: 5, Counted: 5},
+	}); err != nil {
+		t.Fatalf("BatchUpsertEventSeen: %v", err)
+	}
+
+	h := NewHandler(d, "", nil, 50)
+	stats := h.SnapshotClients()
+	if len(stats) != 1 {
+		t.Fatalf("SnapshotClients returned %d rows, want 1", len(stats))
+	}
+	if stats[0].UserAgent != "kubelet/v1.30" || stats[0].Events != 5 {
+		t.Errorf("loaded stat mismatch: %+v", stats[0])
+	}
+}
+
+// FlushSeenPersists asserts dirty per-UA aggregates survive a simulated
+// restart: recordClient marks dirty, flushSeen writes to SQLite, a fresh
+// NewHandler on the same DB loads them back. This is the load-bearing
+// property of the whole 0.5.52 change.
+func TestFlushSeen_Persists(t *testing.T) {
+	h, d := newTestHandler(t, nil, true)
+	// Two events from the same UA → non-trivial count.
+	if !h.IngestLocal(localEvent("library/alpine", "3.19", "containerd/v1.7", "HEAD")) {
+		t.Fatalf("first IngestLocal returned false")
+	}
+	if !h.IngestLocal(localEvent("library/alpine", "3.19", "containerd/v1.7", "HEAD")) {
+		t.Fatalf("second IngestLocal returned false")
+	}
+
+	// Synchronous flush (no goroutine timing in tests).
+	h.flushSeen(context.Background())
+	if n := eventSeenCount(t, d); n != 1 {
+		t.Fatalf("event_seen rows after flush = %d, want 1", n)
+	}
+
+	// Simulate restart: fresh handler on the same DB.
+	h2 := NewHandler(d, "", nil, 50)
+	stats := h2.SnapshotClients()
+	if len(stats) != 1 {
+		t.Fatalf("after restart: %d rows, want 1", len(stats))
+	}
+	if stats[0].Events != 2 {
+		t.Errorf("after restart: events = %d, want 2", stats[0].Events)
+	}
+}
+
+// IgnoreUANotPersisted asserts ignored UAs never reach event_seen. They
+// get folded by ShouldCount upstream of recordClient, so the dirty map
+// never even sees them — saving a write that would just be filtered at
+// read time anyway.
+func TestIgnoreUA_NotPersisted(t *testing.T) {
+	h, d := newTestHandler(t, []string{"kubelet"}, true)
+	// Ignore UA → IngestLocal returns false (dec.Count=false), but we
+	// don't gate the test on that; we only care about post-flush state.
+	h.IngestLocal(localEvent("library/alpine", "3.19", "kubelet/v1.30", "HEAD"))
+	h.flushSeen(context.Background())
+	if n := eventSeenCount(t, d); n != 0 {
+		t.Fatalf("event_seen rows for ignored UA = %d, want 0", n)
+	}
+}
+
+// SelfUANotPersisted asserts cairn-internal UAs (prefix "cairn/") never
+// reach event_seen. They're folded by processOne — the operator-visible
+// "seen clients" panel should never include the server's own requests.
+func TestSelfUA_NotPersisted(t *testing.T) {
+	h, d := newTestHandler(t, nil, true)
+	if !h.IngestLocal(localEvent("library/alpine", "3.19", "cairn/0.5.52", "HEAD")) {
+		t.Fatalf("IngestLocal returned false")
+	}
+	h.flushSeen(context.Background())
+	if n := eventSeenCount(t, d); n != 0 {
+		t.Fatalf("event_seen rows for self UA = %d, want 0", n)
+	}
+}

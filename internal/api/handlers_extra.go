@@ -1481,35 +1481,73 @@ func (e *ExtraHandlers) StatsEvents(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// StatsClients returns the per-UA aggregate.
+// ?days=all (default since v0.5.52) returns every row event_seen holds;
+// ?days=N (a positive integer) limits to LastSeenAt within the last N
+// days, matching the same window used by StatsSummary/Top/Series so the
+// three panels stay visually aligned.
+//
+// v0.5.52: the days filter is now optional because event_seen survives
+// restarts and the panel's primary purpose is "did anything unknown hit
+// us yesterday/last week/last month". The all-time view is the default.
 func (e *ExtraHandlers) StatsClients(w http.ResponseWriter, r *http.Request) {
-	days := parseDays(r, 7)
-	since := daysSince(days)
+	daysQ := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("days")))
+
+	var (
+		daysOut       any
+		since         time.Time
+		filterBySince bool
+	)
+	switch {
+	case daysQ == "" || daysQ == "all":
+		daysOut = "all"
+		// filterBySince stays false
+	case true:
+		n, err := strconv.Atoi(daysQ)
+		if err != nil || n <= 0 {
+			// Bad input: fall back to "all" instead of 400ing.
+			daysOut = "all"
+			break
+		}
+		daysOut = n
+		since = daysSince(n)
+		filterBySince = true
+	}
+
 	items := []any{}
 	if e.Events != nil {
 		for _, c := range e.Events.SnapshotClients() {
-			if c.LastSeenAt.Before(since) {
+			if filterBySince && c.LastSeenAt.Before(since) {
 				continue
 			}
 			items = append(items, c) // ClientStat json tags already match the UI
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"days": days, "items": items})
+	writeJSON(w, http.StatusOK, map[string]any{"days": daysOut, "items": items})
 }
 
-// StatsHeatDelete purges ALL derived heat data (activity_daily rows).
-// UI shape: {activity, seen}. There is no event_seen table in v0.4.0, so
-// seen is always 0.
+// StatsHeatDelete purges ALL derived heat data (activity_daily rows +
+// event_seen rows). UI shape: {activity, seen}.
+//
+// v0.5.52: event_seen joined the purge so the "clear heat data" button
+// clears both the calendar AND the seen-clients panel. seen used to be
+// hardcoded 0 because there was no event_seen table; now it reports the
+// actual rows removed, and we also drop the in-memory h.clients cache so
+// the UI doesn't keep showing stale rows until the next restart.
 func (e *ExtraHandlers) StatsHeatDelete(w http.ResponseWriter, r *http.Request) {
-	var activity int64
+	var activity, seen int64
 	if e.DB != nil {
-		n, err := e.DB.PurgeAll(r.Context())
+		a, s, err := e.DB.PurgeAll(r.Context())
 		if err != nil {
 			writeError(w, r, http.StatusInternalServerError, err)
 			return
 		}
-		activity = n
+		activity, seen = a, s
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"activity": activity, "seen": 0})
+	if e.Events != nil {
+		e.Events.ClearSeen()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"activity": activity, "seen": seen})
 }
 
 // --- Ignore rules -----------------------------------------------------------
