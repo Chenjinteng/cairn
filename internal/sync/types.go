@@ -14,6 +14,7 @@ package sync
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -241,6 +242,8 @@ var (
 	ErrRunNotFound          = errors.New("sync: run not found")
 	ErrTaskNameConflict     = errors.New("sync: task name already exists")
 	ErrInvalidURL           = errors.New("sync: invalid remote URL (need scheme + host)")
+	ErrInvalidCron          = errors.New("sync: invalid cron expression (need 5 fields: min hour dom mon dow)")
+	ErrInvalidTimezone      = errors.New("sync: invalid IANA timezone (time.LoadLocation failed)")
 )
 
 // ErrTaskDisabled is returned by Engine.Start when the task's Enabled
@@ -252,3 +255,53 @@ var ErrTaskDisabled = errors.New("sync: task is disabled")
 // second "run now" click — including one after a page refresh — fails
 // loudly instead of racing the first run (SYNC-4).
 var ErrTaskRunning = errors.New("sync: task is already running")
+
+// Schedule is one cron firing rule attached to a SyncTask. v0.6.11.
+//
+// The scheduler loop (internal/sync/scheduler.go) scans the table for
+// enabled rows whose NextRunAt <= now() every 30s and calls Engine.Start
+// for the task. Engine.Start is the same entry the HTTP handler uses,
+// so every guarantee v0.6.8 SYNC-1/4 added (TryLock, detached ctx,
+// recover) applies identically to scheduled runs.
+//
+// CronExpr is a 5-field standard expression (minute hour dom month dow)
+// with vanilla *, -, /, , syntax — no Quartz extensions (?, L, W, #).
+// Timezone is an IANA name; empty string means "local time at fire
+// site" (the same rule Engine runs under).
+type Schedule struct {
+	ID         int64      `json:"id"`
+	TaskID     int64      `json:"taskId"`
+	CronExpr   string     `json:"cronExpr"`
+	Timezone   string     `json:"timezone,omitempty"` // "" = local
+	Enabled    bool       `json:"enabled"`
+	NextRunAt  time.Time  `json:"nextRunAt"`
+	LastRunAt  *time.Time `json:"lastRunAt,omitempty"`
+	LastRunID  *int64     `json:"lastRunId,omitempty"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	UpdatedAt  time.Time  `json:"updatedAt"`
+}
+
+// Validate parses CronExpr, checks the Timezone loads, and populates
+// NextRunAt so the caller can persist a sane future timestamp in one
+// transaction. Empty CronExpr returns ErrInvalidCron; invalid syntax
+// bubbles up the same error wrapped with field-level context.
+//
+// "now" is injected so tests can pin time. Pass time.Now().UTC() in
+// production. NextRunAt is returned in UTC regardless of Timezone —
+// the scheduler compares against the DB clock which is also UTC.
+func (s *Schedule) Validate(now time.Time) error {
+	if _, err := ParseCron(s.CronExpr); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidCron, err)
+	}
+	if s.Timezone != "" {
+		if _, err := time.LoadLocation(s.Timezone); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidTimezone, err)
+		}
+	}
+	next, err := NextAfter(s.CronExpr, s.Timezone, now)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidCron, err)
+	}
+	s.NextRunAt = next.UTC()
+	return nil
+}

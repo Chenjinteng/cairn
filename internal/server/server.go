@@ -39,8 +39,12 @@ type Runtime struct {
 	Store      storage.Storage
 	Executor   *pull.Executor
 	Events     *events.Handler
-	PullCtx    context.Context
-	PullCancel context.CancelFunc
+	// syncScheduler (v0.6.11) fires cron schedules for sync tasks. nil
+	// when sync is disabled (allowedDelete branch). Lifecycle piggy-backs
+	// on PullCtx like the other loops above.
+	syncScheduler *sync.Scheduler
+	PullCtx       context.Context
+	PullCancel    context.CancelFunc
 }
 
 // Build wires the full dependency graph.
@@ -180,6 +184,7 @@ func Build(cfg *config.Config) (*Runtime, error) {
 	// pull-side writes; remote reads/writes go through internal/registry.Client
 	// and internal/sync.Writer respectively.
 	var syncHandlers *api.SyncHandlers
+	var syncScheduler *sync.Scheduler // v0.6.11: cron scheduler (only set when DB is up)
 	if store_db != nil {
 		syncStore := sync.NewStore(store_db)
 		// v0.6.8 (SYNC-1): close the books on runs that were in flight when
@@ -203,6 +208,7 @@ func Build(cfg *config.Config) (*Runtime, error) {
 			Vault:  vault,
 			Log:    slog.Default(),
 		}
+		syncScheduler = sync.NewScheduler(syncStore, syncEngine, slog.Default())
 	}
 
 	// 8. Admin handlers (browse/delete talk to local storage; pull uses external client).
@@ -275,16 +281,17 @@ func Build(cfg *config.Config) (*Runtime, error) {
 	pullCtx, pullCancel := context.WithCancel(context.Background())
 
 	return &Runtime{
-		HTTP:       srv,
-		Cfg:        cfg,
-		DB:         store_db,
-		Vault:      vault,
-		Proxies:    proxyStore,
-		Store:      store,
-		Executor:   executor,
-		Events:     eventsHandler,
-		PullCtx:    pullCtx,
-		PullCancel: pullCancel,
+		HTTP:          srv,
+		Cfg:           cfg,
+		DB:            store_db,
+		Vault:         vault,
+		Proxies:       proxyStore,
+		Store:         store,
+		Executor:      executor,
+		Events:        eventsHandler,
+		syncScheduler: syncScheduler,
+		PullCtx:       pullCtx,
+		PullCancel:    pullCancel,
 	}, nil
 }
 
@@ -318,6 +325,12 @@ func (r *Runtime) Start(ctx context.Context) error {
 			}
 			r.Proxies.StartProbeLoop(r.PullCtx, 60*time.Second)
 		}()
+	}
+	// v0.6.11: cron scheduler for sync tasks. Same lifecycle pattern as
+	// the other background goroutines — piggy-backs on r.PullCtx so
+	// Stop() shuts everything down in one cancel.
+	if r.syncScheduler != nil {
+		go r.syncScheduler.Run(r.PullCtx)
 	}
 
 	errCh := make(chan error, 1)

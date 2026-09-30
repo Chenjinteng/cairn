@@ -71,6 +71,25 @@ type SyncRunRow struct {
 	CurrentTag  string
 }
 
+// SyncScheduleRow is the SQL-side view of one sync_schedules row
+// (v0.6.11). Times are Unix seconds (UTC); bools are 0/1. The DB never
+// validates the cron expression or timezone — that's domain-level
+// (sync.Schedule.Validate). NextRunAt is populated by Validate() and
+// after every fire, so a freshly-created row always has a sane future
+// timestamp.
+type SyncScheduleRow struct {
+	ID         int64
+	TaskID     int64
+	CronExpr   string
+	Timezone   string // "" = UTC
+	Enabled    bool
+	NextRunAt  time.Time
+	LastRunAt  *time.Time
+	LastRunID  *int64
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
 // SyncTaskCreate inserts a new task and returns the assigned ID. UNIQUE
 // constraint violations (name conflict) bubble up as raw SQLite errors;
 // the handler layer matches on the error message and translates to 409.
@@ -333,4 +352,179 @@ func (d *Db) SyncRunMarkRunningFailed(ctx context.Context, finishedAt time.Time,
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+// SyncScheduleCreate inserts one schedule. Caller is responsible for
+// validating CronExpr / Timezone and populating NextRunAt. Returns
+// the assigned id; sets r.ID in place would be a future nicety but
+// store.ScheduleCreate handles ID assignment instead.
+func (d *Db) SyncScheduleCreate(ctx context.Context, r SyncScheduleRow) (int64, error) {
+	enabled := 0
+	if r.Enabled {
+		enabled = 1
+	}
+	var lastRunAt *int64
+	if r.LastRunAt != nil {
+		v := r.LastRunAt.Unix()
+		lastRunAt = &v
+	}
+	res, err := d.conn.ExecContext(ctx, `
+		INSERT INTO sync_schedules(task_id, cron_expr, timezone, enabled, next_run_at, last_run_at, last_run_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, r.TaskID, r.CronExpr, r.Timezone, enabled, r.NextRunAt.Unix(), lastRunAt, r.LastRunID, r.CreatedAt.Unix(), r.UpdatedAt.Unix())
+	if err != nil {
+		return 0, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+// SyncScheduleUpdate replaces cron_expr / timezone / enabled / next_run_at
+// / last_run_at / last_run_id on the row identified by id. updated_at
+// is overwritten to time.Now().UTC() by the caller.
+func (d *Db) SyncScheduleUpdate(ctx context.Context, r SyncScheduleRow) error {
+	enabled := 0
+	if r.Enabled {
+		enabled = 1
+	}
+	var lastRunAt *int64
+	if r.LastRunAt != nil {
+		v := r.LastRunAt.Unix()
+		lastRunAt = &v
+	}
+	res, err := d.conn.ExecContext(ctx, `
+		UPDATE sync_schedules SET cron_expr=?, timezone=?, enabled=?, next_run_at=?, last_run_at=?, last_run_id=?, updated_at=?
+		WHERE id=?
+	`, r.CronExpr, r.Timezone, enabled, r.NextRunAt.Unix(), lastRunAt, r.LastRunID, r.UpdatedAt.Unix(), r.ID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// SyncScheduleDelete removes a schedule. Returns sql.ErrNoRows when
+// id doesn't exist (the store layer translates this to ErrScheduleNotFound).
+func (d *Db) SyncScheduleDelete(ctx context.Context, id int64) error {
+	res, err := d.conn.ExecContext(ctx, `DELETE FROM sync_schedules WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// SyncScheduleListByTask returns schedules for a task, ordered by id
+// (effectively creation order). limit <= 0 means no limit. The UI
+// passes 50 by convention; schedules per task should stay small.
+func (d *Db) SyncScheduleListByTask(ctx context.Context, taskID int64, limit int) ([]SyncScheduleRow, error) {
+	query := `
+		SELECT id, task_id, cron_expr, timezone, enabled, next_run_at, last_run_at, last_run_id, created_at, updated_at
+		FROM sync_schedules WHERE task_id = ? ORDER BY id ASC
+	`
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if limit > 0 {
+		rows, err = d.conn.QueryContext(ctx, query+` LIMIT ?`, taskID, limit)
+	} else {
+		rows, err = d.conn.QueryContext(ctx, query, taskID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SyncScheduleRow
+	for rows.Next() {
+		var r SyncScheduleRow
+		var enabled int
+		var nextRunAt int64
+		var lastRunAt, lastRunID sql.NullInt64
+		var createdAt, updatedAt int64
+		if err := rows.Scan(&r.ID, &r.TaskID, &r.CronExpr, &r.Timezone, &enabled, &nextRunAt, &lastRunAt, &lastRunID, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		r.Enabled = enabled != 0
+		r.NextRunAt = time.Unix(nextRunAt, 0).UTC()
+		if lastRunAt.Valid {
+			t := time.Unix(lastRunAt.Int64, 0).UTC()
+			r.LastRunAt = &t
+		}
+		if lastRunID.Valid {
+			id := lastRunID.Int64
+			r.LastRunID = &id
+		}
+		r.CreatedAt = time.Unix(createdAt, 0).UTC()
+		r.UpdatedAt = time.Unix(updatedAt, 0).UTC()
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// SyncScheduleListDue returns every enabled schedule whose next_run_at
+// <= now. The scheduler loop calls this every 30s and processes the
+// returned batch. Ordering is by next_run_at ASC so the most overdue
+// schedule fires first (mostly moot since each schedule has its own
+// task; ordering matters only when many schedules hit the same wall
+// clock minute).
+func (d *Db) SyncScheduleListDue(ctx context.Context, now time.Time, limit int) ([]SyncScheduleRow, error) {
+	query := `
+		SELECT id, task_id, cron_expr, timezone, enabled, next_run_at, last_run_at, last_run_id, created_at, updated_at
+		FROM sync_schedules WHERE enabled = 1 AND next_run_at <= ?
+		ORDER BY next_run_at ASC
+	`
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if limit > 0 {
+		rows, err = d.conn.QueryContext(ctx, query+` LIMIT ?`, now.Unix(), limit)
+	} else {
+		rows, err = d.conn.QueryContext(ctx, query, now.Unix())
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SyncScheduleRow
+	for rows.Next() {
+		var r SyncScheduleRow
+		var enabled int
+		var nextRunAt int64
+		var lastRunAt, lastRunID sql.NullInt64
+		var createdAt, updatedAt int64
+		if err := rows.Scan(&r.ID, &r.TaskID, &r.CronExpr, &r.Timezone, &enabled, &nextRunAt, &lastRunAt, &lastRunID, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		r.Enabled = enabled != 0
+		r.NextRunAt = time.Unix(nextRunAt, 0).UTC()
+		if lastRunAt.Valid {
+			t := time.Unix(lastRunAt.Int64, 0).UTC()
+			r.LastRunAt = &t
+		}
+		if lastRunID.Valid {
+			id := lastRunID.Int64
+			r.LastRunID = &id
+		}
+		r.CreatedAt = time.Unix(createdAt, 0).UTC()
+		r.UpdatedAt = time.Unix(updatedAt, 0).UTC()
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }

@@ -226,9 +226,9 @@ func TestMigrateV6ToV7PreservesLegacyInlineTask(t *testing.T) {
 		d.Close()
 		t.Fatalf("user_version: %v", err)
 	}
-	if v != 8 {
+	if v != 9 {
 		d.Close()
-		t.Fatalf("user_version after upgrade = %d, want 8 (v6 → v7+v8 migrations run in one Open)", v)
+		t.Fatalf("user_version after upgrade = %d, want 9 (v6 → v7+v8+v9 migrations run in one Open)", v)
 	}
 
 	var (
@@ -263,8 +263,8 @@ func TestMigrateV6ToV7PreservesLegacyInlineTask(t *testing.T) {
 	if err := d2.conn.QueryRow("PRAGMA user_version").Scan(&v); err != nil {
 		t.Fatalf("user_version after reopen: %v", err)
 	}
-	if v != 8 {
-		t.Fatalf("user_version after reopen = %d, want 8", v)
+	if v != 9 {
+		t.Fatalf("user_version after reopen = %d, want 9", v)
 	}
 	if _, ok := tableColumns(t, d2.conn, "sync_tasks")["remote_credential_id"]; !ok {
 		t.Fatal("remote_credential_id missing after reopen")
@@ -285,9 +285,9 @@ func TestMigrateV7ToV8PreservesLegacyRun(t *testing.T) {
 		d.Close()
 		t.Fatalf("user_version: %v", err)
 	}
-	if v != 8 {
+	if v != 9 {
 		d.Close()
-		t.Fatalf("user_version after upgrade = %d, want 8", v)
+		t.Fatalf("user_version after upgrade = %d, want 9", v)
 	}
 
 	// New columns present + readable.
@@ -339,8 +339,8 @@ func TestMigrateV7ToV8PreservesLegacyRun(t *testing.T) {
 	if err := d2.conn.QueryRow("PRAGMA user_version").Scan(&v); err != nil {
 		t.Fatalf("user_version after reopen: %v", err)
 	}
-	if v != 8 {
-		t.Fatalf("user_version after reopen = %d, want 8", v)
+	if v != 9 {
+		t.Fatalf("user_version after reopen = %d, want 9", v)
 	}
 	if _, ok := tableColumns(t, d2.conn, "sync_runs")["current_repo"]; !ok {
 		t.Fatal("current_repo missing after reopen")

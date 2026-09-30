@@ -30,6 +30,8 @@ import type {
   StatsTopBy,
   SyncProbeResult,
   SyncRun,
+  SyncSchedule,
+  SyncScheduleInput,
   SyncTask,
   SyncTaskInput,
   SyncTestInput,
@@ -506,7 +508,7 @@ export const deleteSyncTask = (id: number) =>
   request<void>(`/api/sync/${id}`, { method: 'DELETE' });
 
 /**
- * 立即同步一次。v0.6.10（SYNC-1）起是异步触发：
+ * 立即同步一次。v0.6.11（SYNC-1）起是异步触发：
  *   202 ACCEPTED     — 已受理，body 是刚建的 running run，执行在后台跑
  *   400 BAD_REQUEST  — 任务被禁用 / direction 非法
  *   404 NOT_FOUND    — 任务不存在
@@ -528,10 +530,38 @@ export const listSyncRuns = (id: number, limit = 50) =>
   request<SyncRun[]>(`/api/sync/${id}/runs?limit=${limit}`);
 
 /**
+ * v0.6.11: 列出 / 新建 / 更新 / 删除某任务的定时规则。
+ * 后端通过 Engine 异步执行 (TryLock 保证不重复触发)。
+ */
+export const listSyncSchedules = (taskId: number) =>
+  request<SyncSchedule[]>(`/api/sync/${taskId}/schedules/`);
+
+export const createSyncSchedule = (taskId: number, input: SyncScheduleInput) =>
+  request<SyncSchedule>(`/api/sync/${taskId}/schedules/`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+
+export const updateSyncSchedule = (
+  taskId: number,
+  scheduleId: number,
+  input: SyncScheduleInput,
+) =>
+  request<SyncSchedule>(`/api/sync/${taskId}/schedules/${scheduleId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
+
+export const deleteSyncSchedule = (taskId: number, scheduleId: number) =>
+  request<unknown>(`/api/sync/${taskId}/schedules/${scheduleId}`, {
+    method: 'DELETE',
+  });
+
+/**
  * v0.6.5: 「测试连接」按钮 — 不需先 Save 任务,
  * 直接用当前表单里的 remoteUrl + 凭据探测对端。
  *
- * v0.6.10（SYNC-3）：凭据两种给法——`remoteCredentialId` 非空 = 后端从凭据
+ * v0.6.11（SYNC-3）：凭据两种给法——`remoteCredentialId` 非空 = 后端从凭据
  * 库按 id 解析（测试保存过的凭据无需重输 secret）；否则用内联
  * remoteUsername / remotePassword。两者互斥，引用非空时内联忽略。
  *

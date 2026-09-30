@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -277,4 +278,144 @@ func rowToRun(r db.SyncRunRow) SyncRun {
 // string has been stable since the migration was introduced.
 func isUniqueNameConflict(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed: sync_tasks.name")
+}
+
+// ErrScheduleNotFound is returned by store.ScheduleGet / ScheduleDelete
+// when the id doesn't exist. Handlers translate to 404.
+var ErrScheduleNotFound = errors.New("sync: schedule not found")
+
+// --- schedule CRUD (v0.6.11) ---------------------------------------------
+
+// rowToSchedule converts a SyncScheduleRow to the domain Schedule.
+func rowToSchedule(r db.SyncScheduleRow) Schedule {
+	return Schedule{
+		ID:        r.ID,
+		TaskID:    r.TaskID,
+		CronExpr:  r.CronExpr,
+		Timezone:  r.Timezone,
+		Enabled:   r.Enabled,
+		NextRunAt: r.NextRunAt,
+		LastRunAt: r.LastRunAt,
+		LastRunID: r.LastRunID,
+		CreatedAt: r.CreatedAt,
+		UpdatedAt: r.UpdatedAt,
+	}
+}
+
+// scheduleToRow converts a domain Schedule to a SyncScheduleRow.
+func scheduleToRow(s Schedule) db.SyncScheduleRow {
+	return db.SyncScheduleRow{
+		ID:        s.ID,
+		TaskID:    s.TaskID,
+		CronExpr:  s.CronExpr,
+		Timezone:  s.Timezone,
+		Enabled:   s.Enabled,
+		NextRunAt: s.NextRunAt,
+		LastRunAt: s.LastRunAt,
+		LastRunID: s.LastRunID,
+		CreatedAt: s.CreatedAt,
+		UpdatedAt: s.UpdatedAt,
+	}
+}
+
+// ScheduleCreate validates the schedule and inserts a new row. Caller
+// must have set TaskID; ID / CreatedAt / UpdatedAt are filled in place.
+// Validation errors (bad cron / bad timezone / empty cron) return the
+// same sentinel errors as Schedule.Validate so handlers can errors.Is
+// without unwrapping.
+func (s *Store) ScheduleCreate(ctx context.Context, sched *Schedule) error {
+	now := time.Now().UTC()
+	if err := sched.Validate(now); err != nil {
+		return err
+	}
+	sched.CreatedAt = now
+	sched.UpdatedAt = now
+	id, err := s.db.SyncScheduleCreate(ctx, scheduleToRow(*sched))
+	if err != nil {
+		return err
+	}
+	sched.ID = id
+	return nil
+}
+
+// ScheduleUpdate re-validates the schedule (caller may have changed
+// CronExpr / Timezone / Enabled), refreshes NextRunAt, and updates the
+// row. updated_at is bumped to now.
+func (s *Store) ScheduleUpdate(ctx context.Context, sched *Schedule) error {
+	now := time.Now().UTC()
+	if err := sched.Validate(now); err != nil {
+		return err
+	}
+	sched.UpdatedAt = now
+	err := s.db.SyncScheduleUpdate(ctx, scheduleToRow(*sched))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrScheduleNotFound
+		}
+		return err
+	}
+	return nil
+}
+
+// ScheduleDelete removes a schedule by id. Returns ErrScheduleNotFound
+// when the id doesn't exist. The task itself is unaffected — schedules
+// are independent of the task lifecycle (vs. cascade-delete on
+// task_id at the FK level which fires only when the task is dropped).
+func (s *Store) ScheduleDelete(ctx context.Context, id int64) error {
+	err := s.db.SyncScheduleDelete(ctx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrScheduleNotFound
+	}
+	return err
+}
+
+// ScheduleListByTask returns every schedule for a task, oldest first.
+// Used by the UI's drawer Tab. limit <= 0 means no limit.
+func (s *Store) ScheduleListByTask(ctx context.Context, taskID int64, limit int) ([]Schedule, error) {
+	rows, err := s.db.SyncScheduleListByTask(ctx, taskID, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Schedule, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, rowToSchedule(r))
+	}
+	return out, nil
+}
+
+// ScheduleListDue returns every enabled schedule whose next_run_at <=
+// now. Called by the scheduler loop every 30s. Returns at most `limit`
+// rows; the loop processes them and the next tick catches the rest.
+func (s *Store) ScheduleListDue(ctx context.Context, now time.Time, limit int) ([]Schedule, error) {
+	rows, err := s.db.SyncScheduleListDue(ctx, now, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Schedule, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, rowToSchedule(r))
+	}
+	return out, nil
+}
+
+// ScheduleUpdateAfterFire is called by the scheduler right after firing
+// a run: stamps last_run_at / last_run_id and recomputes next_run_at
+// so the loop won't fire again until the next cron boundary. Failures
+// are logged by the scheduler (progress-style: NOT fatal; a missed
+// stamp just means the next tick may re-fire on the same minute — the
+// per-task TryLock makes that a no-op).
+func (s *Store) ScheduleUpdateAfterFire(ctx context.Context, sched *Schedule, lastRunID int64) error {
+	now := time.Now().UTC()
+	sched.LastRunAt = &now
+	sched.LastRunID = &lastRunID
+	sched.UpdatedAt = now
+	next, err := NextAfter(sched.CronExpr, sched.Timezone, now)
+	if err != nil {
+		// Should not happen — we validated on create / update. If it does,
+		// leave the old NextRunAt in place and let the operator fix the
+		// cron expression.
+		return fmt.Errorf("recompute next_run_at: %w", err)
+	}
+	sched.NextRunAt = next.UTC()
+	return s.db.SyncScheduleUpdate(ctx, scheduleToRow(*sched))
 }

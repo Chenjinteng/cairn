@@ -6,6 +6,40 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.6.11] - 2026-09-30
+
+### 新增
+
+- **同步任务定时调度**。每个 sync 任务可挂多条 cron 规则,后台单 ticker 每 30s 扫一次 `sync_schedules`,到期调 `Engine.Start(task)`。
+  - 后端:
+    - `schema v9` 新表 `sync_schedules(id, task_id, cron_expr, timezone, enabled, next_run_at, last_run_at, last_run_id, created_at, updated_at)`,`enabled` 部分索引加速到期扫描。
+    - `internal/sync/cron.go` 自实现 5 字段 cron 解析(标准 `*` `,` `-` `/` 语法,无 Quartz 扩展),`NextAfter()` 计算下次触发时间。空 timezone = UTC(显式而非本地时区,避免容器默认时区漂移导致触发时间错位)。
+    - `internal/sync/scheduler.go` 单 ticker 循环:`ScheduleListDue` 拉到期 schedule → `Engine.Start` 触发 → `ScheduleUpdateAfterFire` 写 last_run_at/next_run_at。**复用 v0.6.8 SYNC-1/4 的 TryLock + detached ctx + recover**,所以定时触发跟「立即运行」一样安全。
+    - 4 个新 API:`GET/POST/PATCH/DELETE /api/sync/{id}/schedules`。cron / timezone 由 `sync.Schedule.Validate` 校验,失败返 400。
+  - 前端:
+    - 同步任务「操作」列加「定时」按钮 → 弹 Modal 列出该任务的全部 schedules。
+    - 单行编辑器: cron 表达式 / 时区 / 启用开关;「新建」按钮折叠在表格下方。
+    - 错误本地化:后端 400(InvalidCron / InvalidTimezone)→ message.error 显示。
+
+### 数据库
+
+- `migrate` v8 → v9:`CREATE TABLE sync_schedules` + 部分索引;`user_version` 自动从 8 升到 9。
+- 新建 DB 走 v1..v9 全套 migration;旧 DB (v8) 升级路径只跑 v9 这一段。
+- `sync_tasks` 删除时 `sync_schedules` 由 FK CASCADE 一并清掉(同 sync_runs)。
+
+### 兼容性
+
+- 新增 4 个 API 端点,旧前端继续工作,只是 UI 没有「定时」按钮。
+- `sync_tasks.lastRunStatus` / `lastRunCurrentRepo` / `lastRunCurrentTag` 未变;UI 现有轮询逻辑继续生效。
+
+### 用户须知
+
+- 默认 timezone 是 **UTC**(不是服务器本地时区)。容器默认时区可能漂移,显式 UTC 避免触发时间不可预期。要在 Asia/Shanghai 等地触发,在 schedule 表单填时区字段。
+- 5 字段标准 cron(`分 时 日 月 周`),不支持 Quartz 扩展(`?` `L` `W` `#`)。
+- 时间粒度 = **1 分钟**(NextAfter 按分钟迭代);秒级 schedule 不支持。
+
+---
+
 ## [0.6.10] - 2026-09-30
 
 ### 变更

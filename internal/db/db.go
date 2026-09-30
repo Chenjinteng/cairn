@@ -25,7 +25,7 @@ import (
 
 // SCHEMA_VERSION is bumped together with new migrations.
 // Bump rule: +1 per migration; never reuse a number; never delete a migration.
-const SCHEMA_VERSION = 8
+const SCHEMA_VERSION = 9
 
 // Db is the SQLite wrapper. All exported methods are safe for concurrent use.
 type Db struct {
@@ -300,6 +300,35 @@ var migrations = map[int]string{
 	-- not on a specific repo at any given moment when not running).
 	ALTER TABLE sync_runs ADD COLUMN current_repo TEXT NOT NULL DEFAULT '';
 	ALTER TABLE sync_runs ADD COLUMN current_tag  TEXT NOT NULL DEFAULT '';
+	`,
+	9: `
+	-- v0.6.11: per-task cron scheduling. Single ticker in the scheduler
+	-- (internal/sync/scheduler.go) scans enabled schedules whose
+	-- next_run_at <= now() every 30s and fires Engine.Start(task).
+	-- ON DELETE CASCADE on task_id mirrors sync_runs: deleting a task
+	-- tears down its schedules + runs in one transaction.
+	--
+	-- timezone is stored as an IANA name (e.g. "Asia/Shanghai", "" = local).
+	-- Empty string is intentional: Validate() rejects non-empty values
+	-- that fail time.LoadLocation, so "" is the safe default at the schema
+	-- layer. next_run_at is recomputed by Validate() and after every fire,
+	-- so a freshly created row always has a sane future timestamp.
+	CREATE TABLE sync_schedules (
+		id            INTEGER PRIMARY KEY,
+		task_id       INTEGER NOT NULL,
+		cron_expr     TEXT    NOT NULL DEFAULT '',
+		timezone      TEXT    NOT NULL DEFAULT '',
+		enabled       INTEGER NOT NULL DEFAULT 1,
+		next_run_at   INTEGER NOT NULL DEFAULT 0,
+		last_run_at   INTEGER,
+		last_run_id   INTEGER,
+		created_at    INTEGER NOT NULL DEFAULT 0,
+		updated_at    INTEGER NOT NULL DEFAULT 0,
+		FOREIGN KEY(task_id) REFERENCES sync_tasks(id) ON DELETE CASCADE
+	);
+	CREATE INDEX IF NOT EXISTS sync_schedules_due
+		ON sync_schedules(enabled, next_run_at)
+		WHERE enabled = 1;
 	`,
 }
 

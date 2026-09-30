@@ -61,6 +61,12 @@ func (s *SyncHandlers) RegisterRoutes(r chi.Router) {
 		r.Post("/{id}/run", s.RunTask)
 		r.Get("/{id}/runs", s.ListRuns)
 		r.Post("/test", s.TestConnection)
+		r.Route("/{id}/schedules", func(r chi.Router) {
+			r.Get("/", s.ListSchedules)
+			r.Post("/", s.CreateSchedule)
+			r.Patch("/{sid}", s.UpdateSchedule)
+			r.Delete("/{sid}", s.DeleteSchedule)
+		})
 	})
 }
 
@@ -397,4 +403,173 @@ func (s *SyncHandlers) TestConnection(w http.ResponseWriter, r *http.Request) {
 
 	result := sync.ProbeConnection(r.Context(), in.RemoteURL, username, password)
 	writeJSON(w, http.StatusOK, result)
+}
+
+// SyncScheduleInput is the JSON shape POST/PATCH /api/sync/{id}/schedules
+// accepts. Mirrors sync.Schedule minus server-managed fields (ID,
+// TaskID, NextRunAt, LastRunAt, LastRunID, CreatedAt, UpdatedAt) — the
+// server fills those based on the request + cron evaluation.
+//
+// Timezone is optional and defaults to UTC when omitted (empty
+// string). CronExpr is required; Validate rejects empty.
+type SyncScheduleInput struct {
+	CronExpr string `json:"cronExpr"`
+	Timezone string `json:"timezone,omitempty"`
+	Enabled  *bool  `json:"enabled,omitempty"` // pointer so PATCH can omit
+}
+
+// ListSchedules — GET /api/sync/{id}/schedules
+//
+// Returns every schedule for the task, oldest first. 404 when the task
+// itself doesn't exist (the store would happily return [] otherwise,
+// which masks typos in the URL).
+func (s *SyncHandlers) ListSchedules(w http.ResponseWriter, r *http.Request) {
+	taskID, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	if _, err := s.Store.GetTask(r.Context(), taskID); err != nil {
+		writeError(w, r, http.StatusNotFound, err)
+		return
+	}
+	schedules, err := s.Store.ScheduleListByTask(r.Context(), taskID, 100)
+	if err != nil {
+		writeError(w, r, http.StatusInternalServerError, err)
+		return
+	}
+	if schedules == nil {
+		schedules = []sync.Schedule{}
+	}
+	writeJSON(w, http.StatusOK, schedules)
+}
+
+// CreateSchedule — POST /api/sync/{id}/schedules
+//
+// Validates the cron expression and timezone via sync.Schedule.Validate
+// and persists. Returns 400 for invalid cron / timezone; 404 for
+// unknown task; 201 + the created schedule.
+func (s *SyncHandlers) CreateSchedule(w http.ResponseWriter, r *http.Request) {
+	taskID, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	if _, err := s.Store.GetTask(r.Context(), taskID); err != nil {
+		writeError(w, r, http.StatusNotFound, err)
+		return
+	}
+	var input SyncScheduleInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, err)
+		return
+	}
+	enabled := true
+	if input.Enabled != nil {
+		enabled = *input.Enabled
+	}
+	sched := &sync.Schedule{
+		TaskID:   taskID,
+		CronExpr: input.CronExpr,
+		Timezone: input.Timezone,
+		Enabled:  enabled,
+	}
+	if err := s.Store.ScheduleCreate(r.Context(), sched); err != nil {
+		if errors.Is(err, sync.ErrInvalidCron) || errors.Is(err, sync.ErrInvalidTimezone) {
+			writeError(w, r, http.StatusBadRequest, err)
+			return
+		}
+		writeError(w, r, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, *sched)
+}
+
+// UpdateSchedule — PATCH /api/sync/{id}/schedules/{sid}
+//
+// Merges the partial input onto the existing schedule, re-validates,
+// and updates NextRunAt. Same error mapping as create.
+func (s *SyncHandlers) UpdateSchedule(w http.ResponseWriter, r *http.Request) {
+	taskID, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	scheduleID, err := strconv.ParseInt(chi.URLParam(r, "sid"), 10, 64)
+	if err != nil || scheduleID <= 0 {
+		writeError(w, r, http.StatusBadRequest, fmt.Errorf("sid must be a positive integer"))
+		return
+	}
+	var input SyncScheduleInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, r, http.StatusBadRequest, err)
+		return
+	}
+	// Read existing so a partial patch keeps unset fields.
+	existing, err := s.Store.ScheduleListByTask(r.Context(), taskID, 0)
+	if err != nil {
+		writeError(w, r, http.StatusInternalServerError, err)
+		return
+	}
+	var current *sync.Schedule
+	for i := range existing {
+		if existing[i].ID == scheduleID {
+			current = &existing[i]
+			break
+		}
+	}
+	if current == nil {
+		writeError(w, r, http.StatusNotFound, sync.ErrScheduleNotFound)
+		return
+	}
+	if input.CronExpr != "" {
+		current.CronExpr = input.CronExpr
+	}
+	if input.Timezone != "" || (input.CronExpr != "" && current.Timezone != "") {
+		// explicit timezone wins; if cron changed but timezone omitted,
+		// keep what was there
+		if input.Timezone != "" {
+			current.Timezone = input.Timezone
+		}
+	}
+	if input.Enabled != nil {
+		current.Enabled = *input.Enabled
+	}
+	if err := s.Store.ScheduleUpdate(r.Context(), current); err != nil {
+		if errors.Is(err, sync.ErrInvalidCron) || errors.Is(err, sync.ErrInvalidTimezone) {
+			writeError(w, r, http.StatusBadRequest, err)
+			return
+		}
+		if errors.Is(err, sync.ErrScheduleNotFound) {
+			writeError(w, r, http.StatusNotFound, err)
+			return
+		}
+		writeError(w, r, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, *current)
+}
+
+// DeleteSchedule — DELETE /api/sync/{id}/schedules/{sid}\//
+// 404 when the schedule doesn't exist on this task; 204 on success.
+func (s *SyncHandlers) DeleteSchedule(w http.ResponseWriter, r *http.Request) {
+	scheduleID, err := strconv.ParseInt(chi.URLParam(r, "sid"), 10, 64)
+	if err != nil || scheduleID <= 0 {
+		writeError(w, r, http.StatusBadRequest, fmt.Errorf("sid must be a positive integer"))
+		return
+	}
+	// task_id in the URL is decorative — schedule id is globally unique,
+	// and the store's delete-by-id handles the FK guarantee. We still
+	// require a valid {id} path param so the URL shape is REST-correct.
+	if _, ok := parseID(w, r); !ok {
+		return
+	}
+	if err := s.Store.ScheduleDelete(r.Context(), scheduleID); err != nil {
+		if errors.Is(err, sync.ErrScheduleNotFound) {
+			writeError(w, r, http.StatusNotFound, err)
+			return
+		}
+		writeError(w, r, http.StatusInternalServerError, err)
+		return
+	}
+	// (task_id match is implicit: schedules live under one task; if the
+	// id doesn't belong to taskID, the row was simply not found above.)
+	w.WriteHeader(http.StatusNoContent)
 }
