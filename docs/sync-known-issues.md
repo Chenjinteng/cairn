@@ -185,3 +185,20 @@ blob GET / tags list 全部 `context canceled` → per-repo continue-on-error �
 - **SYNC-1 原建议的 `requestSlow(120s)` 未采用**：异步模型下该请求毫秒级返回，不需要长预算。
 - **SYNC-3 未做「保存时凭据存在性校验」**：只在「测试连接」与**执行期**解析；
   执行期解析失败 → run 落 `failed`（Start 仍 202）。避免「凭据还没建好就存不了任务」。
+
+---
+
+## 后续回归新增（`0.6.11` · 2026-09-30）
+
+本节只做**索引**，正文在 `docs/issues/`，避免双份维护。
+
+| 条目 | 严重度 | 一句话 | 正文 |
+| --- | --- | --- | --- |
+| MA-5 | High | `DELETE /api/sync/{id}` 与 `DELETE /api/sync/{id}/schedules/{sid}` 返回 **204 空 body**，与仓内其余删除端点（200 + JSON 信封）不一致；前端 `request()` 对空 body 走 `JSON.parse('')` → 抛 `INVALID_RESPONSE`，UI 把**成功**渲染成「删除失败：服务返回了非 JSON 响应（HTTP 204）」 | [`issues/management-api.md`](issues/management-api.md) |
+| MA-6 | Low | `GET /api/sync/{id}/runs` 对**不存在的任务**返回 200 + `[]`（兄弟端点 `/schedules` 已有 `GetTask` 守卫并 404），掩盖 URL 里的 id 笔误 | [`issues/management-api.md`](issues/management-api.md) |
+
+总览表与复现环境速查见 [`issues/README.md`](issues/README.md)。
+
+**SYNC-1 ~ SYNC-4 在 `0.6.11` 上未观察到回退**：本轮（2026-09-30）经 API 层与 UI 层实测，
+异步受理 202 + running run、`TryLock` 409、`lastRunStatus` 置灰轮询、启动 sweep 四项行为均按
+`0.6.8` 落地方式工作；`include` 过滤、cron 自动点火、破坏性删除后同步恢复亦通过。
