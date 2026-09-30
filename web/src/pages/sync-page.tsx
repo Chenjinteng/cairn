@@ -610,62 +610,76 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
     {
       title: '操作',
       key: 'actions',
-      width: 280,
+      width: 200,
       render: (_, task) => {
         /** v0.6.11（SYNC-1/4）：后台还在跑 → 按钮置灰,防重复发起（后端 409 兜底）。 */
         const running = task.lastRunStatus === 'running';
+        /*
+         * 五个动作全改成纯图标 + Tooltip:
+         *   - 删除文字标签后,280px 列宽可以压到 200px,不再被「运行」「编辑」等字撑爆
+         *   - 删除按钮仍走 Popconfirm 二段确认（高危动作不能一健下去）
+         *   - v0.6.10 SYNC-4 的「disabled 包 <span>」技巧对运行按钮仍需要
+         */
         return (
-        <Space size={4}>
-          <Tooltip
-            title={
-              running
-                ? '该任务正在后台同步中，跑完才能再次发起'
-                : '立即运行（异步受理，后台执行）'
-            }
-          >
-            {/*
-              v0.6.11（SYNC-4）：disabled 的 Button 自身不派发 mouseenter,Tooltip 会失效——
-              必须包一层 <span>,「为什么点不了」才显示得出来。
-            */}
-            <span>
+          <Space size={0}>
+            <Tooltip title={running ? '正在同步中，跑完才能再次发起' : '立即运行（异步受理）'}>
+              <span>
+                <Button
+                  size="small"
+                  type="text"
+                  icon={<PlayCircleOutlined />}
+                  loading={runningId === task.id}
+                  disabled={running}
+                  onClick={() => void handleRun(task)}
+                  aria-label="运行"
+                />
+              </span>
+            </Tooltip>
+            <Tooltip title="编辑任务">
               <Button
                 size="small"
                 type="text"
-                icon={<PlayCircleOutlined />}
-                loading={runningId === task.id}
-                disabled={running}
-                onClick={() => void handleRun(task)}
-              >
-                运行
-              </Button>
-            </span>
-          </Tooltip>
-          <Button size="small" type="text" icon={<EditOutlined />} onClick={() => openEdit(task)}>
-            编辑
-          </Button>
-          <Button
-            size="small"
-            type="text"
-            icon={<CalendarOutlined />}
-            onClick={() => void openSchedules(task)}
-          >
-            定时
-          </Button>
-          <Button size="small" type="text" icon={<HistoryOutlined />} onClick={() => void openHistory(task)}>
-            历史
-          </Button>
-          <Popconfirm
-            title={`删除任务 "${task.name}"？`}
-            okText="删 除"
-            okButtonProps={{ danger: true }}
-            cancelText="取 消"
-            onConfirm={() => handleDelete(task)}
-          >
-            <Button size="small" type="text" danger icon={<DeleteOutlined />}>
-              删除
-            </Button>
-          </Popconfirm>
-        </Space>
+                icon={<EditOutlined />}
+                onClick={() => openEdit(task)}
+                aria-label="编辑"
+              />
+            </Tooltip>
+            <Tooltip title="定时规则">
+              <Button
+                size="small"
+                type="text"
+                icon={<CalendarOutlined />}
+                onClick={() => void openSchedules(task)}
+                aria-label="定时"
+              />
+            </Tooltip>
+            <Tooltip title="运行历史">
+              <Button
+                size="small"
+                type="text"
+                icon={<HistoryOutlined />}
+                onClick={() => void openHistory(task)}
+                aria-label="历史"
+              />
+            </Tooltip>
+            <Popconfirm
+              title={`删除任务 "${task.name}"？`}
+              okText="删 除"
+              okButtonProps={{ danger: true }}
+              cancelText="取 消"
+              onConfirm={() => handleDelete(task)}
+            >
+              <Tooltip title="删除任务">
+                <Button
+                  size="small"
+                  type="text"
+                  danger
+                  icon={<DeleteOutlined />}
+                  aria-label="删除"
+                />
+              </Tooltip>
+            </Popconfirm>
+          </Space>
         );
       },
     },
