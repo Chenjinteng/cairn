@@ -37,6 +37,10 @@
 号位 0.6.0 由人指定，不随顺延改号（2026-09-28 由同步议题替换原 TLS 议题）。
 **TLS 证书管理** 不在本轮做；其触发条件与决策归档仍见 `AGENTS.md`「HTTPS / TLS 证书管理」节，待真正需求落地再排下一号位。
 
+> **UAT 已知问题**：0.6.x 上线后实测反馈的 4 个同步缺陷 / 改进项（运行超时中止但部分成功、
+> context canceled 日志、凭据应引用凭据库、运行中刷新页面可重复发起）记录在
+> [`docs/sync-known-issues.md`](./sync-known-issues.md)，含根因分析与修复优先级，修复时引用 SYNC-1 ~ SYNC-4 编号。
+
 ### 背景
 
 - 用户当前用 [regsync](https://github.com/regsync/regsync) 在两个独立 registry 间做同步，希望把这一能力内建进 cairn，作为产品能力而不是外部依赖。
