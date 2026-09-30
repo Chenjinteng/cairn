@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -11,18 +12,24 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/Chenjinteng/cairn/internal/credentials"
 	"github.com/Chenjinteng/cairn/internal/sync"
 )
 
 // SyncHandlers wires the registry-sync REST endpoints onto the API
 // surface. One instance per process; constructed in server.go with the
-// live *sync.Store + *sync.Engine. RegisterRoutes mounts the routes
-// at /api/sync relative to the /api group; the parent callsite in
-// handlers_extra.go is responsible for invoking it (so this file stays
-// the single source of truth for sync API shape).
+// live *sync.Store + *sync.Engine + the credential vault. RegisterRoutes
+// mounts the routes at /api/sync relative to the /api group; the parent
+// callsite in handlers_extra.go is responsible for invoking it (so this
+// file stays the single source of truth for sync API shape).
+//
+// Vault may be nil when REGISTRY_CREDENTIAL_KEY is unset (the vault is
+// optional at boot). Endpoints that must resolve a credential reference
+// then fail with 503 instead of pretending the reference is usable.
 type SyncHandlers struct {
 	Store  *sync.Store
 	Engine *sync.Engine
+	Vault  *credentials.Vault
 	Log    *slog.Logger
 }
 
@@ -34,16 +41,16 @@ type SyncHandlers struct {
 //	GET    /sync                  — list tasks
 //	POST   /sync                  — create task
 //	GET    /sync/{id}             — fetch one task
-//	PATCH  /sync/{id}             — update task (password field is optional;
-//	                                empty == keep current password; both empty
-//	                                == set to anonymous)
+//	PATCH  /sync/{id}             — update task (three-state credential
+//	                                merge; see UpdateTask)
 //	DELETE /sync/{id}             — delete task (cascades runs)
-//	POST   /sync/{id}/run         — trigger a sync run; blocks until done
+//	POST   /sync/{id}/run         — start a run; 202 + the running run,
+//	                                409 while another run is in flight
 //	GET    /sync/{id}/runs        — list recent runs (newest first,
 //	                                default limit 50)
 //	POST   /sync/test             — probe remote reachability + auth posture;
-//	                                powers the new-task form's "测试连接"
-//	                                button. Does NOT require a saved task.
+//	                                powers the form's "测试连接" button.
+//	                                Does NOT require a saved task.
 func (s *SyncHandlers) RegisterRoutes(r chi.Router) {
 	r.Route("/sync", func(r chi.Router) {
 		r.Get("/", s.ListTasks)
@@ -59,9 +66,13 @@ func (s *SyncHandlers) RegisterRoutes(r chi.Router) {
 
 // ListTasks — GET /api/sync
 //
-// Returns every task, newest first. The bearer token field is
-// stripped from the JSON response via the json:"-" tag on
-// SyncTask.RemoteToken (see internal/sync/types.go).
+// Returns every task, newest first. Secrets never leave the process:
+// SyncTask marshals RemotePassword as json:"-" (see internal/sync/types.go).
+//
+// Each row also carries lastRunStatus — filled by the store from the newest
+// sync_runs row via a correlated subquery — so the UI can keep the run
+// button disabled across page refreshes while a run is still in flight
+// (v0.7.0 SYNC-4).
 func (s *SyncHandlers) ListTasks(w http.ResponseWriter, r *http.Request) {
 	tasks, err := s.Store.ListTasks(r.Context())
 	if err != nil {
@@ -76,14 +87,18 @@ func (s *SyncHandlers) ListTasks(w http.ResponseWriter, r *http.Request) {
 
 // CreateTask — POST /api/sync
 //
-// Body shape: SyncTaskInput (json with all fields). The bearer token
-// is required here (the operator pasting it from the destination
-// cairn's settings page). On success, returns the created task with
-// assigned ID + timestamps.
+// Body shape: SyncTaskInput. Auth is one of three mutually exclusive
+// shapes, enforced by SyncTask.Validate: a credential reference
+// (remoteCredentialId), inline username+password, or anonymous.
 //
 // 201 Created          — task persisted
 // 400 BAD_REQUEST      — body invalid JSON or fails SyncTask.Validate
 // 409 CONFLICT         — name already exists
+//
+// A dangling credential reference is NOT rejected here: references are
+// resolved at run time (engine.resolveCredentials), so a task can be saved
+// ahead of its credential and the failure surfaces on the run that needed
+// it.
 func (s *SyncHandlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 	var in sync.SyncTaskInput
 	if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&in); err != nil {
@@ -126,10 +141,19 @@ func (s *SyncHandlers) GetTask(w http.ResponseWriter, r *http.Request) {
 
 // UpdateTask — PATCH /api/sync/{id}
 //
-// Body shape: SyncTaskInput. Token field is OPTIONAL — empty in the
-// request means "keep the stored token". This avoids forcing operators
-// to retype the token on every other-field edit (which would also be
-// a UX problem: the UI never has it on screen in the first place).
+// Body shape: SyncTaskInput. The credential fields are merged as a
+// three-state switch BEFORE validation (v0.7.0 SYNC-3):
+//
+//	remoteCredentialId != ""       → reference mode; inline fields cleared
+//	username or password supplied  → inline mode; a blank password keeps the
+//	                                 stored one (the UI never has it on
+//	                                 screen), a blank username is rejected
+//	                                 by Validate if no password is stored
+//	everything blank               → anonymous mode; all auth cleared
+//
+// The merge keeps pre-0.7.0 clients working unchanged — they only ever send
+// inline fields and already rely on "blank password == keep" — while giving
+// the new UI one field to flip between modes.
 //
 // 200 OK               — task updated
 // 400 BAD_REQUEST      — JSON invalid or Validate() fails
@@ -156,19 +180,26 @@ func (s *SyncHandlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Apply patch. Password: keep stored value unless input explicitly
-	// supplies a new one (lets UI edit other fields via a partial PUT
-	// that doesn't carry the secret). Username is always overwritten —
-	// it's not sensitive, the UI has it on screen already, and treating
-	// "blank username == keep current" would mean a username-less input
-	// silently leaves a stale value.
-	if in.RemotePassword != "" {
-		existing.RemotePassword = in.RemotePassword
+	switch {
+	case strings.TrimSpace(in.RemoteCredentialID) != "":
+		existing.RemoteCredentialID = strings.TrimSpace(in.RemoteCredentialID)
+		existing.RemoteUsername = ""
+		existing.RemotePassword = ""
+	case in.RemoteUsername != "" || in.RemotePassword != "":
+		existing.RemoteCredentialID = ""
+		existing.RemoteUsername = in.RemoteUsername
+		if in.RemotePassword != "" {
+			existing.RemotePassword = in.RemotePassword
+		}
+	default:
+		existing.RemoteCredentialID = ""
+		existing.RemoteUsername = ""
+		existing.RemotePassword = ""
 	}
+
 	existing.Name = in.Name
 	existing.Direction = in.Direction
 	existing.RemoteURL = in.RemoteURL
-	existing.RemoteUsername = in.RemoteUsername
 	existing.Include = in.Include
 	existing.Enabled = in.Enabled
 
@@ -213,18 +244,20 @@ func (s *SyncHandlers) DeleteTask(w http.ResponseWriter, r *http.Request) {
 
 // RunTask — POST /api/sync/{id}/run
 //
-// Blocks until done — v0.6.0 has no async/scheduler, and UI flow is
-// "click Run → spinner → see result inline". v0.6.1+ adds cron, at which
-// point this should switch to 202 + a poll URL.
+// Starts a run and returns immediately (202 Accepted) with the freshly
+// created run row, status "running". Execution continues on the engine's
+// own goroutine over a detached context, so the run is no longer tied to
+// the HTTP request's lifetime. That is the v0.7.0 SYNC-1 fix: the UI's 10s
+// client-side budget used to cancel the run mid-flight (the "运行失败：
+// 请求超时（10 秒）已中止" toast) and leave a zombie 'running' row behind.
+// Observe the outcome by polling GET /api/sync (lastRunStatus) or
+// GET /api/sync/{id}/runs.
 //
-// HTTP status reflects the run outcome:
-//   200 OK               — run.Status ∈ {success, partial}
-//   502 BAD_GATEWAY      — run.Status == failed (upstream unreachable,
-//                         auth denied, etc. — the remote was the
-//                         problem, not us)
-//
-// Per-repo failures don't bubble up as a non-2xx; they're reflected
-// in the response body's run.Status / run.ReposFailed.
+//	202 ACCEPTED         — run started; body is the running SyncRun
+//	400 BAD_REQUEST      — task disabled, or unknown direction
+//	404 NOT_FOUND        — id doesn't exist
+//	409 CONFLICT         — a run for this task is already in flight
+//	500 INTERNAL         — couldn't book the run (DB error)
 func (s *SyncHandlers) RunTask(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseID(w, r)
 	if !ok {
@@ -240,19 +273,22 @@ func (s *SyncHandlers) RunTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	run, _ := s.Engine.Run(r.Context(), task)
-
-	switch run.Status {
-	case sync.RunSuccess, sync.RunPartial:
-		writeJSON(w, http.StatusOK, run)
-	case sync.RunFailed:
-		writeJSON(w, http.StatusBadGateway, run)
-	default:
-		// RunRunning shouldn't reach here (Engine.Run always sets a
-		// terminal status), but fall through to 200 rather than 500
-		// for a status we don't recognize.
-		writeJSON(w, http.StatusOK, run)
+	run, err := s.Engine.Start(r.Context(), task)
+	if err != nil {
+		switch {
+		case errors.Is(err, sync.ErrTaskRunning):
+			writeError(w, r, http.StatusConflict, err)
+		case errors.Is(err, sync.ErrTaskDisabled), errors.Is(err, sync.ErrInvalidDirection):
+			writeError(w, r, http.StatusBadRequest, err)
+		default:
+			if s.Log != nil {
+				s.Log.Error("sync: start run failed", "task_id", id, "err", err)
+			}
+			writeError(w, r, http.StatusInternalServerError, err)
+		}
+		return
 	}
+	writeJSON(w, http.StatusAccepted, run)
 }
 
 // ListRuns — GET /api/sync/{id}/runs?limit=50
@@ -295,30 +331,39 @@ func parseID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	return id, true
 }
 
-// SyncTestInput is the JSON shape for POST /api/sync/test. Just the
-// fields needed to probe — name / direction / include are irrelevant
-// for a reachability check.
+// SyncTestInput is the JSON shape for POST /api/sync/test. Just the fields
+// needed to probe — name / direction / include are irrelevant for a
+// reachability check. Auth mirrors SyncTaskInput: either a credential
+// reference (resolved here, so the form can test a saved credential without
+// retyping its secret) or inline username/password.
 type SyncTestInput struct {
-	RemoteURL      string `json:"remoteUrl"`
-	RemoteUsername string `json:"remoteUsername"`
-	RemotePassword string `json:"remotePassword"`
+	RemoteURL          string `json:"remoteUrl"`
+	RemoteCredentialID string `json:"remoteCredentialId"`
+	RemoteUsername     string `json:"remoteUsername"`
+	RemotePassword     string `json:"remotePassword"`
 }
 
 // TestConnection — POST /api/sync/test
 //
-// Powers the "测试连接" button on the new-sync-task form. Does NOT
-// require a saved task — takes the same remote fields the user is
-// currently typing and pings `{remoteUrl}/v2/` with the configured
-// (or no) Basic auth, returning a structured result the UI renders
-// as an inline Alert.
+// Powers the "测试连接" button on the sync-task form. Does NOT require a
+// saved task — takes the remote fields the user is currently editing and
+// pings `{remoteUrl}/v2/` with the resolved Basic auth, returning a
+// structured result the UI renders as an inline Alert.
 //
-// This is purely a smoke test; it doesn't validate Include patterns,
-// doesn't pre-fetch _catalog, and doesn't reserve any DB state.
+// When remoteCredentialId is set, the credential is resolved through the
+// vault first, so testing a reference exercises the same lookup path a run
+// would (v0.7.0 SYNC-3); inline fields are ignored in that case, matching
+// Validate's mutual exclusion.
 //
-// Returns 200 OK with a sync.ProbeResult body. Even a "failed" probe
-// (wrong creds, 404, unreachable) is still HTTP 200 — the result is
-// in the JSON body's AuthStatus field. Only genuine handler-level
-// errors (decode failure, body too large) return non-2xx.
+// Every probe outcome is HTTP 200 with a sync.ProbeResult body — wrong
+// creds / 404 / unreachable all land in the body's AuthStatus field.
+// Non-2xx only for handler-level problems:
+//
+//	400 BAD_REQUEST         — decode failure, missing remoteUrl, or an
+//	                          unknown credential id
+//	503 SERVICE_UNAVAILABLE — a reference was given but no vault is
+//	                          configured (REGISTRY_CREDENTIAL_KEY unset)
+//	500 INTERNAL            — other vault error
 func (s *SyncHandlers) TestConnection(w http.ResponseWriter, r *http.Request) {
 	var in SyncTestInput
 	if err := json.NewDecoder(io.LimitReader(r.Body, 8<<10)).Decode(&in); err != nil {
@@ -329,6 +374,27 @@ func (s *SyncHandlers) TestConnection(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, errors.New("remoteUrl is required"))
 		return
 	}
-	result := sync.ProbeConnection(r.Context(), in.RemoteURL, in.RemoteUsername, in.RemotePassword)
+
+	username, password := in.RemoteUsername, in.RemotePassword
+	if ref := strings.TrimSpace(in.RemoteCredentialID); ref != "" {
+		if s.Vault == nil {
+			writeError(w, r, http.StatusServiceUnavailable,
+				errors.New("credential library unavailable: REGISTRY_CREDENTIAL_KEY is not set"))
+			return
+		}
+		cred, err := s.Vault.Get(ref)
+		if err != nil {
+			if errors.Is(err, credentials.ErrNotFound) {
+				writeError(w, r, http.StatusBadRequest,
+					fmt.Errorf("%w (id=%s)", sync.ErrCredentialNotFound, ref))
+				return
+			}
+			writeError(w, r, http.StatusInternalServerError, err)
+			return
+		}
+		username, password = cred.Username, cred.Password
+	}
+
+	result := sync.ProbeConnection(r.Context(), in.RemoteURL, username, password)
 	writeJSON(w, http.StatusOK, result)
 }

@@ -509,12 +509,17 @@ export const deleteSyncTask = (id: number) =>
   request<void>(`/api/sync/${id}`, { method: 'DELETE' });
 
 /**
- * 立即同步一次。同步执行：
- *   200 OK          — 成功或部分成功（看 body.run.status）
- *   502 BAD_GATEWAY  — 失败（远端不可达 / token 错误 / 整体异常）
+ * 立即同步一次。v0.7.0（SYNC-1）起是异步触发：
+ *   202 ACCEPTED     — 已受理，body 是刚建的 running run，执行在后台跑
+ *   400 BAD_REQUEST  — 任务被禁用 / direction 非法
+ *   404 NOT_FOUND    — 任务不存在
+ *   409 CONFLICT     — 该任务已在运行中（后端 per-task 锁拒绝重复发起）
+ *   500 INTERNAL     — 建 run 落库失败
  *
- * v0.6.0 是阻塞调用——前端按钮触发后等结果。v0.6.1+ 加 cron 后会改为
- * 立即返 202 + poll URL,届时需要新增 `getSyncRun(id, runId)` 方法。
+ * v0.6.0~v0.6.7 曾是阻塞调用：前端等整轮返回，10s 客户端预算会把长同步
+ * 拦腰中止（"请求超时（10 秒）已中止"）且留下僵尸 running 行——SYNC-1。
+ * 现在返回值只是受理凭证，终态要看运行历史或列表的 lastRunStatus（前端
+ * 在检测到 running 时轮询刷新）。
  */
 export const runSyncTask = (id: number) =>
   request<SyncRun>(`/api/sync/${id}/run`, { method: 'POST' });
@@ -527,19 +532,22 @@ export const listSyncRuns = (id: number, limit = 50) =>
 
 /**
  * v0.6.5: 「测试连接」按钮 — 不需先 Save 任务,
- * 直接用当前表单里的 remoteUrl / 远端用户名 / 远端密码探测对端。
+ * 直接用当前表单里的 remoteUrl + 凭据探测对端。
  *
- * 永远返 200,结果在 body 的 reachable + authStatus + httpStatus +
- * message 字段(见 types.ts SyncProbeResult)。后端根据 HTTP 状态
- * + WWW-Authenticate 头归类,前端按 authStatus 选 Alert type/icon。
+ * v0.7.0（SYNC-3）：凭据两种给法——`remoteCredentialId` 非空 = 后端从凭据
+ * 库按 id 解析（测试保存过的凭据无需重输 secret）；否则用内联
+ * remoteUsername / remotePassword。两者互斥，引用非空时内联忽略。
+ *
+ * 探测结果本身永远返 200（见 types.ts SyncProbeResult）。非 2xx 只代表
+ * handler 层问题:
+ *   400 BAD_REQUEST         — 缺 remoteUrl / 凭据 id 不存在
+ *   503 SERVICE_UNAVAILABLE — 给了引用但凭据库不可用（没配密钥）
+ *   500 INTERNAL            — 其他凭据库错误
  *
  * 与 save / run 区别:
- *   save: 走 Validate 链,要求字段语义完整;
- *        校验失败返 4xx。
- *   run : 真正拉/推镜像,要 SyncTask 已存;
- *        失败返 502 + run.status=。
- *   test: 纯连通性 + 认证姿态的 smoke test;
- *        永远 200,语义是否"能跑"看 body.authStatus。
+ *   save: 走 Validate 链,要求字段语义完整;校验失败返 4xx。
+ *   run : 真正拉/推镜像,要 SyncTask 已存;异步 202,终态看历史。
+ *   test: 纯连通性 + 认证姿态的 smoke test;语义是否"能跑"看 body.authStatus。
  */
 export const testSyncConnection = (input: SyncTestInput) =>
   request<SyncProbeResult>('/api/sync/test', {

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Chenjinteng/cairn/internal/credentials"
 	"github.com/Chenjinteng/cairn/internal/registry"
 	"github.com/Chenjinteng/cairn/internal/storage"
 )
@@ -18,66 +19,101 @@ import (
 // Engine executes sync tasks. One Engine per process; constructed in
 // server.go from the live *db.Db handle + local storage.Storage.
 //
-// Concurrency model:
-//   - Per-task mutex (sync.Mutex per task.ID): the same task can't be
-//     running twice simultaneously; cross-task runs proceed in parallel.
+// Concurrency model (v0.7.0): Start persists the 'running' run row and
+// returns immediately; iteration continues on a background goroutine
+// with a context detached from the triggering HTTP request, so neither
+// the response nor a client disconnect/refresh can abort a run mid-way
+// (SYNC-1 / SYNC-2).
+//   - Per-task mutex, acquired with a non-blocking TryLock: a second
+//     Start on a task with a run in flight fails fast with
+//     ErrTaskRunning (handler → 409) instead of queueing behind the
+//     first run (SYNC-4).
+//   - Cross-task runs proceed in parallel.
 //   - Within a single run, repos are processed sequentially. Each repo
 //     does many small HTTP calls + blob copies; parallelism here would
 //     mostly hit the remote's rate limit. Parallelism across repos is
 //     a v0.6.2+ follow-up.
+//
+// Credentials (v0.7.0 / SYNC-3): when a task carries a
+// RemoteCredentialID, the Basic-auth pair is resolved from the
+// credential library at run time — rotating a password there takes
+// effect on the next run without re-editing the task. A dangling
+// reference fails the run with ErrCredentialNotFound; it never falls
+// back to anonymous.
 //
 // Failure semantics:
 //   - continue-on-error per repo: one bad repo doesn't abort the run.
 //   - per-tag failures bubble up as per-repo failures (tags within a
 //     repo are tightly sequenced — manifest references blobs that must
 //     all arrive; partial manifests are useless).
-//   - run-level failures (remote unreachable, list-repos denied) abort
-//     the whole run with status=failed and Error=...; repos_total is
-//     populated even if 0 so the UI shows "0 attempted".
+//   - run-level failures (remote unreachable, list-repos denied,
+//     credential resolution failed) abort the whole run with
+//     status=failed and Error=...; repos_total is populated even if 0
+//     so the UI shows "0 attempted".
+//   - context cancellation aborts the run immediately with one Info
+//     line ("pull aborted" / "push aborted") instead of a WARN per
+//     repo, and the run lands in 'failed' — not 'partial' (SYNC-2).
 type Engine struct {
 	store *Store
 	local storage.Storage
+	vault *credentials.Vault // nil when the vault failed to open (no REGISTRY_CREDENTIAL_KEY)
 	log   *slog.Logger
 
 	perTaskMu sync.Mutex
 	perTask   map[int64]*sync.Mutex
 }
 
-// NewEngine constructs an Engine. log may be nil (defaults to slog.Default()).
-func NewEngine(store *Store, local storage.Storage, log *slog.Logger) *Engine {
+// NewEngine constructs an Engine. vault may be nil — tasks that
+// reference the credential library then fail their runs with a clear
+// error instead of panicking; inline/anon tasks are unaffected. log may
+// be nil (defaults to slog.Default()).
+func NewEngine(store *Store, local storage.Storage, vault *credentials.Vault, log *slog.Logger) *Engine {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &Engine{
 		store:   store,
 		local:   local,
+		vault:   vault,
 		log:     log,
 		perTask: make(map[int64]*sync.Mutex),
 	}
 }
 
-// Run executes one task synchronously and returns its terminal SyncRun.
-// The run is persisted (sync_runs row created at start, updated at end)
-// so callers see it via ListRunsByTask even if they discard the return.
+// Start validates the task, claims its per-task lock, persists a
+// 'running' SyncRun row, and launches iteration on a background
+// goroutine. It returns the running run as soon as the row is written —
+// the HTTP request is NOT held open for the duration of the sync
+// (SYNC-1: "run now" used to die on the browser's 10s timeout and leave
+// a zombie running row behind).
 //
-// Concurrent Run calls on the same task.ID serialize. The second caller
-// blocks until the first finishes, then begins its own iteration.
+// The returned error is START-level only:
+//   - ErrTaskDisabled — task.Enabled is false (handler → 400).
+//   - ErrInvalidDirection — unknown direction value (handler → 400).
+//   - ErrTaskRunning — a run for this task is already in flight
+//     (handler → 409; SYNC-4).
+//   - anything wrapping a CreateRun store failure (handler → 500).
 //
-// Errors returned here are RUN-LEVEL — they mean the engine could not
-// even start iterating (e.g. remote URL invalid, list-repos denied).
-// Per-repo failures do NOT bubble up; they're recorded as repos_failed
-// in the SyncRun and the returned error is nil in that case.
-func (e *Engine) Run(ctx context.Context, task SyncTask) (SyncRun, error) {
+// Failures DURING iteration never surface here; the run row is updated
+// to its terminal state (failed / partial / success) by the background
+// goroutine, observable via ListRunsByTask and the task's lastRunStatus.
+//
+// The run context is deliberately detached (context.WithoutCancel): a
+// client disconnect, a page refresh, or the response completing must
+// not cancel the sync (SYNC-2 — the old synchronous design logged a
+// WARN per repo with "context canceled" the moment the browser gave up).
+func (e *Engine) Start(ctx context.Context, task SyncTask) (SyncRun, error) {
 	if !task.Enabled {
-		return SyncRun{}, errors.New("sync: task is disabled")
+		return SyncRun{}, ErrTaskDisabled
 	}
 	if !task.Direction.Valid() {
 		return SyncRun{}, ErrInvalidDirection
 	}
 
 	lock := e.lockFor(task.ID)
-	lock.Lock()
-	defer lock.Unlock()
+	if !lock.TryLock() {
+		return SyncRun{}, ErrTaskRunning
+	}
 
 	now := time.Now().UTC()
 	run := SyncRun{
@@ -86,16 +122,24 @@ func (e *Engine) Run(ctx context.Context, task SyncTask) (SyncRun, error) {
 		Status:    RunRunning,
 	}
 	if err := e.store.CreateRun(ctx, &run); err != nil {
+		lock.Unlock()
 		return SyncRun{}, fmt.Errorf("sync: create run row: %w", err)
 	}
 
-	var runErr error
-	switch task.Direction {
-	case DirectionPull:
-		runErr = e.runPull(ctx, task, &run)
-	case DirectionPush:
-		runErr = e.runPush(ctx, task, &run)
-	}
+	// Detach from the request context: iteration must outlive the HTTP
+	// response. StartedAt / run.ID were persisted above; the goroutine
+	// writes the terminal state with the same detached context.
+	go e.execute(context.WithoutCancel(ctx), task, run, lock)
+
+	return run, nil
+}
+
+// execute runs one iteration and always leaves the run row in a
+// terminal state. It owns the per-task lock (released on return).
+func (e *Engine) execute(ctx context.Context, task SyncTask, run SyncRun, lock *sync.Mutex) {
+	defer lock.Unlock()
+
+	runErr := e.iterate(ctx, task, &run)
 
 	finished := time.Now().UTC()
 	run.FinishedAt = &finished
@@ -109,13 +153,34 @@ func (e *Engine) Run(ctx context.Context, task SyncTask) (SyncRun, error) {
 		run.Status = RunSuccess
 	}
 
-	if uerr := e.store.UpdateRun(ctx, run); uerr != nil {
-		// Don't lose the original run error; just log the bookkeeping failure.
+	// Best-effort terminal write: losing it only means the row stays
+	// 'running' until the next process start sweeps it
+	// (MarkStaleRunsFailed at boot).
+	if err := e.store.UpdateRun(ctx, run); err != nil {
 		e.log.Warn("sync: update run row failed",
-			"run_id", run.ID, "task_id", task.ID, "err", uerr)
+			"run_id", run.ID, "task_id", task.ID, "err", err)
 	}
+}
 
-	return run, runErr
+// iterate runs the direction-specific iteration. A panic is converted
+// into a run-level error (never re-panics — a buggy task must not take
+// the process down, and the deferred lock release above still runs).
+func (e *Engine) iterate(ctx context.Context, task SyncTask, run *SyncRun) (runErr error) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			e.log.Error("sync: run panicked",
+				"task_id", task.ID, "run_id", run.ID, "panic", rec)
+			runErr = fmt.Errorf("internal panic: %v", rec)
+		}
+	}()
+
+	switch task.Direction {
+	case DirectionPull:
+		return e.runPull(ctx, task, run)
+	case DirectionPush:
+		return e.runPush(ctx, task, run)
+	}
+	return ErrInvalidDirection
 }
 
 func (e *Engine) lockFor(taskID int64) *sync.Mutex {
@@ -129,10 +194,43 @@ func (e *Engine) lockFor(taskID int64) *sync.Mutex {
 	return lock
 }
 
+// resolveCredentials returns the Basic-auth pair to use against the
+// remote (v0.7.0 / SYNC-3):
+//   - RemoteCredentialID set → resolved from the credential library at
+//     run time, so a rotated password takes effect without re-editing
+//     the task.
+//   - Reference empty → the legacy inline pair (both empty = anonymous;
+//     Validate guarantees the pair is never half-filled).
+//
+// Every error here is run-level: a dangling reference fails the run
+// loudly rather than silently downgrading to anonymous (which would
+// surface as confusing 401s against the remote).
+func (e *Engine) resolveCredentials(task SyncTask) (username, password string, err error) {
+	ref := strings.TrimSpace(task.RemoteCredentialID)
+	if ref == "" {
+		return task.RemoteUsername, task.RemotePassword, nil
+	}
+	if e.vault == nil {
+		return "", "", errors.New("credential library unavailable (REGISTRY_CREDENTIAL_KEY is not set)")
+	}
+	cred, err := e.vault.Get(ref)
+	if err != nil {
+		if errors.Is(err, credentials.ErrNotFound) {
+			return "", "", fmt.Errorf("%w (id=%s)", ErrCredentialNotFound, ref)
+		}
+		return "", "", fmt.Errorf("read credential %q: %w", ref, err)
+	}
+	return cred.Username, cred.Password, nil
+}
+
 // --- pull: read remote, write local ---------------------------------------
 
 func (e *Engine) runPull(ctx context.Context, task SyncTask, run *SyncRun) error {
-	rc, err := newRemoteClient(task.RemoteURL, task.RemoteUsername, task.RemotePassword)
+	username, password, err := e.resolveCredentials(task)
+	if err != nil {
+		return err
+	}
+	rc, err := newRemoteClient(task.RemoteURL, username, password)
 	if err != nil {
 		return fmt.Errorf("build remote client: %w", err)
 	}
@@ -146,6 +244,13 @@ func (e *Engine) runPull(ctx context.Context, task SyncTask, run *SyncRun) error
 
 	for _, repoName := range repos {
 		if err := e.pullRepo(ctx, rc, repoName); err != nil {
+			if errors.Is(err, context.Canceled) {
+				// The run is being torn down as a whole; one Info line
+				// instead of a WARN per remaining repo (SYNC-2).
+				e.log.Info("sync: pull aborted",
+					"task_id", task.ID, "repo", repoName, "err", err)
+				return fmt.Errorf("run aborted: %w", err)
+			}
 			e.log.Warn("sync: pull repo failed",
 				"task_id", task.ID, "repo", repoName, "err", err)
 			run.ReposFailed++
@@ -232,7 +337,11 @@ func (e *Engine) uploadBlobToLocal(ctx context.Context, repo, digest string, bod
 // --- push: read local, write remote ---------------------------------------
 
 func (e *Engine) runPush(ctx context.Context, task SyncTask, run *SyncRun) error {
-	writer, err := NewWriter(task.RemoteURL, task.RemoteUsername, task.RemotePassword)
+	username, password, err := e.resolveCredentials(task)
+	if err != nil {
+		return err
+	}
+	writer, err := NewWriter(task.RemoteURL, username, password)
 	if err != nil {
 		return fmt.Errorf("build remote writer: %w", err)
 	}
@@ -246,6 +355,11 @@ func (e *Engine) runPush(ctx context.Context, task SyncTask, run *SyncRun) error
 
 	for _, repoName := range repos {
 		if err := e.pushRepo(ctx, writer, repoName); err != nil {
+			if errors.Is(err, context.Canceled) {
+				e.log.Info("sync: push aborted",
+					"task_id", task.ID, "repo", repoName, "err", err)
+				return fmt.Errorf("run aborted: %w", err)
+			}
 			e.log.Warn("sync: push repo failed",
 				"task_id", task.ID, "repo", repoName, "err", err)
 			run.ReposFailed++
@@ -352,6 +466,9 @@ func isIndexMediaType(mediaType string) bool {
 // middleware. registry.Config already has Username + Password fields that
 // flow through to http.Request.SetBasicAuth on every outbound call, so
 // we don't need a transport wrapper — just hand the creds to NewClient.
+//
+// The pair may come from the credential library (v0.7.0 / SYNC-3) —
+// resolution happens in resolveCredentials before this point.
 
 // newRemoteClient builds a registry.Client pointing at remoteURL with
 // the destination's Basic-auth credentials stamped on every outbound

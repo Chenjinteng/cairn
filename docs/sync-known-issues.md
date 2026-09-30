@@ -1,13 +1,17 @@
 # 镜像同步 · UAT 已知问题记录（0.6.x）
 
 > 2026-09-30 UAT（client.local ↔ runner.local，cairn 0.6.7）实测反馈的 4 个问题。
-> **本文档只记录，不改代码**——每条含：现象 / 根因 / 证据（file:line）/ 修复方向。
-> 修复时按 AGENTS.md 版本规则进位（1、2、4 是缺陷 → 小版本；3 是新能力 → 中版本或并入下一号位）。
-> 编号 SYNC-1 ~ SYNC-4，后续修复的 commit message 引用编号。
+> 每条含：现象 / 根因 / 证据（file:line）/ 修复方向。编号 SYNC-1 ~ SYNC-4。
+>
+> **修复状态：SYNC-1 ~ SYNC-4 已于 `0.7.0` 一轮全部修复。**
+> 下方各条保留原始「现象 / 根因 / 证据」作为回归依据，就地标注了实现要点；
+> 落地方式与「原建议的偏差」见文末「修复状态与落地方式」。
 
 ---
 
 ## SYNC-1 · 「立即运行」10 秒超时中止，但部分镜像实际已同步成功
+
+> ✅ **已修复于 `0.7.0`** —— 实现要点见文末「修复状态与落地方式」。
 
 **现象**
 
@@ -54,6 +58,8 @@
 
 ## SYNC-2 · 日志大量 `sync: pull repo failed ... context canceled`
 
+> ✅ **已修复于 `0.7.0`** —— 实现要点见文末「修复状态与落地方式」。
+
 **现象**
 
 ```
@@ -84,6 +90,8 @@ blob GET / tags list 全部 `context canceled` → per-repo continue-on-error �
 ---
 
 ## SYNC-3 · 远端凭据应引用「凭据管理」库，而不是表单里手填用户名密码
+
+> ✅ **已修复于 `0.7.0`** —— 实现要点见文末「修复状态与落地方式」。
 
 **现象（用户原话）**
 
@@ -118,6 +126,8 @@ blob GET / tags list 全部 `context canceled` → per-repo continue-on-error �
 ---
 
 ## SYNC-4 · 运行中刷新页面后「运行」按钮又可点，会重复发起同步
+
+> ✅ **已修复于 `0.7.0`** —— 实现要点见文末「修复状态与落地方式」。
 
 **现象**
 
@@ -155,9 +165,23 @@ blob GET / tags list 全部 `context canceled` → per-repo continue-on-error �
 
 ---
 
-## 修复优先级建议
+## 修复状态与落地方式
 
-| 顺序 | 条目 | 理由 |
+**2026-09-30 一轮修完（`0.7.0`）**。未能拆轮：SYNC-1 / 2 / 4 共享同一条根因链，
+异步化必须一次到位；SYNC-3 的 schema 改动（v7 ADD COLUMN）与该轮同 commit，拆开会造成两次迁移。
+
+| 条目 | 状态 | 落地方式 |
 | --- | --- | --- |
-| 1 | SYNC-1 + SYNC-2 + SYNC-4（同轮） | 三者共享「阻塞 run + 请求 ctx + 僵尸 running 行」一条根因链，拆开修会互相打架；异步化一次到位 |
-| 2 | SYNC-3 | 独立的新能力，schema + UI 改动面大，单独一轮（中版本） |
+| SYNC-1 | ✅ `0.7.0` | `POST /api/sync/{id}/run` 改异步受理（202 + running run），执行走 `context.WithoutCancel`；启动 sweep + `defer recover()` 三重保险 |
+| SYNC-2 | ✅ `0.7.0` | 随 detached ctx 消失；另 `errors.Is(err, context.Canceled)` 特判为整轮单条 Info（`sync: pull aborted`），不再逐仓库刷 WARN |
+| SYNC-3 | ✅ `0.7.0` | schema v7 `sync_tasks.remote_credential_id TEXT` + 前端三档 Radio（匿名 / 凭据 / 内联）+ 执行期经 Vault 解析 |
+| SYNC-4 | ✅ `0.7.0` | `TryLock` 失败 → **409 CONFLICT**；列表/详情返回 `lastRunStatus`，前端 running 时按钮置灰 + 3s 轮询 |
+
+### 与原「修复方向」的偏差（实现时调整）
+
+- **SYNC-4 原建议的「陈旧阈值」未采用**（原方案：running 且 `started_at` 距今 > 30min 视为已死，
+  允许重新发起 + 顺手改 failed）。改为**启动 sweep**：进程启动时把上次遗留的 running 一律置 failed。
+  更简单、无阈值调参问题；进程存活期间不会出现假死 run（detached ctx + `defer recover()` 已覆盖）。
+- **SYNC-1 原建议的 `requestSlow(120s)` 未采用**：异步模型下该请求毫秒级返回，不需要长预算。
+- **SYNC-3 未做「保存时凭据存在性校验」**：只在「测试连接」与**执行期**解析；
+  执行期解析失败 → run 落 `failed`（Start 仍 202）。避免「凭据还没建好就存不了任务」。

@@ -19,17 +19,28 @@ import (
 
 // SyncTaskRow is the SQL-side view of one sync_tasks row. Times are
 // stored as INTEGER unix seconds and decoded on read.
+//
+// RemoteCredentialID references a credentials-library entry (v0.7.0 /
+// SYNC-3, schema v7). Empty means the task is either anonymous or uses
+// the legacy inline RemoteUsername / RemotePassword pair.
+//
+// LastRunStatus is NOT a sync_tasks column — SyncTaskGet / SyncTaskList
+// populate it from a subquery over sync_runs so the UI can disable the
+// "run" button while a background run is in flight (SYNC-4). Empty when
+// the task has no runs yet.
 type SyncTaskRow struct {
-	ID             int64
-	Name           string
-	Direction      string // 'pull' | 'push' — string at this layer, enum upstream
-	RemoteURL      string
-	RemoteUsername string
-	RemotePassword string
-	Include        string
-	Enabled        bool
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID                 int64
+	Name               string
+	Direction          string // 'pull' | 'push' — string at this layer, enum upstream
+	RemoteURL          string
+	RemoteUsername     string
+	RemotePassword     string
+	RemoteCredentialID string
+	Include            string
+	Enabled            bool
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	LastRunStatus      string
 }
 
 // SyncRunRow is the SQL-side view of one sync_runs row.
@@ -54,9 +65,9 @@ func (d *Db) SyncTaskCreate(ctx context.Context, t SyncTaskRow) (int64, error) {
 		enabled = 1
 	}
 	res, err := d.conn.ExecContext(ctx, `
-		INSERT INTO sync_tasks(name, direction, remote_url, remote_username, remote_password, include, enabled, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, t.Name, t.Direction, t.RemoteURL, t.RemoteUsername, t.RemotePassword, t.Include, enabled,
+		INSERT INTO sync_tasks(name, direction, remote_url, remote_username, remote_password, remote_credential_id, include, enabled, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, t.Name, t.Direction, t.RemoteURL, t.RemoteUsername, t.RemotePassword, t.RemoteCredentialID, t.Include, enabled,
 		t.CreatedAt.Unix(), t.UpdatedAt.Unix())
 	if err != nil {
 		return 0, err
@@ -69,15 +80,19 @@ func (d *Db) SyncTaskCreate(ctx context.Context, t SyncTaskRow) (int64, error) {
 }
 
 // SyncTaskGet returns one row by ID. Returns sql.ErrNoRows when not found.
+// LastRunStatus is filled from the newest sync_runs row (empty string when none).
 func (d *Db) SyncTaskGet(ctx context.Context, id int64) (SyncTaskRow, error) {
 	var t SyncTaskRow
 	var enabled int
 	var createdAt, updatedAt int64
 	err := d.conn.QueryRowContext(ctx, `
-		SELECT id, name, direction, remote_url, remote_username, remote_password, include, enabled, created_at, updated_at
+		SELECT id, name, direction, remote_url, remote_username, remote_password, remote_credential_id, include, enabled, created_at, updated_at,
+		       COALESCE((SELECT r.status FROM sync_runs r
+		                  WHERE r.task_id = sync_tasks.id
+		                  ORDER BY r.started_at DESC, r.id DESC LIMIT 1), '')
 		FROM sync_tasks WHERE id = ?
-	`, id).Scan(&t.ID, &t.Name, &t.Direction, &t.RemoteURL, &t.RemoteUsername, &t.RemotePassword, &t.Include, &enabled,
-		&createdAt, &updatedAt)
+	`, id).Scan(&t.ID, &t.Name, &t.Direction, &t.RemoteURL, &t.RemoteUsername, &t.RemotePassword, &t.RemoteCredentialID, &t.Include, &enabled,
+		&createdAt, &updatedAt, &t.LastRunStatus)
 	if err != nil {
 		return SyncTaskRow{}, err
 	}
@@ -91,7 +106,10 @@ func (d *Db) SyncTaskGet(ctx context.Context, id int64) (SyncTaskRow, error) {
 // as tiebreaker — same-second inserts sort by insertion order).
 func (d *Db) SyncTaskList(ctx context.Context) ([]SyncTaskRow, error) {
 	rows, err := d.conn.QueryContext(ctx, `
-		SELECT id, name, direction, remote_url, remote_username, remote_password, include, enabled, created_at, updated_at
+		SELECT id, name, direction, remote_url, remote_username, remote_password, remote_credential_id, include, enabled, created_at, updated_at,
+		       COALESCE((SELECT r.status FROM sync_runs r
+		                  WHERE r.task_id = sync_tasks.id
+		                  ORDER BY r.started_at DESC, r.id DESC LIMIT 1), '')
 		FROM sync_tasks ORDER BY created_at DESC, id DESC
 	`)
 	if err != nil {
@@ -103,8 +121,8 @@ func (d *Db) SyncTaskList(ctx context.Context) ([]SyncTaskRow, error) {
 		var t SyncTaskRow
 		var enabled int
 		var createdAt, updatedAt int64
-		if err := rows.Scan(&t.ID, &t.Name, &t.Direction, &t.RemoteURL, &t.RemoteUsername, &t.RemotePassword, &t.Include, &enabled,
-			&createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.Name, &t.Direction, &t.RemoteURL, &t.RemoteUsername, &t.RemotePassword, &t.RemoteCredentialID, &t.Include, &enabled,
+			&createdAt, &updatedAt, &t.LastRunStatus); err != nil {
 			return nil, err
 		}
 		t.Enabled = enabled != 0
@@ -115,17 +133,18 @@ func (d *Db) SyncTaskList(ctx context.Context) ([]SyncTaskRow, error) {
 	return out, rows.Err()
 }
 
-// SyncTaskUpdate replaces name/direction/url/credentials/include/enabled
-// for the given ID. created_at is preserved; updated_at is overwritten.
+// SyncTaskUpdate replaces name/direction/url/credentials/credential-ref/
+// include/enabled for the given ID. created_at is preserved; updated_at
+// is overwritten.
 func (d *Db) SyncTaskUpdate(ctx context.Context, t SyncTaskRow) error {
 	enabled := 0
 	if t.Enabled {
 		enabled = 1
 	}
 	res, err := d.conn.ExecContext(ctx, `
-		UPDATE sync_tasks SET name=?, direction=?, remote_url=?, remote_username=?, remote_password=?, include=?, enabled=?, updated_at=?
+		UPDATE sync_tasks SET name=?, direction=?, remote_url=?, remote_username=?, remote_password=?, remote_credential_id=?, include=?, enabled=?, updated_at=?
 		WHERE id=?
-	`, t.Name, t.Direction, t.RemoteURL, t.RemoteUsername, t.RemotePassword, t.Include, enabled,
+	`, t.Name, t.Direction, t.RemoteURL, t.RemoteUsername, t.RemotePassword, t.RemoteCredentialID, t.Include, enabled,
 		t.UpdatedAt.Unix(), t.ID)
 	if err != nil {
 		return err
@@ -246,4 +265,25 @@ func (d *Db) SyncRunListByTask(ctx context.Context, taskID int64, limit int) ([]
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// SyncRunMarkRunningFailed flips every leftover 'running' run row to
+// 'failed' and stamps finished_at. Called once at process startup.
+//
+// Runs execute in process memory, so during startup no run can genuinely
+// be running: every 'running' row is a zombie whose process exited
+// (crash / docker restart) before SyncRunUpdate could fire. Without this
+// sweep the UI would render a permanently stuck "running" state and, as
+// of v0.7.0, refuse to start new runs for that task (SYNC-1 / SYNC-4).
+//
+// Returns the number of rows fixed (0 on a healthy start).
+func (d *Db) SyncRunMarkRunningFailed(ctx context.Context, finishedAt time.Time, reason string) (int64, error) {
+	res, err := d.conn.ExecContext(ctx, `
+		UPDATE sync_runs SET status='failed', finished_at=?, error=?
+		WHERE status='running'
+	`, finishedAt.Unix(), reason)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }

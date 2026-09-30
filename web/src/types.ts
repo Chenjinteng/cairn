@@ -623,6 +623,11 @@ export type SyncDirection = 'pull' | 'push';
 /**
  * 单条同步任务。`remotePassword` 后端用 json:"-" 屏蔽——UI 永远拿不到明文,
  * 列表 / 详情响应都不带这个字段。新建必填,更新可省略(空字符串 = 保留旧的)。
+ *
+ * v0.7.0（SYNC-3）：`remoteCredentialId` 非空 = 凭据引用模式，运行 / 测连接时
+ * 后端从凭据库按 id 取用户名密码；内联的 remoteUsername / remotePassword 不再使用。
+ * `lastRunStatus` 来自列表 / 详情查询的子查询（SYNC-1/4），`running` 表示该任务
+ * 后台仍在跑，UI 据此禁用「立即运行」（刷新页面后也不会重新可点）。
  */
 export interface SyncTask {
   id: number;
@@ -631,6 +636,10 @@ export interface SyncTask {
   remoteUrl: string;
   /** 远端 cairn 的 Basic-auth 用户名；不敏感，API 可见，UI 编辑时可预填。 */
   remoteUsername: string;
+  /** v0.7.0：凭据管理库中某条凭据的 id；非空 = 引用模式，忽略内联用户名密码。 */
+  remoteCredentialId?: string;
+  /** v0.7.0：最近一次运行的状态（列表响应携带）；`running` = 后台仍在跑。 */
+  lastRunStatus?: SyncRunStatus;
   /** 换行分隔的 glob 模式（`*` 通配），空 = 全匹配。 */
   include: string;
   enabled: boolean;
@@ -641,6 +650,9 @@ export interface SyncTask {
 /**
  * 新建 / 更新同步任务的请求体。`remotePassword` 在更新时可省略——后端会保留
  * 旧值,编辑「名称」「远端 URL」「Include」时不必重输一次（UI 也根本没机会拿到）。
+ *
+ * v0.7.0（SYNC-3）：凭据三选一——凭据引用（`remoteCredentialId` 非空，内联必须留空）、
+ * 内联用户名密码（`remoteUsername` 非空，引用必须留空）、匿名（三字段全空）。
  */
 export interface SyncTaskInput {
   name: string;
@@ -648,6 +660,8 @@ export interface SyncTaskInput {
   remoteUrl: string;
   remoteUsername: string;
   remotePassword: string;
+  /** v0.7.0：非空 = 引用凭据库；与内联用户名密码互斥。 */
+  remoteCredentialId: string;
   include: string;
   enabled: boolean;
 }
@@ -703,6 +717,8 @@ export interface SyncProbeResult {
 
 export interface SyncTestInput {
   remoteUrl: string;
+  /** v0.7.0：非空 = 用凭据库里的凭据探测；此时内联用户名密码忽略。 */
+  remoteCredentialId: string;
   remoteUsername: string;
   remotePassword: string;
 }

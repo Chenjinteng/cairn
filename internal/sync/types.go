@@ -1,11 +1,15 @@
 // Package sync implements cairn↔cairn registry mirroring. Tasks are stored
-// in SQLite (see schema v5/v6 in internal/db/db.go); the engine reads from
+// in SQLite (see schema v5–v7 in internal/db/db.go); the engine reads from
 // one cairn and writes into the other according to the task's Direction.
 //
 // v0.6.1 surface: manual trigger only, Basic auth (user/pass against
 // cairn's /v2/* Basic middleware), pull + push per task, continue-on-error
 // per repo. Cron scheduling, per-tag filter, exclude patterns, and live
 // log streaming are deliberately deferred to v0.6.1+ per the 0.6.0 plan.
+//
+// v0.7.0: runs execute asynchronously (Engine.Start returns immediately
+// with a 'running' row; POST /api/sync/{id}/run answers 202). Auth may
+// reference the encrypted credential library instead of inline fields.
 package sync
 
 import (
@@ -76,49 +80,70 @@ func (s SyncRunStatus) Valid() bool {
 // password edits (empty on PATCH == "don't change" UNLESS both empty,
 // which sets the task to anonymous).
 //
-// Both stored plaintext in SQLite for v0.6.x; switching to
-// credential-library references (see internal/credentials) is a v0.6.2+
-// follow-up.
+// v0.7.0 (SYNC-3): auth may instead reference the encrypted credential
+// library (internal/credentials) via RemoteCredentialID. The referenced
+// pair is resolved at run time, so rotating a password in the credential
+// library takes effect on the next run without re-editing tasks. Inline
+// plaintext fields remain supported for back-compat with v0.6.x tasks.
 type SyncTask struct {
-	ID             int64     `json:"id"`
-	Name           string    `json:"name"`
-	Direction      Direction `json:"direction"`
-	RemoteURL      string    `json:"remoteUrl"`
-	RemoteUsername string    `json:"remoteUsername"`
-	RemotePassword string    `json:"-"`
-	Include        string    `json:"include"` // newline-separated glob patterns; "" matches all
-	Enabled        bool      `json:"enabled"`
-	CreatedAt      time.Time `json:"createdAt"`
-	UpdatedAt      time.Time `json:"updatedAt"`
+	ID                 int64     `json:"id"`
+	Name               string    `json:"name"`
+	Direction          Direction `json:"direction"`
+	RemoteURL          string    `json:"remoteUrl"`
+	RemoteCredentialID string    `json:"remoteCredentialId,omitempty"`
+	RemoteUsername     string    `json:"remoteUsername"`
+	RemotePassword     string    `json:"-"`
+	Include            string    `json:"include"` // newline-separated glob patterns; "" matches all
+	Enabled            bool      `json:"enabled"`
+	CreatedAt          time.Time `json:"createdAt"`
+	UpdatedAt          time.Time `json:"updatedAt"`
+
+	// LastRunStatus is NOT a sync_tasks column. The store fills it from
+	// a correlated subquery over sync_runs (latest run per task) so the
+	// UI can tell "a run is still in flight" from the list response
+	// alone — this is what keeps the run button disabled across page
+	// refreshes (v0.7.0 SYNC-4). Empty when the task has never run.
+	LastRunStatus SyncRunStatus `json:"lastRunStatus,omitempty"`
 }
 
 // SyncTaskInput is the JSON shape POST/PUT/PATCH /api/sync accepts. It
 // mirrors SyncTask but explicitly includes the password field (hidden on
 // SyncTask via json:"-"). handlers convert input → task via ToTask().
 //
-// RemotePassword is optional on update (empty == "don't change"); required
-// on create (validated by SyncTask.Validate).
+// v0.7.0 (SYNC-3) three-state merge, applied by the UPDATE handler
+// before validation:
+//   - RemoteCredentialID != "" → reference mode; inline fields cleared.
+//   - RemoteCredentialID == "" with RemoteUsername != "" → inline mode;
+//     an empty RemotePassword means "keep the stored password".
+//   - everything empty → anonymous mode; reference and inline fields
+//     all cleared.
+//
+// On create there is nothing to merge: the payload is taken as-is and
+// validated. RemotePassword must be empty whenever RemoteCredentialID
+// is set (Validate enforces this via ErrCredentialConflict).
 type SyncTaskInput struct {
-	Name           string    `json:"name"`
-	Direction      Direction `json:"direction"`
-	RemoteURL      string    `json:"remoteUrl"`
-	RemoteUsername string    `json:"remoteUsername"`
-	RemotePassword string    `json:"remotePassword"`
-	Include        string    `json:"include"`
-	Enabled        bool      `json:"enabled"`
+	Name               string    `json:"name"`
+	Direction          Direction `json:"direction"`
+	RemoteURL          string    `json:"remoteUrl"`
+	RemoteCredentialID string    `json:"remoteCredentialId"`
+	RemoteUsername     string    `json:"remoteUsername"`
+	RemotePassword     string    `json:"remotePassword"`
+	Include            string    `json:"include"`
+	Enabled            bool      `json:"enabled"`
 }
 
 // ToTask projects a SyncTaskInput into a SyncTask. The caller is expected
 // to have already validated (or be about to validate) the resulting task.
 func (in SyncTaskInput) ToTask() SyncTask {
 	return SyncTask{
-		Name:           in.Name,
-		Direction:      in.Direction,
-		RemoteURL:      in.RemoteURL,
-		RemoteUsername: in.RemoteUsername,
-		RemotePassword: in.RemotePassword,
-		Include:        in.Include,
-		Enabled:        in.Enabled,
+		Name:               in.Name,
+		Direction:          in.Direction,
+		RemoteURL:          in.RemoteURL,
+		RemoteCredentialID: in.RemoteCredentialID,
+		RemoteUsername:     in.RemoteUsername,
+		RemotePassword:     in.RemotePassword,
+		Include:            in.Include,
+		Enabled:            in.Enabled,
 	}
 }
 
@@ -126,15 +151,20 @@ func (in SyncTaskInput) ToTask() SyncTask {
 // to both create and update; on update, callers may want to also check
 // that t.ID != 0.
 //
-// Credential rule (v0.6.4 — was tightened in 0.6.1, relaxed now):
-//   - Both username and password empty → anonymous remote. Used when
-//     the destination cairn has no Registry Username/Password
-//     configured (requireBasicAuth middleware falls through). The
-//     engine simply omits the Authorization header; the receiving
-//     server doesn't gate on it.
-//   - Both non-empty → Basic auth with the supplied pair.
-//   - Mixed (one empty, one set) → almost certainly a UI typo; reject
-//     so the operator sees ErrCredentialIncomplete rather than a
+// Credential rule (v0.7.0 — three mutually exclusive states):
+//   - RemoteCredentialID set → reference mode. Inline username/password
+//     must both be empty (the engine resolves the pair from the
+//     credential library at run time).
+//   - Reference empty, both inline fields empty → anonymous remote.
+//     Used when the destination cairn has no Registry Username/Password
+//     configured (requireBasicAuth middleware falls through). The engine
+//     simply omits the Authorization header; the receiving server
+//     doesn't gate on it.
+//   - Reference empty, both inline fields set → Basic auth with the
+//     supplied inline pair (legacy mode, still supported).
+//   - Anything mixed (reference + inline, or username without password)
+//     is almost certainly a UI bug; reject so the operator sees
+//     ErrCredentialConflict / ErrCredentialIncomplete rather than a
 //     confusing 401 from the remote.
 func (t *SyncTask) Validate() error {
 	if strings.TrimSpace(t.Name) == "" {
@@ -148,6 +178,13 @@ func (t *SyncTask) Validate() error {
 	}
 	u := strings.TrimSpace(t.RemoteUsername)
 	p := t.RemotePassword
+	ref := strings.TrimSpace(t.RemoteCredentialID)
+	if ref != "" {
+		if u != "" || p != "" {
+			return ErrCredentialConflict
+		}
+		return nil
+	}
 	if (u == "") != (p == "") {
 		return ErrCredentialIncomplete
 	}
@@ -178,13 +215,25 @@ type SyncRun struct {
 // Sentinel errors used by Validate and the store layer. Handlers should
 // match on these (with errors.Is) to return 400 vs 409 vs 500 correctly.
 var (
-	ErrInvalidDirection  = errors.New("sync: invalid direction (must be pull or push)")
-	ErrInvalidStatus     = errors.New("sync: invalid run status")
-	ErrTaskNameRequired  = errors.New("sync: task name is required")
-	ErrRemoteURLRequired = errors.New("sync: remote URL is required")
+	ErrInvalidDirection     = errors.New("sync: invalid direction (must be pull or push)")
+	ErrInvalidStatus        = errors.New("sync: invalid run status")
+	ErrTaskNameRequired     = errors.New("sync: task name is required")
+	ErrRemoteURLRequired    = errors.New("sync: remote URL is required")
 	ErrCredentialIncomplete = errors.New("sync: remote username and password must both be set, or both empty (anonymous)")
-	ErrTaskNotFound      = errors.New("sync: task not found")
-	ErrRunNotFound       = errors.New("sync: run not found")
-	ErrTaskNameConflict  = errors.New("sync: task name already exists")
-	ErrInvalidURL        = errors.New("sync: invalid remote URL (need scheme + host)")
+	ErrCredentialConflict   = errors.New("sync: a task cannot reference a credential and carry inline credentials at the same time")
+	ErrCredentialNotFound   = errors.New("sync: referenced credential not found")
+	ErrTaskNotFound         = errors.New("sync: task not found")
+	ErrRunNotFound          = errors.New("sync: run not found")
+	ErrTaskNameConflict     = errors.New("sync: task name already exists")
+	ErrInvalidURL           = errors.New("sync: invalid remote URL (need scheme + host)")
 )
+
+// ErrTaskDisabled is returned by Engine.Start when the task's Enabled
+// flag is false. Handlers translate it to 400.
+var ErrTaskDisabled = errors.New("sync: task is disabled")
+
+// ErrTaskRunning is returned by Engine.Start when the task already has a
+// run in flight (per-task lock held). Handlers translate it to 409 so a
+// second "run now" click — including one after a page refresh — fails
+// loudly instead of racing the first run (SYNC-4).
+var ErrTaskRunning = errors.New("sync: task is already running")

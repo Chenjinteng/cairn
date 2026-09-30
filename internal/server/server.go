@@ -182,10 +182,25 @@ func Build(cfg *config.Config) (*Runtime, error) {
 	var syncHandlers *api.SyncHandlers
 	if store_db != nil {
 		syncStore := sync.NewStore(store_db)
-		syncEngine := sync.NewEngine(syncStore, store, slog.Default())
+		// v0.7.0 (SYNC-1): close the books on runs that were in flight when
+		// the previous process died. At boot there is no live engine, so
+		// every 'running' row is by definition a zombie — left alone it
+		// shows up in the UI as a task that spins forever and (pre-0.7.0)
+		// reported "already running" on every retry. Runs execute async
+		// since 0.7.0, which makes this cleanup the counterpart to the
+		// detached context: detached ctx survives the request, this
+		// survives the process.
+		if n, err := syncStore.MarkStaleRunsFailed(context.Background(), time.Now().UTC(),
+			"interrupted by process restart"); err != nil {
+			slog.Warn("sync: stale running runs cleanup failed", "err", err)
+		} else if n > 0 {
+			slog.Info("sync: marked stale running runs as failed", "count", n)
+		}
+		syncEngine := sync.NewEngine(syncStore, store, vault, slog.Default())
 		syncHandlers = &api.SyncHandlers{
 			Store:  syncStore,
 			Engine: syncEngine,
+			Vault:  vault,
 			Log:    slog.Default(),
 		}
 	}

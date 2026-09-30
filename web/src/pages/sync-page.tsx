@@ -2,16 +2,23 @@
  * v0.6.5: 镜像同步（cairn↔cairn）页面。
  *
  * 列任务表 + 新建/编辑 Modal + 立即运行 + 历史查看 Modal。后端路由为
- * /api/sync（CRUD）+ /api/sync/{id}/run（同步执行,等返回）+ /api/sync/{id}/runs（历史）
+ * /api/sync（CRUD）+ /api/sync/{id}/run（**异步受理**,返 202）+ /api/sync/{id}/runs（历史）
  * + /api/sync/test（探测远端 cairn 连通 + 认证状态）。
  *
- * 复杂度说明：v0.6.0 只支持「手动 + Basic auth + include 过滤」,v0.6.5 新增「测试连接」——
+ * 复杂度说明：v0.6.0 只支持「手动 + Basic auth + include 过滤」,v0.6.5 新增「测试连接」,
+ * v0.7.0 修 SYNC-1~4——
  *   - 选错方向时镜像会从对端被覆盖/反覆盖,UI 上 direction 走 Radio 而非下拉,
  *     减少误操作（pull 是「我拉对端」,push 是「我推对端」,含义相反但都是英文短词,
  *     单字面下拉很容易选反）。
- *   - remotePassword 后端用 json:"-" 屏蔽——UI 永远拿不到明文。新建必填、编辑可省略
- *     （保留旧值,详见 sync_handlers.go UpdateTask）。remoteUsername 可见、可编辑
- *     （用户名不敏感,编辑时 UI 能预填）。
+ *   - 【SYNC-3】远端凭据不再手填,改成三档：**匿名 / 引用凭据 / 保留内嵌凭据**。
+ *     「引用凭据」从「凭据管理」里挑一条（以后改密码只动凭据,任务不用改）;
+ *     「保留内嵌凭据」只在编辑**老任务**（有 remoteUsername 且无凭据引用）时出现,
+ *     免得编辑一次就被迫重建凭据。remotePassword 后端用 json:"-" 屏蔽——UI 永远拿不到
+ *     明文,编辑留空 = 后端保留旧值（详见 sync_handlers.go UpdateTask）。
+ *   - 【SYNC-1/4】「立即运行」变成**异步受理**：后端 TryLock + 落 running 行后立刻返
+ *     202,执行跑在后台 goroutine（不再挂在请求上,所以不会被前端 10s 超时中止）。
+ *     按钮可用性以 `task.lastRunStatus` 为准——**刷新页面后仍在跑的任务按钮依然是灰的**;
+ *     有 running 任务时本页 3s 轮询一次列表,跑完自动解锁。前端置灰 + 后端 409 双保险。
  *   - 「测试连接」按钮（v0.6.5 新增）走 POST /api/sync/test——填错 URL / 凭据时,
  *     提交前就能看到「远端不可达 / 401 缺凭据 / 凭据错 / OK」四档分类,
  *     避免「Save 后才看到第一行 sync run 失败」的长反馈环。
@@ -28,6 +35,7 @@ import {
   Modal,
   Popconfirm,
   Radio,
+  Select,
   Space,
   Switch,
   Table,
@@ -54,6 +62,7 @@ import type { ColumnsType } from 'antd/es/table';
 import {
   createSyncTask,
   deleteSyncTask,
+  listCredentials,
   listSyncRuns,
   listSyncTasks,
   runSyncTask,
@@ -62,6 +71,7 @@ import {
 } from '../api';
 import type {
   ApiResult,
+  Credential,
   SyncDirection,
   SyncProbeAuthStatus,
   SyncProbeResult,
@@ -82,13 +92,23 @@ interface Props {
   onPublishGroups: (groups: SidebarGroup[]) => void;
 }
 
+/**
+ * v0.7.0（SYNC-3）：远端凭据三档。
+ *   anonymous  — 对端没配 auth,引擎不发 Authorization header
+ *   credential — 引用「凭据管理」库里的一条凭据（推荐）
+ *   inline     — 沿用任务里原有的内嵌用户名密码（只在编辑老任务时出现,新建不提供）
+ */
+type CredMode = 'anonymous' | 'credential' | 'inline';
+
 interface FormValues {
   name: string;
   direction: SyncDirection;
   remoteUrl: string;
-  /** 远端 cairn 的 Basic-auth 用户名。 */
-  remoteUsername: string;
-  /** 远端 cairn 的 Basic-auth 密码。编辑时可空 = 保留旧值（后端处理）。 */
+  /** v0.7.0：credMode === 'credential' 时选中的凭据库 id。 */
+  remoteCredentialId?: string;
+  /** 远端 cairn 的 Basic-auth 用户名（只在 inline 档渲染）。 */
+  remoteUsername?: string;
+  /** 远端 cairn 的 Basic-auth 密码（只在 inline 档渲染）。编辑时可空 = 保留旧值（后端处理）。 */
   remotePassword?: string;
   include: string;
   enabled: boolean;
@@ -173,6 +193,16 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
   /** 「测试连接」进行中——按钮 loading + 顶部 Alert 收起。 */
   const [testing, setTesting] = useState(false);
 
+  /**
+   * v0.7.0（SYNC-3）：Modal 里的远端凭据档位。放本地 state 而不是 Form 字段——
+   * 条件渲染要读它,而 `Form.useWatch` 在 destroyOnClose 的 Modal 上有挂载时序坑;
+   * 本地 state 是稳定的真值来源（submit 直接读,不再从 validateFields 里拿）。
+   */
+  const [credMode, setCredMode] = useState<CredMode>('anonymous');
+  /** v0.7.0（SYNC-3）：凭据库列表（Modal 打开时拉一次;凭据是低频数据,不轮询）。 */
+  const [credentials, setCredentials] = useState<Credential[]>([]);
+  const [credLoading, setCredLoading] = useState(false);
+
   const refresh = useCallback(async () => {
     const result = await listSyncTasks();
     if (result.success && result.data) {
@@ -187,6 +217,41 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  /**
+   * v0.7.0（SYNC-1/4）：有任务在后台跑时每 3s 刷一次列表,把 running 追成终态
+   * （跑完自动解锁「立即运行」+ 出新状态）。**没有 running 任务时不建定时器**——
+   * 空闲页不该每 3s 打一次 /api/sync。
+   *
+   * 判定源是后端返回的 `lastRunStatus`（列表查询里的子查询,以 DB 为准）,不是本地
+   * setState 的残留——所以**刷新页面后依然认得「还在跑」**。
+   */
+  const hasRunning = tasks.some((t) => t.lastRunStatus === 'running');
+  useEffect(() => {
+    if (!hasRunning) return;
+    const timer = window.setInterval(() => {
+      void refresh();
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [hasRunning, refresh]);
+
+  /**
+   * v0.7.0（SYNC-3）：拉凭据库列表。失败只提示不阻断——用户仍可切「匿名」档保存,
+   * 不该因为凭据库读不到就把整条新建流程卡死。
+   */
+  const loadCredentials = async () => {
+    setCredLoading(true);
+    try {
+      const result = await listCredentials();
+      if (result.success && result.data) {
+        setCredentials(result.data);
+      } else {
+        message.error(`加载凭据列表失败：${result.message}`);
+      }
+    } finally {
+      setCredLoading(false);
+    }
+  };
 
   /**
    * v0.5.37.4 风格：侧栏只展示「过滤」,不显示业务操作。sync 这页唯一有意义的过滤是
@@ -226,17 +291,30 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
       include: '',
       enabled: true,
     });
+    setCredMode('anonymous');  // v0.7.0（SYNC-3）：新建默认匿名,要认证就选「引用凭据」
     setProbe(null);  // 新建时清掉上次探测结果——避免「A 任务的探测结果留在 B 任务 Modal 上」
     setModalOpen(true);
+    void loadCredentials();  // 让「引用凭据」档的选择框一开就有数据
   };
 
   const openEdit = (task: SyncTask) => {
     setEditing(task);
+    /**
+     * v0.7.0（SYNC-3）：按任务现状推断档位,**不强行**把老任务迁到凭据引用——
+     *   remoteCredentialId 非空 → credential（已经在用凭据库）
+     *   内联用户名非空          → inline（0.7.0 之前建的,保留原内嵌凭据）
+     *   都空                    → anonymous
+     */
+    setCredMode(
+      task.remoteCredentialId ? 'credential' : task.remoteUsername ? 'inline' : 'anonymous',
+    );
     form.setFieldsValue({
       name: task.name,
       direction: task.direction,
       remoteUrl: task.remoteUrl,
+      /** inline 档预填（用户名不敏感）;其它档留着也无妨,提交时按档清空。 */
       remoteUsername: task.remoteUsername,
+      remoteCredentialId: task.remoteCredentialId ?? undefined,
       /** 编辑时密码留空——后端看到空字符串会保留旧值。UI 不应该假装知道旧密码。 */
       remotePassword: '',
       include: task.include,
@@ -244,6 +322,7 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
     });
     setProbe(null);  // 编辑同上——避免上一个任务的探测残留
     setModalOpen(true);
+    void loadCredentials();
   };
 
   const closeModal = () => {
@@ -271,33 +350,32 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
      */
     setSubmitting(true);
     try {
+      /**
+       * v0.7.0（SYNC-3）：按档位组装**互斥**的三态。后端 Validate 会把「引用 + 内联」
+       * 判为冲突、把「用户名密码只填一个」判为不完整,所以这里必须只发一档。
+       * 后端合并语义（sync_handlers.go UpdateTask）：引用非空 → 清内联;内联任一非空 →
+       * 清引用;三者全空 → 匿名。
+       */
       const input: SyncTaskInput = {
         name: (values.name ?? '').trim(),
         direction: values.direction,
         remoteUrl: (values.remoteUrl ?? '').trim(),
-        remoteUsername: (values.remoteUsername ?? '').trim(),
-        remotePassword: values.remotePassword ?? '',
+        remoteUsername: credMode === 'inline' ? (values.remoteUsername ?? '').trim() : '',
+        remotePassword: credMode === 'inline' ? (values.remotePassword ?? '') : '',
+        remoteCredentialId: credMode === 'credential' ? (values.remoteCredentialId ?? '') : '',
         include: values.include ?? '',
         enabled: values.enabled,
       };
-      if (editing) {
-        const result = await updateSyncTask(editing.id, input);
-        if (result.success) {
-          message.success('已更新');
-          closeModal();
-          await refresh();
-        } else {
-          formError(form, result);
-        }
-      } else {
-        const result = await createSyncTask(input);
-        if (result.success) {
-          message.success('已创建');
-          closeModal();
-          await refresh();
-        } else {
-          formError(form, result);
-        }
+      const result = editing
+        ? await updateSyncTask(editing.id, input)
+        : await createSyncTask(input);
+      if (result.success) {
+        message.success(editing ? '已更新' : '已创建');
+        closeModal();
+        await refresh();
+      } else if (!formError(form, result)) {
+        // v0.7.0：字段级映射没兜住时必须给全局提示,否则「点了保存什么都没发生」。
+        message.error(`保存失败：${result.message}`);
       }
     } finally {
       setSubmitting(false);
@@ -332,16 +410,17 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
     try {
       const result = await runSyncTask(task.id);
       if (result.success && result.data) {
-        const run = result.data;
-        if (run.status === 'success') {
-          message.success(`同步成功：${run.reposSynced}/${run.reposTotal} 个仓库`);
-        } else if (run.status === 'partial') {
-          message.warning(`部分失败：${run.reposSynced} 成功 / ${run.reposFailed} 失败`);
-        } else if (run.status === 'failed') {
-          message.error(`同步失败：${run.error ?? '未知错误'}`);
-        } else {
-          message.info(`状态 ${run.status}`);
-        }
+        /**
+         * v0.7.0（SYNC-1/4）：run 接口改成**异步受理**——后端 TryLock + 落 running 行
+         * 后立刻返 202,真正的同步跑在后台 goroutine（不再挂在请求上,所以不会被前端
+         * 10s 超时中止）。这里只提示「已受理」;终态由上面的列表轮询追出来
+         * （lastRunStatus 从 running 变终态时自动刷新 + 解锁按钮）。
+         */
+        message.success('已受理，同步在后台执行中');
+        await refresh();
+      } else if (result.code === 'CONFLICT') {
+        // SYNC-4：后端 TryLock 失败 = 这个任务在后台还在跑,别重复发起。
+        message.warning('该任务正在后台同步中，等本次跑完再试');
         await refresh();
       } else {
         message.error(`运行失败：${result.message}`);
@@ -382,6 +461,10 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
         <Space size={4} align="center">
           <SwapOutlined />
           <span style={{ fontWeight: 500 }}>{name}</span>
+          {/* v0.7.0（SYNC-1/4）：以 DB 为准的「运行中」标记——刷新页面后依然在。 */}
+          {row.lastRunStatus === 'running' && (
+            <Tag color="processing" icon={<ClockCircleOutlined />}>运行中</Tag>
+          )}
           {!row.enabled && <Tag color="default">已停用</Tag>}
         </Space>
       ),
@@ -433,18 +516,34 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
       title: '操作',
       key: 'actions',
       width: 280,
-      render: (_, task) => (
+      render: (_, task) => {
+        /** v0.7.0（SYNC-1/4）：后台还在跑 → 按钮置灰,防重复发起（后端 409 兜底）。 */
+        const running = task.lastRunStatus === 'running';
+        return (
         <Space size={4}>
-          <Tooltip title="立即运行（同步执行,等返回）">
-            <Button
-              size="small"
-              type="text"
-              icon={<PlayCircleOutlined />}
-              loading={runningId === task.id}
-              onClick={() => void handleRun(task)}
-            >
-              运行
-            </Button>
+          <Tooltip
+            title={
+              running
+                ? '该任务正在后台同步中，跑完才能再次发起'
+                : '立即运行（异步受理，后台执行）'
+            }
+          >
+            {/*
+              v0.7.0（SYNC-4）：disabled 的 Button 自身不派发 mouseenter,Tooltip 会失效——
+              必须包一层 <span>,「为什么点不了」才显示得出来。
+            */}
+            <span>
+              <Button
+                size="small"
+                type="text"
+                icon={<PlayCircleOutlined />}
+                loading={runningId === task.id}
+                disabled={running}
+                onClick={() => void handleRun(task)}
+              >
+                运行
+              </Button>
+            </span>
           </Tooltip>
           <Button size="small" type="text" icon={<EditOutlined />} onClick={() => openEdit(task)}>
             编辑
@@ -464,7 +563,8 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
             </Button>
           </Popconfirm>
         </Space>
-      ),
+        );
+      },
     },
   ];
 
@@ -601,10 +701,24 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
               disabled={testing}
               onClick={async () => {
                 // 用 form.getFieldsValue() 拿实时值,不依赖 Validate
-                // 全部通过(用户名/密码可以空 = 匿名测试)。
+                // 全部通过（匿名档本来就不需要用户名密码）。
                 const cur = form.getFieldsValue() as Partial<FormValues>;
                 if (!cur.remoteUrl) {
                   message.warning('先填「远端 cairn 地址」再测');
+                  return;
+                }
+                /**
+                 * v0.7.0（SYNC-3）：按当前档位前置拦截——探测得真拿得到用户名密码,
+                 * 否则只会得到「required_but_missing」这种误导性结论。
+                 *   credential 档没选凭据 → 先让选（后端只会回 400）
+                 *   inline 档没填密码     → 编辑态的旧密码前端拿不到,必须重输才能测
+                 */
+                if (credMode === 'credential' && !cur.remoteCredentialId) {
+                  message.warning('先选一条凭据再测（或切到「匿名」）');
+                  return;
+                }
+                if (credMode === 'inline' && !(cur.remotePassword ?? '')) {
+                  message.warning('内联凭据模式下,测连接需要重填一次「远端密码」');
                   return;
                 }
                 setProbe(null);
@@ -612,8 +726,10 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
                 try {
                   const result = await testSyncConnection({
                     remoteUrl: cur.remoteUrl ?? '',
-                    remoteUsername: cur.remoteUsername ?? '',
-                    remotePassword: cur.remotePassword ?? '',
+                    remoteCredentialId:
+                      credMode === 'credential' ? (cur.remoteCredentialId ?? '') : '',
+                    remoteUsername: credMode === 'inline' ? (cur.remoteUsername ?? '') : '',
+                    remotePassword: credMode === 'inline' ? (cur.remotePassword ?? '') : '',
                   });
                   if (result.success && result.data) {
                     setProbe(result.data);
@@ -725,46 +841,86 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
             <Input placeholder="https://cairn-staging.example.com" autoComplete="off" />
           </Form.Item>
 
-          <Form.Item
-            name="remoteUsername"
-            label="远端用户名"
-            rules={[]}
-            extra={
-              <span style={{ fontSize: 12, color: '#999' }}>
-                对端 cairn 的 Basic-auth 用户名（跟「设置 → Registry 认证」一致）。
-                <strong style={{ color: '#666' }}>对端没配用户名密码时,跟「密码」一起留空</strong>——后端
-                视为匿名,引擎不发 Authorization header;cairn 没配 auth 的中间件直接放行。
-              </span>
-            }
-          >
-            <Input placeholder="admin（匿名对端留空）" autoComplete="off" />
+          {/*
+            v0.7.0（SYNC-3）：远端凭据改成「三档 Radio + 条件渲染」。
+            背景：原来手填用户名密码,换密码要回每条任务里改、密码也没法在任务间复用。
+            现在推荐先去「凭据管理」建凭据,再来这里选;换密码只动凭据,任务不动。
+          */}
+          <Form.Item label="远端凭据" required>
+            <Radio.Group
+              value={credMode}
+              onChange={(e) => setCredMode(e.target.value as CredMode)}
+            >
+              <Radio.Button value="anonymous">匿名</Radio.Button>
+              <Radio.Button value="credential">引用凭据</Radio.Button>
+              {/* 「保留内嵌凭据」只对老任务开放——新建的任务不该再走内联。 */}
+              {editing && editing.remoteUsername ? (
+                <Radio.Button value="inline">保留内嵌凭据</Radio.Button>
+              ) : null}
+            </Radio.Group>
+            <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>
+              {credMode === 'anonymous'
+                ? '对端 cairn 没配 auth 时用这档,引擎不发 Authorization header。'
+                : credMode === 'credential'
+                  ? '从「凭据管理」里选一条；以后换密码只改凭据,这条任务不用动。'
+                  : '沿用这条任务原有的用户名密码（编辑时密码留空 = 保留原值）。'}
+            </div>
           </Form.Item>
 
-          <Form.Item
-            name="remotePassword"
-            label="远端密码"
-            rules={[]}
-            extra={
-              editing ? (
+          {credMode === 'credential' && (
+            <Form.Item
+              name="remoteCredentialId"
+              label="选择凭据"
+              rules={[{ required: true, message: '选一条凭据（或切到「匿名」）' }]}
+              extra={
                 <span style={{ fontSize: 12, color: '#999' }}>
-                  留空 = 保留当前密码（<strong style={{ color: '#666' }}>但当「用户名」也是空时,
-                  会切到匿名模式</strong>——如果你是要换密码别忘了同时填用户名）。
-                  仅当你要换密码时填。
+                  列表来自「凭据管理」；一条都没有就先过去新建。按名称 / 用户名 / 地址都能搜。
                 </span>
-              ) : (
-                <span style={{ fontSize: 12, color: '#999' }}>
-                  对端 cairn 的 Basic-auth 密码（不进 UI,只在新建/改密码时填这一次）。
-                  <strong style={{ color: '#666' }}>对端没配用户名密码时,跟「用户名」一起留空</strong>——
-                  后端视为匿名。
-                </span>
-              )
-            }
-          >
-            <Input.Password
-              placeholder={editing ? '留空保留旧值 / 切匿名两空' : '密码（匿名对端留空）'}
-              autoComplete="off"
-            />
-          </Form.Item>
+              }
+            >
+              <Select
+                showSearch
+                optionFilterProp="label"
+                loading={credLoading}
+                placeholder="从凭据库中选择"
+                notFoundContent={credLoading ? '加载中…' : '凭据库为空'}
+                options={credentials.map((c) => ({
+                  value: c.id,
+                  label: `${c.name}（${c.username}@${c.registryUrl}）`,
+                }))}
+              />
+            </Form.Item>
+          )}
+
+          {credMode === 'inline' && (
+            <>
+              <Form.Item
+                name="remoteUsername"
+                label="远端用户名"
+                rules={[{ required: true, message: '内嵌凭据需要用户名' }]}
+                extra={
+                  <span style={{ fontSize: 12, color: '#999' }}>
+                    对端 cairn 的 Basic-auth 用户名。想改由凭据库管理,把上面切成「引用凭据」即可。
+                  </span>
+                }
+              >
+                <Input placeholder="admin" autoComplete="off" />
+              </Form.Item>
+
+              <Form.Item
+                name="remotePassword"
+                label="远端密码"
+                rules={[]}
+                extra={
+                  <span style={{ fontSize: 12, color: '#999' }}>
+                    留空 = 保留当前密码（只在换密码时填）。
+                  </span>
+                }
+              >
+                <Input.Password placeholder="留空保留旧值" autoComplete="off" />
+              </Form.Item>
+            </>
+          )}
 
           <Form.Item
             name="include"
@@ -811,28 +967,48 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
   );
 }
 
-/** 把后端错误翻译到表单字段错误上（name 重名等）。 */
-function formError(form: FormInstance<FormValues>, result: ApiResult<unknown>): void {
+/**
+ * 把后端错误翻译到表单字段错误上（name 重名 / 凭据冲突等）。
+ *
+ * v0.7.0：改成返回「是否已定位到字段」。调用方在失败且返回 false 时补一条全局
+ * message —— 否则（比如错误指向一个当前没渲染的条件字段）点了保存会毫无反馈。
+ */
+function formError(form: FormInstance<FormValues>, result: ApiResult<unknown>): boolean {
   const code = result.code ?? '';
   const message = result.message ?? '请求失败';
   if (code === 'CONFLICT' && message.includes('name')) {
     form.setFields([{ name: 'name', errors: [message] }]);
-    return;
+    return true;
+  }
+  /**
+   * v0.7.0（SYNC-3）：凭据三态的冲突 / 找不到。带 "credential" 的两种文案
+   * （ErrCredentialConflict / ErrCredentialNotFound）都指回选择框。
+   * 顺序必须在下面 username/password 之前——ErrCredentialConflict 原文同时含
+   * "credential",先匹配更具体的一档。
+   */
+  if (code === 'BAD_REQUEST' && message.includes('credential')) {
+    form.setFields([{ name: 'remoteCredentialId', errors: [message] }]);
+    return true;
+  }
+  /** ErrCredentialIncomplete：用户名密码只填一个——指回用户名（inline 档必渲染）。 */
+  if (code === 'BAD_REQUEST' && message.includes('username') && message.includes('password')) {
+    form.setFields([{ name: 'remoteUsername', errors: [message] }]);
+    return true;
   }
   if (code === 'BAD_REQUEST' && message.includes('URL')) {
     form.setFields([{ name: 'remoteUrl', errors: [message] }]);
-    return;
+    return true;
   }
   if (code === 'BAD_REQUEST' && (message.includes('password') || message.includes('Password'))) {
     form.setFields([{ name: 'remotePassword', errors: [message] }]);
-    return;
+    return true;
   }
   if (code === 'BAD_REQUEST' && (message.includes('username') || message.includes('Username'))) {
     form.setFields([{ name: 'remoteUsername', errors: [message] }]);
-    return;
+    return true;
   }
-  // 兜底：没法定位到字段时,用全局 message 提示（调用方在 submit 末尾根据 result.success=false 处理）
-  // 这里只处理「字段相关」错误,其他交给 modal.message 在外层提示。
+  // 兜底：没法定位到字段 → 调用方给全局提示。
+  return false;
 }
 
 function statusIcon(status: SyncRunStatus) {

@@ -6,6 +6,101 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.0] - 2026-09-30
+
+本轮主题:**同步任务从「同步阻塞」改为「异步执行」——一次性修掉 SYNC-1~4（超时中止 / 日志噪音 / 凭据回归凭据库 / 重复发起）**
+
+规格与复现见 [`docs/sync-known-issues.md`](./docs/sync-known-issues.md)。UAT 反馈 (`client.local`)：
+
+1. **SYNC-1** 点「立即运行」→ 前端报 `运行失败：请求超时（10 秒）已中止: /api/sync/1/run`，
+   但镜像列表里能看到部分仓库**已经同步成功** —— 界面说失败，实际还在跑。
+2. **SYNC-2** 容器日志持续刷 `WARN sync: pull repo failed ... context canceled`，
+   每个没跑完的仓库一条，看着像真故障。
+3. **SYNC-3** 新建 / 编辑任务得手填「远端用户名 / 远端密码」，跟 [凭据管理] 重复；
+   期望改成「匿名 / 选已有凭据」二选一。
+4. **SYNC-4** 任务在后台跑着，刷新页面后「运行」按钮又变成可点，
+   再点一次就撞上并发冲突，互相干扰。
+
+四条的**根因是同一个**：`POST /api/sync/{id}/run` 是**同步阻塞**接口 ——
+handler 拿着请求的 `context` 一路把整个 run 跑完才返回。
+前端 `DEFAULT_TIMEOUT_MS = 10_000`（`web/src/api.ts:57`）一到就 abort，于是：
+
+- 客户端侧 → 10s 报超时（SYNC-1）
+- 服务端侧 → `r.Context()` 被 cancel，排队中的 registry 请求全部 `context canceled`（SYNC-2）
+- 状态副作用 → manifest 已 push 进本地 registry（列表可见），run 行却永远停在 `running`（僵尸行）
+- 界面无状态感知 → 列表不返回「有没有 run 在跑」，刷新后按钮照旧可点（SYNC-4）
+
+### 根因
+
+**① 同步阻塞 + 请求 ctx 被直接当执行 ctx**（`internal/sync/engine.go`）
+
+`Start` 在 handler 调用栈里阻塞到 run 结束，`execute` 复用的就是 request context。
+客户端一 abort，服务端在途请求全部收到 cancel。
+
+**② 凭据只有内联一种存法**（`internal/db` / `internal/sync/types.go`）
+
+`sync_tasks` 只存 `remote_username` / `remote_password`（明文），凭据管理库（vault）根本没接进来。
+
+**③ 任务列表不返回 run 状态**（`internal/db/sync.go` `ListTasks`）
+
+前端无从判断「这个任务此刻有没有在跑」。
+
+### 新增
+
+- **`POST /api/sync/{id}/run` 改为异步受理**：handler 只做「校验 + `TryLock` + 落 `running` 行」，
+  随即 `go e.execute(context.WithoutCancel(ctx), ...)` 并立刻返回 **202 Accepted + 新 run 对象**。
+  执行阶段与请求生命周期**彻底脱钩** —— 刷新 / 断网 / 关页面都不影响同步。
+- **DB schema v7**：`sync_tasks` 新增 `remote_credential_id TEXT`（指向 `credentials.id`）。
+  迁移**只 ADD COLUMN**，不重建表（重建会在迁移事务里 CASCADE 删掉 `sync_runs`）。
+- **列表 / 详情返回 `lastRunStatus`**：`ListTasks` / `GetTask` 用子查询取该任务**最近一次 run 的状态**，
+  前端据此判断「运行中」。
+- **启动僵尸清理 `MarkStaleRunsFailed`**：`server.Build` 在进程启动时把所有仍是 `running` 的 run
+  置为 `failed`（`error = "interrupted by process restart"`）；失败只 Warn，清出 n>0 时打 Info。
+  上一轮进程被 kill 留下的僵尸行不会再永久挂住。
+- **前端凭据模式三档 Radio**（`sync-page.tsx`）：`匿名 / 凭据 / 内联`
+  （「内联」仅编辑历史任务且该任务原本带内联账密时出现）。
+  选「凭据」时下拉列出 `GET /api/credentials` 的条目，label 形如 `名称（用户名@仓库地址）`，支持搜索。
+- **`remoteCredentialId` 贯通**（`types.ts` / `api.ts` / `sync_handlers.go` / `engine.go`）：
+  任务可引用凭据库条目，执行时经 Vault 实时解析 —— **之后在凭据管理里改密码，同步任务自动跟进**。
+
+### 变更
+
+- **`POST /api/sync/{id}/run` 语义**：由「阻塞执行并返回终态 run」→「受理并返回 running run」，
+  HTTP 状态码 **`200` → `202`**。响应体仍是完整 run 对象，此时 `status` 为 `running`。
+- **并发保护由「静默等待」改为「显式冲突」**：任务已在跑时 `TryLock` 失败 → **409 CONFLICT**
+  （`sync: task is already running`）。原先是阻塞等锁，于是「第二次点击」在服务端排队而不是被拒。
+- **`ErrTaskDisabled` / `ErrInvalidDirection` → 400**；未知错误仍是 500。
+- **「运行」按钮按 DB 状态置灰**：`task.lastRunStatus === 'running'` 时 disabled + Tooltip 提示；
+  列表中存在 running 任务时前端每 **3 秒**轮询一次（没有 running 就不建定时器，不产生空转请求）。
+- **凭据解析失败按 run-level failure 记**：任务引用的凭据被删 / Vault 不可用时，
+  run 落 `failed` 并写明原因（Start 依旧 202 —— **受理成功 ≠ 执行成功**）。
+
+### 修复
+
+- **SYNC-1 僵尸 `running` 行**：三重保险 —— ① 启动 sweep ② 执行用 detached ctx
+  ③ `iterate` 内 `defer recover()`（panic 记 `internal panic: ...` 并落 failed）。
+- **SYNC-2 日志噪音**：`errors.Is(err, context.Canceled)` 单独成一支，
+  整轮只打一条 `sync: pull aborted`（Info 级），不再逐仓库刷 WARN。
+- **`TestConnection` 错误语义收口**：vault 未配置却传了 id → **503**；
+  id 查不到 → **400**（包 `sync.ErrCredentialNotFound`）；其他 vault 错误 → **500**；
+  **探测结果本身永远 200**。
+- **前端 `formError` 兜底**：以前异常时返回 `undefined`，会直接抛
+  `Cannot read properties of undefined (...)`（0.6.6 同款问题）；
+  现在恒返回 `boolean`，异常路径统一 `message.error('保存失败：…')`。
+- **保存前只做结构校验**：`Validate()` 只管三态冲突（同时给 inline 与 credential → 拒；
+  只给一半 inline 账密 → 拒），**不做**凭据存在性校验 —— 避免「凭据还没建好就存不了任务」。
+
+### 兼容性
+
+- **DB v7 是纯 ADD COLUMN**：老库升级后 `remote_credential_id` 为 `NULL`，
+  内联账密的任务**行为完全不变**（照旧用 `remote_username` / `remote_password`）。
+- **202 属破坏性变更**：任何按「run 返回即完成」写的调用方（含旧 curl 脚本）
+  需改成「拿 `run.id` 后查 `GET /api/sync/runs`」。前端已同步改。
+- 只支持 **cairn ↔ cairn**：对端 cairn 走 Basic 认证（`requireBasicAuth`），没有 bearer / OIDC。
+- 多架构 manifest list 依旧显式拒绝（0.6.0 起）。
+
+---
+
 ## [0.6.7] - 2026-09-30
 
 本轮主题:**hotfix —— 修复 docker-compose 端口映射非默认时，「右键 UI」与「复制 docker pull」漏掉端口导致镜像拉不到**

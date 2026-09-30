@@ -40,15 +40,16 @@ func (s *Store) CreateTask(ctx context.Context, t *SyncTask) error {
 	}
 	t.UpdatedAt = now
 	id, err := s.db.SyncTaskCreate(ctx, db.SyncTaskRow{
-		Name:        t.Name,
-		Direction:   string(t.Direction),
-		RemoteURL:   t.RemoteURL,
-		RemoteUsername: t.RemoteUsername,
-		RemotePassword: t.RemotePassword,
-		Include:     t.Include,
-		Enabled:     t.Enabled,
-		CreatedAt:   t.CreatedAt,
-		UpdatedAt:   t.UpdatedAt,
+		Name:               t.Name,
+		Direction:          string(t.Direction),
+		RemoteURL:          t.RemoteURL,
+		RemoteUsername:     t.RemoteUsername,
+		RemotePassword:     t.RemotePassword,
+		RemoteCredentialID: t.RemoteCredentialID,
+		Include:            t.Include,
+		Enabled:            t.Enabled,
+		CreatedAt:          t.CreatedAt,
+		UpdatedAt:          t.UpdatedAt,
 	})
 	if err != nil {
 		if isUniqueNameConflict(err) {
@@ -69,16 +70,17 @@ func (s *Store) CreateTask(ctx context.Context, t *SyncTask) error {
 func (s *Store) UpdateTask(ctx context.Context, t *SyncTask) error {
 	t.UpdatedAt = time.Now().UTC()
 	err := s.db.SyncTaskUpdate(ctx, db.SyncTaskRow{
-		ID:          t.ID,
-		Name:        t.Name,
-		Direction:   string(t.Direction),
-		RemoteURL:   t.RemoteURL,
-		RemoteUsername: t.RemoteUsername,
-		RemotePassword: t.RemotePassword,
-		Include:     t.Include,
-		Enabled:     t.Enabled,
-		CreatedAt:   t.CreatedAt,
-		UpdatedAt:   t.UpdatedAt,
+		ID:                 t.ID,
+		Name:               t.Name,
+		Direction:          string(t.Direction),
+		RemoteURL:          t.RemoteURL,
+		RemoteUsername:     t.RemoteUsername,
+		RemotePassword:     t.RemotePassword,
+		RemoteCredentialID: t.RemoteCredentialID,
+		Include:            t.Include,
+		Enabled:            t.Enabled,
+		CreatedAt:          t.CreatedAt,
+		UpdatedAt:          t.UpdatedAt,
 	})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -202,20 +204,36 @@ func (s *Store) ListRunsByTask(ctx context.Context, taskID int64, limit int) ([]
 	return out, nil
 }
 
+// MarkStaleRunsFailed flips every sync_runs row still in 'running' to
+// 'failed' with the given reason, returning how many rows were touched.
+// Called once at process startup: any 'running' row at boot time is by
+// definition a zombie (the previous process died mid-run — a synchronous
+// or async run cannot survive a restart), so this closes the books on
+// them instead of leaving the UI showing a forever-spinning task.
+//
+// This is the SYNC-1/SYNC-4 counterpart to the engine's detached-context
+// design: detached ctx keeps runs alive across the HTTP request lifetime,
+// this cleans up after the process itself dies.
+func (s *Store) MarkStaleRunsFailed(ctx context.Context, finishedAt time.Time, reason string) (int64, error) {
+	return s.db.SyncRunMarkRunningFailed(ctx, finishedAt, reason)
+}
+
 // --- converters (private) --------------------------------------------------
 
 func rowToTask(r db.SyncTaskRow) SyncTask {
 	return SyncTask{
-		ID:          r.ID,
-		Name:        r.Name,
-		Direction:   Direction(r.Direction),
-		RemoteURL:   r.RemoteURL,
-		RemoteUsername: r.RemoteUsername,
-		RemotePassword: r.RemotePassword,
-		Include:     r.Include,
-		Enabled:     r.Enabled,
-		CreatedAt:   r.CreatedAt,
-		UpdatedAt:   r.UpdatedAt,
+		ID:                 r.ID,
+		Name:               r.Name,
+		Direction:          Direction(r.Direction),
+		RemoteURL:          r.RemoteURL,
+		RemoteUsername:     r.RemoteUsername,
+		RemotePassword:     r.RemotePassword,
+		RemoteCredentialID: r.RemoteCredentialID,
+		Include:            r.Include,
+		Enabled:            r.Enabled,
+		LastRunStatus:      SyncRunStatus(r.LastRunStatus),
+		CreatedAt:          r.CreatedAt,
+		UpdatedAt:          r.UpdatedAt,
 	}
 }
 

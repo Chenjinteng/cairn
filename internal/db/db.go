@@ -25,7 +25,7 @@ import (
 
 // SCHEMA_VERSION is bumped together with new migrations.
 // Bump rule: +1 per migration; never reuse a number; never delete a migration.
-const SCHEMA_VERSION = 6
+const SCHEMA_VERSION = 7
 
 // Db is the SQLite wrapper. All exported methods are safe for concurrent use.
 type Db struct {
@@ -273,6 +273,23 @@ var migrations = map[int]string{
 	);
 	CREATE INDEX IF NOT EXISTS sync_runs_task_started ON sync_runs(task_id, started_at DESC);
 	PRAGMA foreign_keys = ON;
+	`,
+	7: `
+	-- v0.7.0: sync tasks can reference the credential library instead of
+	-- carrying inline basic-auth fields (SYNC-3). remote_credential_id is
+	-- credentials.Credential.ID (a STRING — hex/random, not an INTEGER),
+	-- hence TEXT. Empty string means "no credential reference": the task
+	-- is either anonymous (username+password both empty) or carries legacy
+	-- inline credentials in remote_username / remote_password.
+	--
+	-- ADD COLUMN instead of the v6 DROP+CREATE rebuild: v6 already
+	-- unconditionally rebuilt both sync tables, so any DB at user_version
+	-- >= 6 has the exact v6 column set — there is no possible "partial
+	-- table shape" left for ADD COLUMN to trip over (the v6 failure mode).
+	-- Rebuilding again would additionally be riskier: inside the migration
+	-- transaction PRAGMA foreign_keys = OFF is a no-op, so DROPping the
+	-- parent table would CASCADE-delete sync_runs.
+	ALTER TABLE sync_tasks ADD COLUMN remote_credential_id TEXT NOT NULL DEFAULT '';
 	`,
 }
 
