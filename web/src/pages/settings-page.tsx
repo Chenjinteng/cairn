@@ -653,10 +653,12 @@ export default function SettingsPage({
               )}
             </Form.Item>
 
-            {/* 展示名称 */}
+            {/* v0.5.53: extra 加 "浏览器标签页 title" —— 顶上 brand 写死的
+                "Cairn" 是产品名,操作员多 tab 时要靠这个区分"内网离线镜像源" /
+                "测试环境"。 */}
             <Form.Item
               label={<span>展示名称</span>}
-              extra="顶部 / 设置页显示名"
+              extra="顶部 / 设置页显示名,也是浏览器标签页 title"
             >
               {editing ? (
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
