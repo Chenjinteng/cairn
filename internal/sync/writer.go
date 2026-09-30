@@ -238,7 +238,7 @@ func (w *Writer) newRequest(ctx context.Context, method, url string, body io.Rea
 		cred := base64.StdEncoding.EncodeToString([]byte(w.username + ":" + w.password))
 		req.Header.Set("Authorization", "Basic "+cred)
 	}
-	req.Header.Set("User-Agent", "cairn-sync/0.6.8")
+	req.Header.Set("User-Agent", "cairn-sync/0.6.9")
 	return req, nil
 }
 

@@ -509,7 +509,7 @@ export const deleteSyncTask = (id: number) =>
   request<void>(`/api/sync/${id}`, { method: 'DELETE' });
 
 /**
- * 立即同步一次。v0.6.8（SYNC-1）起是异步触发：
+ * 立即同步一次。v0.6.9（SYNC-1）起是异步触发：
  *   202 ACCEPTED     — 已受理，body 是刚建的 running run，执行在后台跑
  *   400 BAD_REQUEST  — 任务被禁用 / direction 非法
  *   404 NOT_FOUND    — 任务不存在
@@ -534,7 +534,7 @@ export const listSyncRuns = (id: number, limit = 50) =>
  * v0.6.5: 「测试连接」按钮 — 不需先 Save 任务,
  * 直接用当前表单里的 remoteUrl + 凭据探测对端。
  *
- * v0.6.8（SYNC-3）：凭据两种给法——`remoteCredentialId` 非空 = 后端从凭据
+ * v0.6.9（SYNC-3）：凭据两种给法——`remoteCredentialId` 非空 = 后端从凭据
  * 库按 id 解析（测试保存过的凭据无需重输 secret）；否则用内联
  * remoteUsername / remotePassword。两者互斥，引用非空时内联忽略。
  *

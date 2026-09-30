@@ -151,6 +151,8 @@ func (s *Store) CreateRun(ctx context.Context, r *SyncRun) error {
 		ReposSynced: r.ReposSynced,
 		ReposFailed: r.ReposFailed,
 		Error:       r.Error,
+		CurrentRepo: r.CurrentRepo,
+		CurrentTag:  r.CurrentTag,
 	})
 	if err != nil {
 		return err
@@ -179,6 +181,8 @@ func (s *Store) UpdateRun(ctx context.Context, r SyncRun) error {
 		ReposSynced: r.ReposSynced,
 		ReposFailed: r.ReposFailed,
 		Error:       r.Error,
+		CurrentRepo: r.CurrentRepo,
+		CurrentTag:  r.CurrentTag,
 	})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -187,6 +191,18 @@ func (s *Store) UpdateRun(ctx context.Context, r SyncRun) error {
 		return err
 	}
 	return nil
+}
+
+// UpdateRunProgress is called by the engine on every (repo, tag) transition
+// during iteration. It writes ONLY current_repo and current_tag — counters
+// and terminal fields stay untouched so concurrent reads from the UI poll
+// never see a partially-flushed snapshot. Cheap (single-row UPDATE) so it
+// can fire hundreds of times per run without blocking.
+//
+// Pass empty strings to clear (e.g. engine wants to mark "starting repo
+// enumeration" without naming a specific repo).
+func (s *Store) UpdateRunProgress(ctx context.Context, runID int64, repo, tag string) error {
+	return s.db.SyncRunUpdateProgress(ctx, runID, repo, tag)
 }
 
 // ListRunsByTask returns up to `limit` runs for a task, newest first.
@@ -232,6 +248,8 @@ func rowToTask(r db.SyncTaskRow) SyncTask {
 		Include:            r.Include,
 		Enabled:            r.Enabled,
 		LastRunStatus:      SyncRunStatus(r.LastRunStatus),
+		LastRunCurrentRepo: r.LastRunCurrentRepo,
+		LastRunCurrentTag:  r.LastRunCurrentTag,
 		CreatedAt:          r.CreatedAt,
 		UpdatedAt:          r.UpdatedAt,
 	}
@@ -248,6 +266,8 @@ func rowToRun(r db.SyncRunRow) SyncRun {
 		ReposSynced: r.ReposSynced,
 		ReposFailed: r.ReposFailed,
 		Error:       r.Error,
+		CurrentRepo: r.CurrentRepo,
+		CurrentTag:  r.CurrentTag,
 	}
 }
 

@@ -104,6 +104,13 @@ type SyncTask struct {
 	// alone — this is what keeps the run button disabled across page
 	// refreshes (v0.6.8 SYNC-4). Empty when the task has never run.
 	LastRunStatus SyncRunStatus `json:"lastRunStatus,omitempty"`
+	// LastRunCurrentRepo / LastRunCurrentTag mirror the same subquery for
+	// the v0.6.9 "engine is currently working on this (repo, tag)" UI
+	// indicator. Same source row as LastRunStatus — empty when the task
+	// has never run OR when the engine isn't iterating yet (e.g. just
+	// starting repo enumeration, repo known but tag not yet).
+	LastRunCurrentRepo string `json:"lastRunCurrentRepo,omitempty"`
+	LastRunCurrentTag  string `json:"lastRunCurrentTag,omitempty"`
 }
 
 // SyncTaskInput is the JSON shape POST/PUT/PATCH /api/sync accepts. It
@@ -210,6 +217,14 @@ type SyncRun struct {
 	ReposSynced int           `json:"reposSynced"`
 	ReposFailed int           `json:"reposFailed"`
 	Error       string        `json:"error,omitempty"`
+	// CurrentRepo / CurrentTag identify which (repo, tag) the engine was
+	// on when the run terminated. Stays set on failed runs so the UI can
+	// say "failed at this image" without log-diving. Always empty on a
+	// brand-new run, and stays set after SyncRunUpdate (the engine
+	// intentionally does NOT clear them in UpdateRun — see SyncRunUpdate
+	// comment). v0.6.9.
+	CurrentRepo string `json:"currentRepo,omitempty"`
+	CurrentTag  string `json:"currentTag,omitempty"`
 }
 
 // Sentinel errors used by Validate and the store layer. Handlers should

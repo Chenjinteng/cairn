@@ -137,6 +137,7 @@ func TestMigrateFreshDatabase(t *testing.T) {
 	wantRuns := []string{
 		"id", "task_id", "started_at", "finished_at", "status",
 		"repos_total", "repos_synced", "repos_failed", "error",
+		"current_repo", "current_tag",
 	}
 	gotRuns := tableColumns(t, d.conn, "sync_runs")
 	if len(gotRuns) != len(wantRuns) {
@@ -146,6 +147,68 @@ func TestMigrateFreshDatabase(t *testing.T) {
 		if _, ok := gotRuns[name]; !ok {
 			t.Errorf("sync_runs missing column %q", name)
 		}
+	}
+
+	// sync_runs.current_repo / current_tag (v0.6.9): same contract as
+	// remote_credential_id above — TEXT NOT NULL DEFAULT ''. The engine
+	// stamps the current (repo, tag) on every iteration step.
+	for _, name := range []string{"current_repo", "current_tag"} {
+		col, ok := gotRuns[name]
+		if !ok {
+			t.Errorf("sync_runs.%s missing (v0.6.9)", name)
+			continue
+		}
+		if !strings.EqualFold(col.typ, "TEXT") {
+			t.Errorf("sync_runs.%s type = %q, want TEXT", name, col.typ)
+		}
+		if !col.notNull {
+			t.Errorf("sync_runs.%s must be NOT NULL", name)
+		}
+		if !col.hasDflt || strings.Trim(col.dflt, "'") != "" {
+			t.Errorf("sync_runs.%s default = %q (hasDefault=%v), want empty-string default", name, col.dflt, col.hasDflt)
+		}
+	}
+}
+
+// fixtureV7DB builds a database that looks exactly like one opened by
+// v0.6.8: migrations 1..7 applied, user_version = 7, one legacy sync
+// task with inline credentials, and one sync_runs row at status
+// 'running' (representing a zombie run that survived from 0.6.8 — the
+// v0.6.9 migration must preserve it without rewriting it).
+func fixtureV7DB(t *testing.T, path string) {
+	t.Helper()
+	conn, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatalf("fixture: open: %v", err)
+	}
+	defer conn.Close()
+
+	for v := 1; v <= 7; v++ {
+		body, ok := migrations[v]
+		if !ok {
+			t.Fatalf("fixture: migrations[%d] missing", v)
+		}
+		if _, err := conn.Exec(body); err != nil {
+			t.Fatalf("fixture: migration %d: %v", v, err)
+		}
+	}
+	if _, err := conn.Exec("PRAGMA user_version = 7"); err != nil {
+		t.Fatalf("fixture: set user_version: %v", err)
+	}
+	res, err := conn.Exec(`INSERT INTO sync_tasks
+		(name, direction, remote_url, remote_username, remote_password, include, enabled, created_at, updated_at)
+		VALUES ('legacy', 'pull', 'http://runner.local:10001', 'alice', 's3cret', '', 1, 100, 200)`)
+	if err != nil {
+		t.Fatalf("fixture: insert legacy task: %v", err)
+	}
+	taskID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("fixture: task id: %v", err)
+	}
+	if _, err := conn.Exec(`INSERT INTO sync_runs
+		(task_id, started_at, status, repos_total, repos_synced, repos_failed, error)
+		VALUES (?, 1000, 'running', 5, 2, 0, '')`, taskID); err != nil {
+		t.Fatalf("fixture: insert legacy run: %v", err)
 	}
 }
 
@@ -163,9 +226,9 @@ func TestMigrateV6ToV7PreservesLegacyInlineTask(t *testing.T) {
 		d.Close()
 		t.Fatalf("user_version: %v", err)
 	}
-	if v != 7 {
+	if v != 8 {
 		d.Close()
-		t.Fatalf("user_version after upgrade = %d, want 7", v)
+		t.Fatalf("user_version after upgrade = %d, want 8 (v6 → v7+v8 migrations run in one Open)", v)
 	}
 
 	var (
@@ -200,11 +263,87 @@ func TestMigrateV6ToV7PreservesLegacyInlineTask(t *testing.T) {
 	if err := d2.conn.QueryRow("PRAGMA user_version").Scan(&v); err != nil {
 		t.Fatalf("user_version after reopen: %v", err)
 	}
-	if v != 7 {
-		t.Fatalf("user_version after reopen = %d, want 7", v)
+	if v != 8 {
+		t.Fatalf("user_version after reopen = %d, want 8", v)
 	}
 	if _, ok := tableColumns(t, d2.conn, "sync_tasks")["remote_credential_id"]; !ok {
 		t.Fatal("remote_credential_id missing after reopen")
+	}
+}
+
+func TestMigrateV7ToV8PreservesLegacyRun(t *testing.T) {
+	path := tempDBPath(t, "v7.db")
+	fixtureV7DB(t, path)
+
+	d, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open after v7 fixture: %v", err)
+	}
+
+	var v int
+	if err := d.conn.QueryRow("PRAGMA user_version").Scan(&v); err != nil {
+		d.Close()
+		t.Fatalf("user_version: %v", err)
+	}
+	if v != 8 {
+		d.Close()
+		t.Fatalf("user_version after upgrade = %d, want 8", v)
+	}
+
+	// New columns present + readable.
+	for _, name := range []string{"current_repo", "current_tag"} {
+		if _, ok := tableColumns(t, d.conn, "sync_runs")[name]; !ok {
+			d.Close()
+			t.Fatalf("sync_runs.%s missing after v7→v8 migration", name)
+		}
+	}
+
+	// Legacy run row preserved with status='running', counters intact, and
+	// current_repo / current_tag default to '' (so the startup sweep can
+	// later flip this zombie to 'failed' without surprise).
+	var (
+		status               string
+		reposTotal, synced   int
+		currentRepo, currentTag string
+	)
+	if err := d.conn.QueryRow(
+		`SELECT status, repos_total, repos_synced, current_repo, current_tag
+		   FROM sync_runs WHERE task_id = (SELECT id FROM sync_tasks WHERE name = 'legacy')`,
+	).Scan(&status, &reposTotal, &synced, &currentRepo, &currentTag); err != nil {
+		d.Close()
+		t.Fatalf("select legacy run: %v", err)
+	}
+	if status != "running" {
+		d.Close()
+		t.Errorf("legacy run status = %q, want running", status)
+	}
+	if reposTotal != 5 || synced != 2 {
+		d.Close()
+		t.Errorf("legacy run counters mutated: total=%d synced=%d", reposTotal, synced)
+	}
+	if currentRepo != "" || currentTag != "" {
+		d.Close()
+		t.Errorf("legacy run progress = (%q,%q), want both empty", currentRepo, currentTag)
+	}
+
+	// Idempotency: a second Open must not re-run the ALTER (which would
+	// fail with "duplicate column name" if the guard were broken).
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	d2, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer d2.Close()
+	if err := d2.conn.QueryRow("PRAGMA user_version").Scan(&v); err != nil {
+		t.Fatalf("user_version after reopen: %v", err)
+	}
+	if v != 8 {
+		t.Fatalf("user_version after reopen = %d, want 8", v)
+	}
+	if _, ok := tableColumns(t, d2.conn, "sync_runs")["current_repo"]; !ok {
+		t.Fatal("current_repo missing after reopen")
 	}
 }
 

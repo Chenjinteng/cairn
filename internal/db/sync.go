@@ -40,7 +40,16 @@ type SyncTaskRow struct {
 	Enabled            bool
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+	// LastRunStatus / LastRunID / LastRunCurrentRepo / LastRunCurrentTag
+	// are NOT sync_tasks columns. SyncTaskGet / SyncTaskList fill them from
+	// the newest sync_runs row via a correlated subquery. The engine writes
+	// current_repo / current_tag on every iteration step (v0.6.9), so the
+	// UI can show "正在拉 repo:tag" while a run is in flight.
+	// All empty when the task has never run.
 	LastRunStatus      string
+	LastRunID          int64
+	LastRunCurrentRepo string
+	LastRunCurrentTag  string
 }
 
 // SyncRunRow is the SQL-side view of one sync_runs row.
@@ -54,6 +63,12 @@ type SyncRunRow struct {
 	ReposSynced int
 	ReposFailed int
 	Error       string
+	// CurrentRepo / CurrentTag capture which (repo, tag) the engine is
+	// currently iterating (v0.6.9). Empty while not running. Stays set
+	// after the run finishes — useful when the run failed mid-iteration,
+	// so the UI can point at "stuck at this image" without log-diving.
+	CurrentRepo string
+	CurrentTag  string
 }
 
 // SyncTaskCreate inserts a new task and returns the assigned ID. UNIQUE
@@ -87,12 +102,13 @@ func (d *Db) SyncTaskGet(ctx context.Context, id int64) (SyncTaskRow, error) {
 	var createdAt, updatedAt int64
 	err := d.conn.QueryRowContext(ctx, `
 		SELECT id, name, direction, remote_url, remote_username, remote_password, remote_credential_id, include, enabled, created_at, updated_at,
-		       COALESCE((SELECT r.status FROM sync_runs r
-		                  WHERE r.task_id = sync_tasks.id
-		                  ORDER BY r.started_at DESC, r.id DESC LIMIT 1), '')
+		       COALESCE((SELECT r.status       FROM sync_runs r WHERE r.task_id = sync_tasks.id ORDER BY r.started_at DESC, r.id DESC LIMIT 1), ''),
+		       COALESCE((SELECT r.id           FROM sync_runs r WHERE r.task_id = sync_tasks.id ORDER BY r.started_at DESC, r.id DESC LIMIT 1), 0),
+		       COALESCE((SELECT r.current_repo FROM sync_runs r WHERE r.task_id = sync_tasks.id ORDER BY r.started_at DESC, r.id DESC LIMIT 1), ''),
+		       COALESCE((SELECT r.current_tag  FROM sync_runs r WHERE r.task_id = sync_tasks.id ORDER BY r.started_at DESC, r.id DESC LIMIT 1), '')
 		FROM sync_tasks WHERE id = ?
 	`, id).Scan(&t.ID, &t.Name, &t.Direction, &t.RemoteURL, &t.RemoteUsername, &t.RemotePassword, &t.RemoteCredentialID, &t.Include, &enabled,
-		&createdAt, &updatedAt, &t.LastRunStatus)
+		&createdAt, &updatedAt, &t.LastRunStatus, &t.LastRunID, &t.LastRunCurrentRepo, &t.LastRunCurrentTag)
 	if err != nil {
 		return SyncTaskRow{}, err
 	}
@@ -107,9 +123,10 @@ func (d *Db) SyncTaskGet(ctx context.Context, id int64) (SyncTaskRow, error) {
 func (d *Db) SyncTaskList(ctx context.Context) ([]SyncTaskRow, error) {
 	rows, err := d.conn.QueryContext(ctx, `
 		SELECT id, name, direction, remote_url, remote_username, remote_password, remote_credential_id, include, enabled, created_at, updated_at,
-		       COALESCE((SELECT r.status FROM sync_runs r
-		                  WHERE r.task_id = sync_tasks.id
-		                  ORDER BY r.started_at DESC, r.id DESC LIMIT 1), '')
+		       COALESCE((SELECT r.status       FROM sync_runs r WHERE r.task_id = sync_tasks.id ORDER BY r.started_at DESC, r.id DESC LIMIT 1), ''),
+		       COALESCE((SELECT r.id           FROM sync_runs r WHERE r.task_id = sync_tasks.id ORDER BY r.started_at DESC, r.id DESC LIMIT 1), 0),
+		       COALESCE((SELECT r.current_repo FROM sync_runs r WHERE r.task_id = sync_tasks.id ORDER BY r.started_at DESC, r.id DESC LIMIT 1), ''),
+		       COALESCE((SELECT r.current_tag  FROM sync_runs r WHERE r.task_id = sync_tasks.id ORDER BY r.started_at DESC, r.id DESC LIMIT 1), '')
 		FROM sync_tasks ORDER BY created_at DESC, id DESC
 	`)
 	if err != nil {
@@ -122,7 +139,7 @@ func (d *Db) SyncTaskList(ctx context.Context) ([]SyncTaskRow, error) {
 		var enabled int
 		var createdAt, updatedAt int64
 		if err := rows.Scan(&t.ID, &t.Name, &t.Direction, &t.RemoteURL, &t.RemoteUsername, &t.RemotePassword, &t.RemoteCredentialID, &t.Include, &enabled,
-			&createdAt, &updatedAt, &t.LastRunStatus); err != nil {
+			&createdAt, &updatedAt, &t.LastRunStatus, &t.LastRunID, &t.LastRunCurrentRepo, &t.LastRunCurrentTag); err != nil {
 			return nil, err
 		}
 		t.Enabled = enabled != 0
@@ -187,10 +204,10 @@ func (d *Db) SyncRunCreate(ctx context.Context, r SyncRunRow) (int64, error) {
 		finishedAt = &v
 	}
 	res, err := d.conn.ExecContext(ctx, `
-		INSERT INTO sync_runs(task_id, started_at, finished_at, status, repos_total, repos_synced, repos_failed, error)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO sync_runs(task_id, started_at, finished_at, status, repos_total, repos_synced, repos_failed, error, current_repo, current_tag)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, r.TaskID, r.StartedAt.Unix(), finishedAt, r.Status,
-		r.ReposTotal, r.ReposSynced, r.ReposFailed, r.Error)
+		r.ReposTotal, r.ReposSynced, r.ReposFailed, r.Error, r.CurrentRepo, r.CurrentTag)
 	if err != nil {
 		return 0, err
 	}
@@ -204,6 +221,10 @@ func (d *Db) SyncRunCreate(ctx context.Context, r SyncRunRow) (int64, error) {
 // SyncRunUpdate is called once when the engine finishes a run (success,
 // partial, or failed). Replaces finished_at, status, summary counters,
 // and the error string. task_id is immutable.
+//
+// current_repo / current_tag are intentionally NOT cleared here — keeping
+// the last position lets the UI highlight "failed at this image" for a
+// failed run (v0.6.9). Empty on a brand-new run.
 func (d *Db) SyncRunUpdate(ctx context.Context, r SyncRunRow) error {
 	var finishedAt *int64
 	if r.FinishedAt != nil {
@@ -227,12 +248,37 @@ func (d *Db) SyncRunUpdate(ctx context.Context, r SyncRunRow) error {
 	return nil
 }
 
+// SyncRunUpdateProgress writes ONLY current_repo and current_tag for the
+// given run id. Used by the engine on every (repo, tag) transition during
+// iteration (v0.6.9). Keeping this update narrow — counters / status /
+// finished_at are untouched — means concurrent reads from the UI poll
+// never see a partially-flushed snapshot of a half-baked run.
+//
+// Single-row UPDATE; cheap enough to fire hundreds of times per run.
+func (d *Db) SyncRunUpdateProgress(ctx context.Context, id int64, currentRepo, currentTag string) error {
+	res, err := d.conn.ExecContext(ctx, `
+		UPDATE sync_runs SET current_repo=?, current_tag=?
+		WHERE id=?
+	`, currentRepo, currentTag, id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // SyncRunListByTask returns runs for a task, newest first. limit<=0
 // means no limit; the UI passes 50 (recent runs only — older history is
 // eventual v0.6.2+ retention cleanup territory).
 func (d *Db) SyncRunListByTask(ctx context.Context, taskID int64, limit int) ([]SyncRunRow, error) {
 	query := `
-		SELECT id, task_id, started_at, finished_at, status, repos_total, repos_synced, repos_failed, error
+		SELECT id, task_id, started_at, finished_at, status, repos_total, repos_synced, repos_failed, error, current_repo, current_tag
 		FROM sync_runs WHERE task_id = ? ORDER BY started_at DESC, id DESC
 	`
 	var (
@@ -254,7 +300,8 @@ func (d *Db) SyncRunListByTask(ctx context.Context, taskID int64, limit int) ([]
 		var startedAt int64
 		var finishedAt sql.NullInt64
 		if err := rows.Scan(&r.ID, &r.TaskID, &startedAt, &finishedAt, &r.Status,
-			&r.ReposTotal, &r.ReposSynced, &r.ReposFailed, &r.Error); err != nil {
+			&r.ReposTotal, &r.ReposSynced, &r.ReposFailed, &r.Error,
+			&r.CurrentRepo, &r.CurrentTag); err != nil {
 			return nil, err
 		}
 		r.StartedAt = time.Unix(startedAt, 0).UTC()

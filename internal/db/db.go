@@ -25,7 +25,7 @@ import (
 
 // SCHEMA_VERSION is bumped together with new migrations.
 // Bump rule: +1 per migration; never reuse a number; never delete a migration.
-const SCHEMA_VERSION = 7
+const SCHEMA_VERSION = 8
 
 // Db is the SQLite wrapper. All exported methods are safe for concurrent use.
 type Db struct {
@@ -290,6 +290,16 @@ var migrations = map[int]string{
 	-- transaction PRAGMA foreign_keys = OFF is a no-op, so DROPping the
 	-- parent table would CASCADE-delete sync_runs.
 	ALTER TABLE sync_tasks ADD COLUMN remote_credential_id TEXT NOT NULL DEFAULT '';
+	`,
+	8: `
+	-- v0.6.9: track which (repo, tag) the engine is currently working on, so
+	-- the UI can show "正在拉 bklite/cloud-ide:v1.2.3" instead of just a
+	-- counter — kills the "is it stuck?" guessing (see PR description /
+	-- ROADMAP). Both columns are TEXT NOT NULL DEFAULT '' so existing rows
+	-- in legacy DBs read back cleanly with empty strings (the engine is
+	-- not on a specific repo at any given moment when not running).
+	ALTER TABLE sync_runs ADD COLUMN current_repo TEXT NOT NULL DEFAULT '';
+	ALTER TABLE sync_runs ADD COLUMN current_tag  TEXT NOT NULL DEFAULT '';
 	`,
 }
 

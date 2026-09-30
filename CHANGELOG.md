@@ -6,6 +6,30 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.6.9] - 2026-09-30
+
+### 新增
+
+- **同步进度可视化**：用户在长同步任务中能直接看到「正在拉 `bklite/cloud-ide:v1.2.3`」,不必凭计数器猜是否卡住。
+  - 后端:`schema v8` 给 `sync_runs` 加 `current_repo`/`current_tag` 两列(`TEXT NOT NULL DEFAULT ''`),`engine.runPull` / `runPush` 在每个 (repo, tag) 进入前通过新方法 `SyncRunUpdateProgress` 单独写这两列(单行 UPDATE,不碰其他字段);`SyncTaskList` / `SyncTaskGet` 子查询同步带出 `lastRunCurrentRepo` / `lastRunCurrentTag`。
+  - 前端:任务列表「运行中」tag 旁追加蓝色 tag 显示当前 `(repo:tag)`;历史运行表的「仓库」列在 `failed` / `running` / `partial` 行下方追加一行小字「死在 / 正在 repo:tag」用于失败定位。
+
+### 变更
+
+- API:`GET /api/sync/` 列表响应和 `GET /api/sync/{id}` 单条响应新增字段 `lastRunCurrentRepo` / `lastRunCurrentTag`(omitempty,任务从未跑过或不在具体 repo 上时省略)。
+
+### 数据库
+
+- `migrate` v7 → v8:两条 `ALTER TABLE sync_runs ADD COLUMN ...`(`current_repo` + `current_tag`),`user_version` 自动从 7 升到 8。
+  - 新建的 DB 在 v1 重建路径上由 v1..v6 migration + v8 ALTER 一起把两列补齐;v7 → v8 升级路径上 v8 ALTER 把列补齐。
+  - 现有 sync_runs 行(无论 running / success / partial / failed)在升级后 `current_repo` / `current_tag` 默认是空字符串;**运行中**行由启动时的 `MarkStaleRunsFailed` 一次性 sweep 成 failed。
+
+### 兼容性
+
+- 仅 API 响应新增字段,无破坏性变化;旧前端继续工作,只是看不到进度 tag。
+
+---
+
 ## [0.6.8] - 2026-09-30
 
 本轮主题:**同步任务从「同步阻塞」改为「异步执行」——一次性修掉 SYNC-1~4（超时中止 / 日志噪音 / 凭据回归凭据库 / 重复发起）**

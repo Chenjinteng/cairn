@@ -165,6 +165,21 @@ func (e *Engine) execute(ctx context.Context, task SyncTask, run SyncRun, lock *
 // iterate runs the direction-specific iteration. A panic is converted
 // into a run-level error (never re-panics — a buggy task must not take
 // the process down, and the deferred lock release above still runs).
+// progress stamps the current (repo, tag) into the run row so the UI can
+// show "正在拉 bklite/cloud-ide:v1.2.3" while iteration is in flight
+// (v0.6.9). Pass tag="" to mark "started this repo, no tag yet".
+//
+// Single-row UPDATE; cheap enough to fire hundreds of times per run.
+// Errors are logged at WARN and swallowed — progress is a UI hint, never
+// a correctness signal. A failed progress write must NEVER abort a
+// healthy sync.
+func (e *Engine) progress(ctx context.Context, run *SyncRun, repo, tag string) {
+	if err := e.store.UpdateRunProgress(ctx, run.ID, repo, tag); err != nil {
+		e.log.Warn("sync: write progress failed",
+			"task_id", run.TaskID, "run_id", run.ID, "repo", repo, "tag", tag, "err", err)
+	}
+}
+
 func (e *Engine) iterate(ctx context.Context, task SyncTask, run *SyncRun) (runErr error) {
 	defer func() {
 		if rec := recover(); rec != nil {
@@ -243,7 +258,8 @@ func (e *Engine) runPull(ctx context.Context, task SyncTask, run *SyncRun) error
 	run.ReposTotal = len(repos)
 
 	for _, repoName := range repos {
-		if err := e.pullRepo(ctx, rc, repoName); err != nil {
+		e.progress(ctx, run, repoName, "")
+		if err := e.pullRepo(ctx, rc, run, repoName); err != nil {
 			if errors.Is(err, context.Canceled) {
 				// The run is being torn down as a whole; one Info line
 				// instead of a WARN per remaining repo (SYNC-2).
@@ -261,12 +277,13 @@ func (e *Engine) runPull(ctx context.Context, task SyncTask, run *SyncRun) error
 	return nil
 }
 
-func (e *Engine) pullRepo(ctx context.Context, rc *registry.Client, repoName string) error {
+func (e *Engine) pullRepo(ctx context.Context, rc *registry.Client, run *SyncRun, repoName string) error {
 	tags, err := rc.ListTags(ctx, repoName)
 	if err != nil {
 		return fmt.Errorf("list tags: %w", err)
 	}
 	for _, tag := range tags {
+		e.progress(ctx, run, repoName, tag)
 		if err := e.pullTag(ctx, rc, repoName, tag); err != nil {
 			return fmt.Errorf("tag %q: %w", tag, err)
 		}
@@ -354,7 +371,8 @@ func (e *Engine) runPush(ctx context.Context, task SyncTask, run *SyncRun) error
 	run.ReposTotal = len(repos)
 
 	for _, repoName := range repos {
-		if err := e.pushRepo(ctx, writer, repoName); err != nil {
+		e.progress(ctx, run, repoName, "")
+		if err := e.pushRepo(ctx, writer, run, repoName); err != nil {
 			if errors.Is(err, context.Canceled) {
 				e.log.Info("sync: push aborted",
 					"task_id", task.ID, "repo", repoName, "err", err)
@@ -370,12 +388,13 @@ func (e *Engine) runPush(ctx context.Context, task SyncTask, run *SyncRun) error
 	return nil
 }
 
-func (e *Engine) pushRepo(ctx context.Context, w *Writer, repoName string) error {
+func (e *Engine) pushRepo(ctx context.Context, w *Writer, run *SyncRun, repoName string) error {
 	tags, err := e.local.Tags(ctx, repoName)
 	if err != nil {
 		return fmt.Errorf("list tags: %w", err)
 	}
 	for _, tag := range tags {
+		e.progress(ctx, run, repoName, tag)
 		if err := e.pushTag(ctx, w, repoName, tag); err != nil {
 			return fmt.Errorf("tag %q: %w", tag, err)
 		}

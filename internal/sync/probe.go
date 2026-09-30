@@ -76,7 +76,7 @@ func ProbeConnection(ctx context.Context, baseURL, username, password string) Pr
 		cred := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
 		req.Header.Set("Authorization", "Basic "+cred)
 	}
-	req.Header.Set("User-Agent", "cairn-sync-probe/0.6.8")
+	req.Header.Set("User-Agent", "cairn-sync-probe/0.6.9")
 
 	hc := &http.Client{Timeout: 5 * time.Second}
 	resp, err := hc.Do(req)
