@@ -175,6 +175,22 @@ export default function App({
     void ensureConfigLoaded();
   }, []);
 
+  /**
+   * v0.5.53: 浏览器标签页 <title> 同步展示名称 —— 顶上 brand 是「Cairn」产品名,
+   * 但操作员面对的是「内网离线镜像源 / 测试环境 / ...」这类具体仓库,
+   * 多 tab 时一眼分不清。title 走 `<展示名称> · Cairn`:
+   *   - 有展示名称 → `<name> · Cairn`
+   *   - 未配置(空串/只有空白) → `Cairn`(与品牌名一致,不裸露"镜像仓库"占位串)
+   * 实现细节:
+   *   - 兜底 i18n:目前只中文环境,但写成可拓展结构,后续加 en 不会破窗
+   *   - 用 raf 而不是 dispose 时 RAF,因为 effect 只在 config 变化时跑
+   *     (空态 → 加载中 → 拿到 config),不存在抖动
+   */
+  useEffect(() => {
+    const name = (config?.name ?? '').trim();
+    document.title = name ? `${name} · Cairn` : 'Cairn';
+  }, [config?.name]);
+
   const segmentedOptions = NAV_ITEMS.map((item) => ({
     value: item.key,
     label: (
