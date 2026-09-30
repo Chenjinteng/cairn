@@ -222,24 +222,57 @@ var migrations = map[int]string{
 	CREATE INDEX IF NOT EXISTS sync_runs_task_started ON sync_runs(task_id, started_at DESC);
 	`,
 	6: `
-	-- v0.6.2: pivot sync auth from bearer token to Basic auth. cairn's
+	-- v0.6.3: pivot sync auth from bearer token to Basic auth. cairn's
 	-- own /v2/* Basic middleware doesn't accept Bearer, so the previous
 	-- "paste a bearer token" field had no source on the receiving side.
 	--
-	-- 0.6.1's attempt used ALTER TABLE ... RENAME COLUMN remote_token
-	-- → remote_username, which fails on modernc.org/sqlite v1.59.0 with
-	-- "no such column: remote_token" (the parser-side name resolution
-	-- before execution fails on this version). UAT after 0.6.1 deploy
-	-- got the whole cairn wedged on this.
+	-- 0.6.1 used ALTER TABLE ... RENAME COLUMN → fails on modernc.org/sqlite
+	-- v1.59.0 (parser-side "no such column" before execution). 0.6.2 used
+	-- ADD COLUMN but ALSO failed on UAT because some users had a partially-
+	-- built sync_tasks table from earlier broken attempts — v5's CREATE
+	-- TABLE IF NOT EXISTS skips it if the table exists, but if the table
+	-- was missing columns (e.g. remote_url), ADD COLUMN only adds the
+	-- missing NEW columns and leaves the OLD hole in place. Then the
+	-- SELECT in db/sync.go errors with "no such column: remote_url".
 	--
-	-- Fix: ADD COLUMN for the two new fields, leaving remote_token as
-	-- an orphaned column. Code reads/writes only the new columns; the
-	-- old remote_token contents become dead weight but no data is lost.
-	-- Any 0.6.0 tasks (with non-empty remote_token = bearer strings)
-	-- have empty remote_username after this migration — Validate()
-	-- correctly rejects them and the operator PATCHes the task.
-	ALTER TABLE sync_tasks ADD COLUMN remote_username TEXT NOT NULL DEFAULT '';
-	ALTER TABLE sync_tasks ADD COLUMN remote_password TEXT NOT NULL DEFAULT '';
+	-- Fix: DROP TABLE + CREATE TABLE for both sync_tasks and sync_runs.
+	-- Foreign keys (sync_runs.task_id → sync_tasks.id ON DELETE CASCADE)
+	-- require PRAGMA foreign_keys = OFF during the rebuild so the DROP
+	-- doesn't cascade-delete sync_runs before we save its data.
+	--
+	-- Data loss: any sync_tasks / sync_runs rows written under 0.6.0 /
+	-- 0.6.1 / 0.6.2 (none of which actually worked due to auth / schema
+	-- issues) are dropped. There's no working sync history to preserve
+	-- across any of those releases — the engine couldn't run successfully.
+	PRAGMA foreign_keys = OFF;
+	DROP TABLE IF EXISTS sync_tasks;
+	CREATE TABLE sync_tasks (
+		id              INTEGER PRIMARY KEY,
+		name            TEXT    NOT NULL UNIQUE,
+		direction       TEXT    NOT NULL CHECK(direction IN ('pull','push')),
+		remote_url      TEXT    NOT NULL DEFAULT '',
+		remote_username TEXT    NOT NULL DEFAULT '',
+		remote_password TEXT    NOT NULL DEFAULT '',
+		include         TEXT    NOT NULL DEFAULT '',
+		enabled         INTEGER NOT NULL DEFAULT 1,
+		created_at      INTEGER NOT NULL DEFAULT 0,
+		updated_at      INTEGER NOT NULL DEFAULT 0
+	);
+	DROP TABLE IF EXISTS sync_runs;
+	CREATE TABLE sync_runs (
+		id            INTEGER PRIMARY KEY,
+		task_id       INTEGER NOT NULL,
+		started_at    INTEGER NOT NULL,
+		finished_at   INTEGER,
+		status        TEXT    NOT NULL CHECK(status IN ('running','success','failed','partial')),
+		repos_total   INTEGER NOT NULL DEFAULT 0,
+		repos_synced  INTEGER NOT NULL DEFAULT 0,
+		repos_failed  INTEGER NOT NULL DEFAULT 0,
+		error         TEXT    NOT NULL DEFAULT '',
+		FOREIGN KEY(task_id) REFERENCES sync_tasks(id) ON DELETE CASCADE
+	);
+	CREATE INDEX IF NOT EXISTS sync_runs_task_started ON sync_runs(task_id, started_at DESC);
+	PRAGMA foreign_keys = ON;
 	`,
 }
 
