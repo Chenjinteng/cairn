@@ -4,12 +4,13 @@
  * 列任务表 + 新建/编辑 Modal + 立即运行 + 历史查看 Modal。后端路由为
  * /api/sync（CRUD）+ /api/sync/{id}/run（同步执行,等返回）+ /api/sync/{id}/runs（历史）。
  *
- * 复杂度说明：v0.6.0 只支持「手动 + bearer + include 过滤」,所以页面相对克制——
+ * 复杂度说明：v0.6.0 只支持「手动 + Basic auth + include 过滤」,所以页面相对克制——
  *   - 选错方向时镜像会从对端被覆盖/反覆盖,UI 上 direction 走 Radio 而非下拉,
  *     减少误操作（pull 是「我拉对端」,push 是「我推对端」,含义相反但都是英文短词,
  *     单字面下拉很容易选反）。
- *   - remoteToken 后端用 json:"-" 屏蔽——UI 永远拿不到明文。新建必填、编辑可省略
- *     （保留旧值,详见 sync_handlers.go UpdateTask）。
+ *   - remotePassword 后端用 json:"-" 屏蔽——UI 永远拿不到明文。新建必填、编辑可省略
+ *     （保留旧值,详见 sync_handlers.go UpdateTask）。remoteUsername 可见、可编辑
+ *     （用户名不敏感,编辑时 UI 能预填）。
  *   - 历史 Modal 按 task 懒加载,不在主列表预取——避免一屏打满请求。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -77,7 +78,10 @@ interface FormValues {
   name: string;
   direction: SyncDirection;
   remoteUrl: string;
-  remoteToken?: string;
+  /** 远端 cairn 的 Basic-auth 用户名。 */
+  remoteUsername: string;
+  /** 远端 cairn 的 Basic-auth 密码。编辑时可空 = 保留旧值（后端处理）。 */
+  remotePassword?: string;
   include: string;
   enabled: boolean;
 }
@@ -214,8 +218,9 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
       name: task.name,
       direction: task.direction,
       remoteUrl: task.remoteUrl,
-      /** 编辑时 token 留空——后端看到空字符串会保留旧值。UI 不应该假装知道旧 token。 */
-      remoteToken: '',
+      remoteUsername: task.remoteUsername,
+      /** 编辑时密码留空——后端看到空字符串会保留旧值。UI 不应该假装知道旧密码。 */
+      remotePassword: '',
       include: task.include,
       enabled: task.enabled,
     });
@@ -240,7 +245,8 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
       name: values.name.trim(),
       direction: values.direction,
       remoteUrl: values.remoteUrl.trim(),
-      remoteToken: values.remoteToken ?? '',
+      remoteUsername: values.remoteUsername.trim(),
+      remotePassword: values.remotePassword ?? '',
       include: values.include ?? '',
       enabled: values.enabled,
     };
@@ -604,25 +610,36 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
           </Form.Item>
 
           <Form.Item
-            name="remoteToken"
-            label="Bearer Token"
-            rules={
-              editing ? [] : [{ required: true, message: 'Token 必填' }]
+            name="remoteUsername"
+            label="远端用户名"
+            rules={[{ required: true, message: '用户名必填' }]}
+            extra={
+              <span style={{ fontSize: 12, color: '#999' }}>
+                对端 cairn 的 Basic-auth 用户名（跟「设置 → Registry 认证」一致）。
+              </span>
             }
+          >
+            <Input placeholder="admin" autoComplete="off" />
+          </Form.Item>
+
+          <Form.Item
+            name="remotePassword"
+            label="远端密码"
+            rules={editing ? [] : [{ required: true, message: '密码必填' }]}
             extra={
               editing ? (
                 <span style={{ fontSize: 12, color: '#999' }}>
-                  留空 = 保留当前 Token。仅当你要换 Token 时填。
+                  留空 = 保留当前密码。仅当你要换密码时填。
                 </span>
               ) : (
                 <span style={{ fontSize: 12, color: '#999' }}>
-                  从「对端 cairn」实例上拷过来的 Bearer Token（不进 UI,只在新建/改 Token 时填这一次）。
+                  对端 cairn 的 Basic-auth 密码（不进 UI,只在新建/改密码时填这一次）。
                 </span>
               )
             }
           >
             <Input.Password
-              placeholder={editing ? '留空保留旧值' : 'eyJhbGciOi...'}
+              placeholder={editing ? '留空保留旧值' : '密码'}
               autoComplete="off"
             />
           </Form.Item>
@@ -684,8 +701,12 @@ function formError(form: FormInstance<FormValues>, result: ApiResult<unknown>): 
     form.setFields([{ name: 'remoteUrl', errors: [message] }]);
     return;
   }
-  if (code === 'BAD_REQUEST' && (message.includes('Token') || message.includes('token'))) {
-    form.setFields([{ name: 'remoteToken', errors: [message] }]);
+  if (code === 'BAD_REQUEST' && (message.includes('password') || message.includes('Password'))) {
+    form.setFields([{ name: 'remotePassword', errors: [message] }]);
+    return;
+  }
+  if (code === 'BAD_REQUEST' && (message.includes('username') || message.includes('Username'))) {
+    form.setFields([{ name: 'remoteUsername', errors: [message] }]);
     return;
   }
   // 兜底：没法定位到字段时,用全局 message 提示（调用方在 submit 末尾根据 result.success=false 处理）

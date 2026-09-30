@@ -150,15 +150,19 @@ func (s *SyncHandlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Apply patch. Token: keep stored value unless input explicitly
+	// Apply patch. Password: keep stored value unless input explicitly
 	// supplies a new one (lets UI edit other fields via a partial PUT
-	// that doesn't carry the secret).
-	if in.RemoteToken != "" {
-		existing.RemoteToken = in.RemoteToken
+	// that doesn't carry the secret). Username is always overwritten —
+	// it's not sensitive, the UI has it on screen already, and treating
+	// "blank username == keep current" would mean a username-less input
+	// silently leaves a stale value.
+	if in.RemotePassword != "" {
+		existing.RemotePassword = in.RemotePassword
 	}
 	existing.Name = in.Name
 	existing.Direction = in.Direction
 	existing.RemoteURL = in.RemoteURL
+	existing.RemoteUsername = in.RemoteUsername
 	existing.Include = in.Include
 	existing.Enabled = in.Enabled
 

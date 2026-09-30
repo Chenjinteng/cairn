@@ -1,11 +1,11 @@
 // Package sync implements cairn↔cairn registry mirroring. Tasks are stored
-// in SQLite (see schema v5 in internal/db/db.go); the engine reads from one
-// cairn and writes into the other according to the task's Direction.
+// in SQLite (see schema v5/v6 in internal/db/db.go); the engine reads from
+// one cairn and writes into the other according to the task's Direction.
 //
-// v0.6.0 surface: manual trigger only, bearer-token auth, pull + push per
-// task, continue-on-error per repo. Cron scheduling, per-tag filter, exclude
-// patterns, and live log streaming are deliberately deferred to v0.6.1+ per
-// the 0.6.0 plan.
+// v0.6.1 surface: manual trigger only, Basic auth (user/pass against
+// cairn's /v2/* Basic middleware), pull + push per task, continue-on-error
+// per repo. Cron scheduling, per-tag filter, exclude patterns, and live
+// log streaming are deliberately deferred to v0.6.1+ per the 0.6.0 plan.
 package sync
 
 import (
@@ -56,49 +56,61 @@ func (s SyncRunStatus) Valid() bool {
 // SyncTask is one configured registry sync (cairn↔cairn). Persisted in the
 // sync_tasks table.
 //
-// RemoteToken is the bearer token this node presents on Authorization
-// header when talking to RemoteURL. Stored plaintext in SQLite for v0.6.0;
-// switching to credential-library references (see internal/config) is a
-// v0.6.2+ follow-up. The `json:"-"` tag prevents accidental inclusion in
-// API responses; use SyncTaskInput for the create/update form.
+// v0.6.1 (post-0.6.0 hotfix): auth model pivoted from bearer to Basic to
+// match cairn's own registry auth (cfg.RegistryUsername/Password → /v2/*
+// Basic middleware). cairn has no bearer-token concept; the previous
+// design's "paste a bearer token" had no source on the receiving side.
+//
+// RemoteUsername + RemotePassword are the destination's basic-auth
+// credentials, sent on every outbound request as
+// `Authorization: Basic base64(user:pass)`. Username alone is not
+// sensitive (visible in API responses); the password is hidden via
+// json:"-" — same shape as SyncTaskInput for password edits (empty ==
+// "don't change" on PATCH).
+//
+// Both stored plaintext in SQLite for v0.6.0.x; switching to
+// credential-library references (see internal/credentials) is a v0.6.2+
+// follow-up.
 type SyncTask struct {
-	ID          int64     `json:"id"`
-	Name        string    `json:"name"`
-	Direction   Direction `json:"direction"`
-	RemoteURL   string    `json:"remoteUrl"`
-	RemoteToken string    `json:"-"`
-	Include     string    `json:"include"` // newline-separated glob patterns; "" matches all
-	Enabled     bool      `json:"enabled"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	ID             int64     `json:"id"`
+	Name           string    `json:"name"`
+	Direction      Direction `json:"direction"`
+	RemoteURL      string    `json:"remoteUrl"`
+	RemoteUsername string    `json:"remoteUsername"`
+	RemotePassword string    `json:"-"`
+	Include        string    `json:"include"` // newline-separated glob patterns; "" matches all
+	Enabled        bool      `json:"enabled"`
+	CreatedAt      time.Time `json:"createdAt"`
+	UpdatedAt      time.Time `json:"updatedAt"`
 }
 
 // SyncTaskInput is the JSON shape POST/PUT/PATCH /api/sync accepts. It
-// exists separately from SyncTask only because the bearer token needs to
-// be received on input — the json:"-" tag on SyncTask.RemoteToken would
-// block that. handlers convert input → task via ToTask().
+// mirrors SyncTask but explicitly includes the password field (hidden on
+// SyncTask via json:"-"). handlers convert input → task via ToTask().
 //
-// RemoteToken is optional on update (empty == "don't change"); required on
-// create (validated by SyncTask.Validate).
+// RemotePassword is optional on update (empty == "don't change"); required
+// on create (validated by SyncTask.Validate).
 type SyncTaskInput struct {
-	Name        string    `json:"name"`
-	Direction   Direction `json:"direction"`
-	RemoteURL   string    `json:"remoteUrl"`
-	RemoteToken string    `json:"remoteToken"`
-	Include     string    `json:"include"`
-	Enabled     bool      `json:"enabled"`
+	Name           string    `json:"name"`
+	Direction      Direction `json:"direction"`
+	RemoteURL      string    `json:"remoteUrl"`
+	RemoteUsername string    `json:"remoteUsername"`
+	RemotePassword string    `json:"remotePassword"`
+	Include        string    `json:"include"`
+	Enabled        bool      `json:"enabled"`
 }
 
 // ToTask projects a SyncTaskInput into a SyncTask. The caller is expected
 // to have already validated (or be about to validate) the resulting task.
 func (in SyncTaskInput) ToTask() SyncTask {
 	return SyncTask{
-		Name:        in.Name,
-		Direction:   in.Direction,
-		RemoteURL:   in.RemoteURL,
-		RemoteToken: in.RemoteToken,
-		Include:     in.Include,
-		Enabled:     in.Enabled,
+		Name:           in.Name,
+		Direction:      in.Direction,
+		RemoteURL:      in.RemoteURL,
+		RemoteUsername: in.RemoteUsername,
+		RemotePassword: in.RemotePassword,
+		Include:        in.Include,
+		Enabled:        in.Enabled,
 	}
 }
 
@@ -115,8 +127,11 @@ func (t *SyncTask) Validate() error {
 	if strings.TrimSpace(t.RemoteURL) == "" {
 		return ErrRemoteURLRequired
 	}
-	if t.RemoteToken == "" {
-		return ErrTokenRequired
+	if strings.TrimSpace(t.RemoteUsername) == "" {
+		return ErrUsernameRequired
+	}
+	if t.RemotePassword == "" {
+		return ErrPasswordRequired
 	}
 	return nil
 }
@@ -149,7 +164,8 @@ var (
 	ErrInvalidStatus     = errors.New("sync: invalid run status")
 	ErrTaskNameRequired  = errors.New("sync: task name is required")
 	ErrRemoteURLRequired = errors.New("sync: remote URL is required")
-	ErrTokenRequired     = errors.New("sync: remote token is required")
+	ErrUsernameRequired  = errors.New("sync: remote username is required")
+	ErrPasswordRequired  = errors.New("sync: remote password is required")
 	ErrTaskNotFound      = errors.New("sync: task not found")
 	ErrRunNotFound       = errors.New("sync: run not found")
 	ErrTaskNameConflict  = errors.New("sync: task name already exists")

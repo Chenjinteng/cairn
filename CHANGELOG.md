@@ -6,19 +6,24 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
-## [0.6.0] - 2026-09-30
+## [0.6.1] - 2026-09-30
 
-本轮主题:**内置 regsync 等价能力 —— cairn↔cairn 镜像同步,UI「镜像同步」Tab + 手动运行 + Bearer 鉴权**
+本轮主题:**内置 regsync 等价能力 —— cairn↔cairn 镜像同步,UI「镜像同步」Tab + 手动运行 + Basic 鉴权**
 
 > 之前 `docker pull` / `skopeo copy` / regsync(regclient)是与本节点独立部署的
 > 客户端。本轮把「从 / 向另一 cairn 同步一批仓库」这条路径收进 cairn 自身,
 > 操作员在面板上配规则后点「立即运行」即可 —— 不再依赖外部 regsync 进程。
 
+> **v0.6.0.1 hotfix 收录**:首发版用「Bearer Token」鉴权是错的——cairn 自己的
+> /v2/* 只支持 Basic(username/password),没有 bearer token 来源。本轮改成
+> Basic;「Image sync」表单里的「Bearer Token」输入框换成「远端用户名」+
+> 「远端密码」两个字段。
+
 ### 新增
 
 - **DB schema v5**(两表 + CASCADE):
-  - `sync_tasks`(配置) —— 名称 / 方向 / 远端 URL / Bearer token / include /
-    启用 / created_at / updated_at;`name` UNIQUE。
+  - `sync_tasks`(配置) —— 名称 / 方向 / 远端 URL / 远端用户名 / 远端密码 /
+    include / 启用 / created_at / updated_at;`name` UNIQUE。
   - `sync_runs`(历史) —— task_id FK CASCADE / started_at / finished_at /
     status / repos_total / 三个 synced/failed 计数 / error。
   - `internal/db/sync.go` 提供 8 个 CRUD 方法,`internal/db/db.go` 的 `SCHEMA_VERSION`
@@ -26,7 +31,7 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 - **`internal/sync` 包**(cairn↔cairn 同步核心,~1300 行):
   - `types.go` —— `Direction`(`pull`|`push`)、`SyncRunStatus`(`running`/`success`/
     `partial`/`failed`)、`SyncTask` / `SyncRun` 域类型 + `Validate()`,
-    bearer token 用 `json:"-"` 屏蔽(列表 / 详情 API 永远不返明文)。
+    密码字段用 `json:"-"` 屏蔽(列表 / 详情 API 永远不返明文)。
   - `store.go` —— domain 类型 ↔ DB row 类型适配;`ErrTaskNameConflict` /
     `ErrTaskNotFound` / `ErrRunNotFound` 等 sentinel errors,handlers
     `errors.Is` 一次分流 400 / 404 / 409 / 500。
@@ -66,6 +71,25 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ### 修复
 
+- **同步 auth 从 bearer 改 Basic**(本轮 hotfix;首发版写的 Bearer Token 是错的):
+  - **根因**:cairn 自己的 `/v2/*` 只接受 Basic auth(`cfg.RegistryUsername` /
+    `RegistryPassword` → `requireBasicAuth` middleware),**没有 bearer token
+    这一说**。首发版让 UI 接收「Bearer Token」字段 → 写到
+    `sync_tasks.remote_token` → 引擎发 `Authorization: Bearer ...` →
+    对端 cairn middleware 只认 `Basic ` 前缀 → 401,功能压根不可用。
+  - **改法**:sync 任务改存 `RemoteUsername` + `RemotePassword` 两个字段(后者
+    `json:"-"` 屏蔽)。`internal/sync/writer.go` 把 `Authorization: Bearer <t>`
+    换成 `Authorization: Basic base64(u:p)`;`internal/sync/engine.go` 删掉
+    `bearerTransport` 包装层(回归直接走 `registry.Config{Username, Password}`
+    —— 上游 `internal/registry.Client` 原生支持)。
+  - **DB schema v5→v6**:`sync_tasks.remote_token TEXT` 重命名为
+    `remote_username`,新增 `remote_password TEXT NOT NULL DEFAULT ''`;
+    0.6.0 还没 UAT 落地,迁移只动了空表(或 0.6.0 测试中已经建了的空记录),
+    无业务数据损失。
+  - **UI**:`SyncTaskInput.remoteToken` → `remoteUsername` + `remotePassword`;
+    「镜像同步」Modal 的「Bearer Token」字段拆成「远端用户名」+「远端密码」
+    两个;密码 `Input.Password`,编辑时留空 = 保留旧值(语义同 0.6.0 的
+    token 字段)。
 - **`/v2/_catalog` 分页死循环**(必须在 0.6.0 之前修 —— sync 强依赖):
   - 客户端 `internal/registry/inventory.go` `ListRepositories` 之前只看
     `len(batch) < pageSize` 一个停止条件,遇到「`?last=` 是包含游标的服务端」

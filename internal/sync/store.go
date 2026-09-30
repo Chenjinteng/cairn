@@ -43,7 +43,8 @@ func (s *Store) CreateTask(ctx context.Context, t *SyncTask) error {
 		Name:        t.Name,
 		Direction:   string(t.Direction),
 		RemoteURL:   t.RemoteURL,
-		RemoteToken: t.RemoteToken,
+		RemoteUsername: t.RemoteUsername,
+		RemotePassword: t.RemotePassword,
 		Include:     t.Include,
 		Enabled:     t.Enabled,
 		CreatedAt:   t.CreatedAt,
@@ -72,7 +73,8 @@ func (s *Store) UpdateTask(ctx context.Context, t *SyncTask) error {
 		Name:        t.Name,
 		Direction:   string(t.Direction),
 		RemoteURL:   t.RemoteURL,
-		RemoteToken: t.RemoteToken,
+		RemoteUsername: t.RemoteUsername,
+		RemotePassword: t.RemotePassword,
 		Include:     t.Include,
 		Enabled:     t.Enabled,
 		CreatedAt:   t.CreatedAt,
@@ -112,10 +114,11 @@ func (s *Store) GetTask(ctx context.Context, id int64) (SyncTask, error) {
 	return rowToTask(row), nil
 }
 
-// ListTasks returns every task, newest first. The token field is
-// populated (callers — i.e. the engine — need it to authenticate to
-// the remote); the API layer must NOT serialize this directly to
-// clients (see SyncTask.RemoteToken json tag).
+// ListTasks returns every task, newest first. The credential fields
+// (RemoteUsername + RemotePassword) are populated (callers — i.e. the
+// engine — need them to authenticate to the remote); the API layer
+// must NOT serialize RemotePassword directly to clients (see the
+// json:"-" tag on SyncTask.RemotePassword).
 func (s *Store) ListTasks(ctx context.Context) ([]SyncTask, error) {
 	rows, err := s.db.SyncTaskList(ctx)
 	if err != nil {
@@ -207,7 +210,8 @@ func rowToTask(r db.SyncTaskRow) SyncTask {
 		Name:        r.Name,
 		Direction:   Direction(r.Direction),
 		RemoteURL:   r.RemoteURL,
-		RemoteToken: r.RemoteToken,
+		RemoteUsername: r.RemoteUsername,
+		RemotePassword: r.RemotePassword,
 		Include:     r.Include,
 		Enabled:     r.Enabled,
 		CreatedAt:   r.CreatedAt,
