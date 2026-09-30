@@ -21,8 +21,10 @@ import (
 	"github.com/Chenjinteng/cairn/internal/events"
 	"github.com/Chenjinteng/cairn/internal/proxies"
 	"github.com/Chenjinteng/cairn/internal/pull"
+	"github.com/Chenjinteng/cairn/internal/registry"
 	"github.com/Chenjinteng/cairn/internal/registryd"
 	"github.com/Chenjinteng/cairn/internal/storage"
+	syncpkg "github.com/Chenjinteng/cairn/internal/sync"
 )
 
 // Runtime bundles the long-lived dependencies.
@@ -173,6 +175,28 @@ func Build(cfg *config.Config) (*Runtime, error) {
 		eventsHandler.SetEnabled(cfg.AllowRegistryEvents)
 	}
 
+	// v0.6.0: registry sync (regsync 内建) — Phase 1 (pull direction).
+	// Engine is nil when the DB didn't open, mirroring the pull / events
+	// construction above; NewSyncAPI turns that into 503s in the API.
+	var syncAPI *api.SyncAPI
+	if store_db != nil {
+		syncStore := syncpkg.NewStore(store_db)
+		// pull.DefaultSourceResolver takes (sourceURL, user, pass, proxyURL);
+		// sync.ClientFactory has no proxy param (sync's Phase 1 doesn't wire
+		// proxies — out-of-scope per ROADMAP "已知不做"). Adapt by ignoring
+		// proxy here; Phase 2 may add a proxy-aware resolver.
+		pullResolve := pull.DefaultSourceResolver()
+		syncEngine := syncpkg.NewEngine(
+			store,
+			func(_ context.Context, srcURL, user, pass string) (*registry.Client, error) {
+				return pullResolve(srcURL, user, pass, "")
+			},
+			syncpkg.VaultLookup(vault),
+			slog.Default(),
+		)
+		syncAPI = api.NewSyncAPI(syncEngine, syncStore)
+	}
+
 	// 8. Admin handlers (browse/delete talk to local storage; pull uses external client).
 	handlers := &api.Handlers{
 		Cfg:        cfg,
@@ -198,6 +222,7 @@ func Build(cfg *config.Config) (*Runtime, error) {
 		DB:         store_db,
 		Events:     eventsHandler,
 		Store:      store,
+		Sync:       syncAPI,
 		VaultErr:   vaultErr,
 		ProxiesErr: proxiesErr,
 		DBErr:      dbErr,

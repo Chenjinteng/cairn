@@ -86,6 +86,14 @@
 - UI 可选「目标前缀」输入框，留空 = M1，填了 = M2（`mirrored/team-a/web:v1`）。
 - 不做去前缀（M3）。
 
+### 定稿决策（2026-09-30）
+
+开工前 3 个边界决策已拍板,记录在此防止后续讨论反复:
+
+1. **cron 表达式解析手写**(不引入 `github.com/robfig/cron/v3`):严守 `AGENTS.md`「仅 stdlib + chi + x/sync」原则;5 字段标准 cron 手写约 180 行,功能等价。
+2. **不发 0.5.53 / 0.5.54 / 0.5.55 过渡号位**:Phase 1-3 跑通后直接发 0.6.0。中间不阻塞开发,UAT 跟 git main 走(每次 commit + push 后给 UAT 下一步命令)。
+4. **凭据库 ID 引用在 Phase 1 打通**:否则私有 Basic Auth 源端到端跑不通。`sync_tasks.credential_id` 字段从一开始就位,API 字段一次定型。
+
 ### 代码结构
 
 ```
@@ -115,12 +123,15 @@ web/src/pages/
 
 ### 阶段交付（Phase 拆解）
 
+> 阶段间不发过渡号位(决策 2):Phase 1-3 跑通后直接发 0.6.0。中间每次 commit + push 后给 UAT 下一步命令,UAT 跟 git main 走。
+
 #### Phase 1 · 拉方向骨架（先跑通端到端）
 
 - `internal/sync/{types,store,filter,engine}.go` 写完
 - 拉方向 API：`GET/POST/PUT/DELETE /api/sync`、`POST /api/sync/:id/run`
 - 端到端：手工触发一条「远端 → 本机」任务跑通，blob / manifest 全部走通
 - 单测：`engine` 复制语义、`filter` deny list
+- **凭据库 ID 引用**(决策 3):`sync_tasks.credential_id` 字段从一开始就位;私有 Basic Auth 源端到端跑通
 
 #### Phase 2 · 推方向
 
@@ -130,7 +141,7 @@ web/src/pages/
 
 #### Phase 3 · 调度
 
-- `scheduler.go` cron 表达式解析（先支持标准 5 字段，秒级与 timezone 后续再说）
+- `scheduler.go` **手写**(决策 1)5 字段 cron 解析;秒级与 timezone 后续再说
 - ticker 与 events 模块对齐
 - 「跳过本次不排队」逻辑
 
