@@ -612,34 +612,40 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
           <Form.Item
             name="remoteUsername"
             label="远端用户名"
-            rules={[{ required: true, message: '用户名必填' }]}
+            rules={[]}
             extra={
               <span style={{ fontSize: 12, color: '#999' }}>
                 对端 cairn 的 Basic-auth 用户名（跟「设置 → Registry 认证」一致）。
+                <strong style={{ color: '#666' }}>对端没配用户名密码时,跟「密码」一起留空</strong>——后端
+                视为匿名,引擎不发 Authorization header;cairn 没配 auth 的中间件直接放行。
               </span>
             }
           >
-            <Input placeholder="admin" autoComplete="off" />
+            <Input placeholder="admin（匿名对端留空）" autoComplete="off" />
           </Form.Item>
 
           <Form.Item
             name="remotePassword"
             label="远端密码"
-            rules={editing ? [] : [{ required: true, message: '密码必填' }]}
+            rules={[]}
             extra={
               editing ? (
                 <span style={{ fontSize: 12, color: '#999' }}>
-                  留空 = 保留当前密码。仅当你要换密码时填。
+                  留空 = 保留当前密码（<strong style={{ color: '#666' }}>但当「用户名」也是空时,
+                  会切到匿名模式</strong>——如果你是要换密码别忘了同时填用户名）。
+                  仅当你要换密码时填。
                 </span>
               ) : (
                 <span style={{ fontSize: 12, color: '#999' }}>
                   对端 cairn 的 Basic-auth 密码（不进 UI,只在新建/改密码时填这一次）。
+                  <strong style={{ color: '#666' }}>对端没配用户名密码时,跟「用户名」一起留空</strong>——
+                  后端视为匿名。
                 </span>
               )
             }
           >
             <Input.Password
-              placeholder={editing ? '留空保留旧值' : '密码'}
+              placeholder={editing ? '留空保留旧值 / 切匿名两空' : '密码（匿名对端留空）'}
               autoComplete="off"
             />
           </Form.Item>

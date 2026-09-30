@@ -6,9 +6,9 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
-## [0.6.3] - 2026-09-30
+## [0.6.4] - 2026-09-30
 
-本轮主题:**内置 regsync 等价能力 —— cairn↔cairn 镜像同步,UI「镜像同步」Tab + 手动运行 + Basic 鉴权**
+本轮主题:**内置 regsync 等价能力 —— cairn↔cairn 镜像同步,UI「镜像同步」Tab + 手动运行 + Basic 鉴权（含匿名对端）**
 
 > 之前 `docker pull` / `skopeo copy` / regsync(regclient)是与本节点独立部署的
 > 客户端。本轮把「从 / 向另一 cairn 同步一批仓库」这条路径收进 cairn 自身,
@@ -19,17 +19,14 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 >   Basic(username/password),没有 bearer token 来源。
 > - 0.6.1 改成 Basic + Bearer 改 username/password,但 schema 迁移用
 >   `ALTER TABLE ... RENAME COLUMN` 在 modernc.org/sqlite v1.59.0 上
->   报「no such column: remote_token」——整 cairn 启动失败,热度统计
->   和 /api/sync 都挂。
-> - 0.6.2 用 `ADD COLUMN` 替代 RENAME:加 `remote_username` +
->   `remote_password` 两列。但 UAT 仍报「no such column: remote_url」——
->   因为某些用户的 DB 里 sync_tasks 是**残缺表**(缺 v5 应有的列,如
->   `remote_url`),v5 的 `CREATE TABLE IF NOT EXISTS` 不会修补缺列,
->   v6 ADD COLUMN 也救不回来。
-> - 0.6.3 (本轮) 改 `DROP TABLE + CREATE TABLE` —— `PRAGMA foreign_keys
->   = OFF` 包住防止 CASCADE 误删 sync_runs,drop 旧表(不管完整还是残缺),
->   重新按完整 v6 schema 重建。**接受丢 sync_tasks / sync_runs 历史数据**——
->   这三轮 hotfix 期间根本没真正工作过,没有可保留的运行记录。
+>   报「no such column: remote_token」——整 cairn 启动失败。
+> - 0.6.2 改 `ADD COLUMN` 但对残缺 sync_tasks 表无能为力——
+>   UAT 仍报「no such column: remote_url」。
+> - 0.6.3 改 `DROP TABLE + CREATE TABLE` 重建,功能层终于通了。
+> - 0.6.4 (本轮) 放宽 auth:支持**匿名对端**——两边 username + password
+>   都留空 = 不发 Authorization header,cairn 没配 auth 的中间件
+>   直接放行。UAT 真实场景:对端 0.5.53 没配 Registry 认证,本节点
+>   直接匿名拉。
 
 ### 新增
 
@@ -80,6 +77,22 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
   - 侧栏按 direction 分组(全部 / 拉 / 推)切视图。
   - 「立即运行」按钮点击后 spinner → 同步返结果 → message 提示
     「同步成功 / 部分失败 / 同步失败」(分别 success / warning / error)。
+
+### 变更（0.6.4）
+
+- **支持匿名对端**:`SyncTask.RemoteUsername` + `RemotePassword` 两字段都空
+  时,引擎不发 `Authorization` header;cairn 没配 Registry 认证的中间件
+  (`requireBasicAuth` 在 `wantUser == ""` 时 fall through)直接放行。
+  - **`internal/sync/types.go`**:`Validate()` 由「两者必填」放宽为「两者都空
+    或都不空」,混合 (一个空一个不空) 视为 UI 拼写错误,返
+    `ErrCredentialIncomplete` 让前端能定位到字段。
+  - **`internal/sync/writer.go`** / **`internal/sync/engine.go`**:
+    实现里早就是 `if username != "" || password != ""` 才设 Authorization,
+    所以代码层无需改;只是现在 Validate 不再把它们堵死。
+  - **UI**(`web/src/pages/sync-page.tsx`):「远端用户名」「远端密码」两
+    Form.Item 的 `rules: [{ required: true, ...}]` 去掉;extra 文案补充
+    匿名模式说明（两个都留空 = 匿名）。PLACEHOLDER 改成「admin（匿名
+    对端留空）」让操作员一眼看出口径。
 
 ### 修复
 

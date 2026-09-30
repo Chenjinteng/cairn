@@ -61,14 +61,22 @@ func (s SyncRunStatus) Valid() bool {
 // Basic middleware). cairn has no bearer-token concept; the previous
 // design's "paste a bearer token" had no source on the receiving side.
 //
+// v0.6.4: relaxed to support anonymous remotes. When both
+// RemoteUsername and RemotePassword are empty, the engine omits the
+// Authorization header entirely (cairn's requireBasicAuth middleware
+// falls through when cfg.RegistryUsername is unset, so the request
+// succeeds without credentials). Mixed (one empty, one set) is
+// rejected as a UI typo — Validate returns ErrCredentialIncomplete.
+//
 // RemoteUsername + RemotePassword are the destination's basic-auth
 // credentials, sent on every outbound request as
-// `Authorization: Basic base64(user:pass)`. Username alone is not
-// sensitive (visible in API responses); the password is hidden via
-// json:"-" — same shape as SyncTaskInput for password edits (empty ==
-// "don't change" on PATCH).
+// `Authorization: Basic base64(user:pass)` (when both non-empty).
+// Username alone is not sensitive (visible in API responses); the
+// password is hidden via json:"-" — same shape as SyncTaskInput for
+// password edits (empty on PATCH == "don't change" UNLESS both empty,
+// which sets the task to anonymous).
 //
-// Both stored plaintext in SQLite for v0.6.0.x; switching to
+// Both stored plaintext in SQLite for v0.6.x; switching to
 // credential-library references (see internal/credentials) is a v0.6.2+
 // follow-up.
 type SyncTask struct {
@@ -117,6 +125,17 @@ func (in SyncTaskInput) ToTask() SyncTask {
 // Validate checks that t is acceptable for persistence. Same rules apply
 // to both create and update; on update, callers may want to also check
 // that t.ID != 0.
+//
+// Credential rule (v0.6.4 — was tightened in 0.6.1, relaxed now):
+//   - Both username and password empty → anonymous remote. Used when
+//     the destination cairn has no Registry Username/Password
+//     configured (requireBasicAuth middleware falls through). The
+//     engine simply omits the Authorization header; the receiving
+//     server doesn't gate on it.
+//   - Both non-empty → Basic auth with the supplied pair.
+//   - Mixed (one empty, one set) → almost certainly a UI typo; reject
+//     so the operator sees ErrCredentialIncomplete rather than a
+//     confusing 401 from the remote.
 func (t *SyncTask) Validate() error {
 	if strings.TrimSpace(t.Name) == "" {
 		return ErrTaskNameRequired
@@ -127,11 +146,10 @@ func (t *SyncTask) Validate() error {
 	if strings.TrimSpace(t.RemoteURL) == "" {
 		return ErrRemoteURLRequired
 	}
-	if strings.TrimSpace(t.RemoteUsername) == "" {
-		return ErrUsernameRequired
-	}
-	if t.RemotePassword == "" {
-		return ErrPasswordRequired
+	u := strings.TrimSpace(t.RemoteUsername)
+	p := t.RemotePassword
+	if (u == "") != (p == "") {
+		return ErrCredentialIncomplete
 	}
 	return nil
 }
@@ -164,8 +182,7 @@ var (
 	ErrInvalidStatus     = errors.New("sync: invalid run status")
 	ErrTaskNameRequired  = errors.New("sync: task name is required")
 	ErrRemoteURLRequired = errors.New("sync: remote URL is required")
-	ErrUsernameRequired  = errors.New("sync: remote username is required")
-	ErrPasswordRequired  = errors.New("sync: remote password is required")
+	ErrCredentialIncomplete = errors.New("sync: remote username and password must both be set, or both empty (anonymous)")
 	ErrTaskNotFound      = errors.New("sync: task not found")
 	ErrRunNotFound       = errors.New("sync: run not found")
 	ErrTaskNameConflict  = errors.New("sync: task name already exists")
