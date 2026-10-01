@@ -89,7 +89,7 @@ func TestGetConfig(t *testing.T) {
 }
 
 // v0.6.7 hotfix: docker-compose 把容器内 8787 映射到宿主机 10001 时,
-// `registry.url = "client.local"` 走保存后,GET /api/config 必须返
+// `registry.url = "192.0.2.1"` 走保存后,GET /api/config 必须返
 // host:port 都齐的 URL —— 否则右上角 badge 跟「复制 docker pull」
 // 都漏掉端口,镜像拉不到。回归测试三条路径:
 //
@@ -99,7 +99,7 @@ func TestGetConfig(t *testing.T) {
 func TestGetConfigAppendsHostPortWhenMapped(t *testing.T) {
 	cfg := &config.Config{Env: "test", Port: 8787, HostPort: 10001}
 	cfg.Mutable = &config.Mutable{}
-	cfg.Mutable.Set("registry.url", "client.local")
+	cfg.Mutable.Set("registry.url", "192.0.2.1")
 	cfg.Mutable.Set("registry.name", "ops")
 	h := &api.Handlers{Cfg: cfg, Store: newFakeStore(t)}
 	mux := api.NewRouterWithExtras(h, nil, cfg).(chi.Router)
@@ -110,28 +110,28 @@ func TestGetConfigAppendsHostPortWhenMapped(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
 	}
 	body := rr.Body.String()
-	if !strings.Contains(body, `"url":"http://client.local:10001"`) {
-		t.Errorf("URL missing host:port (want http://client.local:10001): %s", body)
+	if !strings.Contains(body, `"url":"http://192.0.2.1:10001"`) {
+		t.Errorf("URL missing host:port (want http://192.0.2.1:10001): %s", body)
 	}
-	if !strings.Contains(body, `"host":"client.local:10001"`) {
-		t.Errorf("host missing port (want client.local:10001): %s", body)
+	if !strings.Contains(body, `"host":"192.0.2.1:10001"`) {
+		t.Errorf("host missing port (want 192.0.2.1:10001): %s", body)
 	}
 }
 
 func TestGetConfigNoPortWhenNoMapping(t *testing.T) {
 	cfg := &config.Config{Env: "test", Port: 8787, HostPort: 8787}
 	cfg.Mutable = &config.Mutable{}
-	cfg.Mutable.Set("registry.url", "client.local")
+	cfg.Mutable.Set("registry.url", "192.0.2.1")
 	h := &api.Handlers{Cfg: cfg, Store: newFakeStore(t)}
 	mux := api.NewRouterWithExtras(h, nil, cfg).(chi.Router)
 
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/config", nil))
 	body := rr.Body.String()
-	if !strings.Contains(body, `"url":"http://client.local"`) {
+	if !strings.Contains(body, `"url":"http://192.0.2.1"`) {
 		t.Errorf("URL should not have port when HostPort==Port: %s", body)
 	}
-	if strings.Contains(body, `"host":"client.local:`) {
+	if strings.Contains(body, `"host":"192.0.2.1:`) {
 		t.Errorf("host should not have port when HostPort==Port: %s", body)
 	}
 }

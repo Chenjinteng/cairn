@@ -83,7 +83,7 @@ func fixtureV6DB(t *testing.T, path string) {
 	}
 	_, err = conn.Exec(`INSERT INTO sync_tasks
 		(name, direction, remote_url, remote_username, remote_password, include, enabled, created_at, updated_at)
-		VALUES ('legacy', 'pull', 'http://runner.local:10001', 'alice', 's3cret', '', 1, 100, 200)`)
+		VALUES ('legacy', 'pull', 'http://192.0.2.1:10001', 'alice', 's3cret', '', 1, 100, 200)`)
 	if err != nil {
 		t.Fatalf("fixture: insert legacy task: %v", err)
 	}
@@ -197,7 +197,7 @@ func fixtureV7DB(t *testing.T, path string) {
 	}
 	res, err := conn.Exec(`INSERT INTO sync_tasks
 		(name, direction, remote_url, remote_username, remote_password, include, enabled, created_at, updated_at)
-		VALUES ('legacy', 'pull', 'http://runner.local:10001', 'alice', 's3cret', '', 1, 100, 200)`)
+		VALUES ('legacy', 'pull', 'http://192.0.2.1:10001', 'alice', 's3cret', '', 1, 100, 200)`)
 	if err != nil {
 		t.Fatalf("fixture: insert legacy task: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestMigrateV6ToV7PreservesLegacyInlineTask(t *testing.T) {
 		d.Close()
 		t.Fatalf("select legacy task: %v", err)
 	}
-	if url != "http://runner.local:10001" || user != "alice" || pass != "s3cret" {
+	if url != "http://192.0.2.1:10001" || user != "alice" || pass != "s3cret" {
 		t.Errorf("legacy inline credentials mutated: url=%q user=%q pass=%q", url, user, pass)
 	}
 	if ref != "" {
@@ -366,7 +366,7 @@ func TestSyncRunsCascadeOnTaskDelete(t *testing.T) {
 
 	res, err := d.conn.Exec(`INSERT INTO sync_tasks
 		(name, direction, remote_url, include, enabled, created_at, updated_at)
-		VALUES ('cascade', 'pull', 'http://runner.local:10001', '', 1, 1, 1)`)
+		VALUES ('cascade', 'pull', 'http://192.0.2.1:10001', '', 1, 1, 1)`)
 	if err != nil {
 		t.Fatalf("insert task: %v", err)
 	}

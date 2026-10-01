@@ -72,7 +72,7 @@ Mac(仓库)  --make test-frontend-->  53:8080 test-runner  --Playwright-->  158:
 RUNNER_BASE ?= http://proxy.example.com:8080
 ```
 
-与本仓库其他地方「内网地址已实际出现」的现状（`CHANGELOG.md`、`docs/sync-known-issues.md`、`internal/api/api_test.go`、`internal/db/migrate_test.go` 均含 `10.11.27.x`）不一致：**这份默认值脱了敏，但同一个命令行的其它部分没有**，结果是真实可用的默认值被牺牲、脱敏收益为零。
+与本仓库其他地方「内网地址已实际出现」的现状（`CHANGELOG.md`、`docs/sync-known-issues.md`、`internal/api/api_test.go`、`internal/db/migrate_test.go` 均含私有 IP 段）不一致：**这份默认值脱了敏，但同一个命令行的其它部分没有**，结果是真实可用的默认值被牺牲、脱敏收益为零。
 
 **证据**
 
