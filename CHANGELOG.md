@@ -6,6 +6,37 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.6.19] - 2026-10-01
+
+本轮是 0.6.18 之后的第三轮 UAT 反馈 —— 三项设置页 / 复制按钮文案收口，**无后端 / API / 数据库变更**。一次发版，version +1。
+
+### 变更
+
+- **设置页 · 字段重命名 + 默认值变更**。`web/src/pages/settings-page.tsx`：
+  - 「拉取平台白名单」→「拉取镜像的架构」：旧名直译且跟下面 chip 选项（`linux/amd64` 等 OS/arch 字串）不匹配，新名强调「我拉下来的镜像需要是哪些架构」—— 跟 arch 字串一一对应。
+  - 「第三方拉取源」→「其它匿名的第三方源」：旧名「第三方拉取源」歧义（看不出是要账号密码还是要匿名），新名明确强调「**匿名**可访问」的语义。需要账号密码的私有 registry 指引到「凭据管理」里的 username/password 配法。
+  - 默认值从「空数组 = 全平台」收紧为 `['linux/amd64']`（X86 only）。这是**新用户初始默认值**的收紧，storage 里既存的空值（拉所有架构）**不受影响** —— 现有用户的设置语义不破坏。「重置」按钮文案相应从「清空（恢复全部）」改为「重置为仅 X86」。
+  - 侧栏锚点 `settings-platforms` 同步重命名为「拉取镜像的架构」，保持字段命名一致性。
+- **镜像列表 · 复制按钮去掉 Tooltip（UI-6a 续）**。`web/src/components/image-detail-drawer.tsx`：
+  - 移除 `<Tooltip title={cmd}>` 包裹：旧版的 tooltip 跟按钮「复制命令」的语义重复，悬浮用户本来就打算复制，看到「docker pull <ref>」是「预演」一遍，没有信息增量。真正的复制反馈在顶部 toast 「已复制 <runtime> 命令: <cmd>」里 —— 信息量已经覆盖 tooltip。
+  - 按钮自身保留图标 + `aria-label="复制 pull 命令"`（屏幕阅读器友好），鼠标悬浮不再显示文本。
+- **镜像列表 · 复制成功只弹一条 toast（UI-6a 续）**。`web/src/components/image-detail-drawer.tsx`：
+  - 0.6.17 的实现是 `copy()` 内部 `message.success('已复制')` + 调用方 Dropdown onClick 里 `message.success('已复制 <runtime> 命令: …')` —— 用户实测同时弹出两条。
+  - 现在 `copy(text)` 内部不再 toast（成功返回 `void`，失败走 `modal.error` 让用户手动选），「已复制 <runtime> 命令」由 Dropdown onClick 唯一负责。一次复制 = 一条反馈。
+
+### 兼容性
+
+- 严格兼容：三项都是 UI 文案 / 默认值 / 反馈条数微调，无后端 / API / 数据库变更。
+- 「拉取镜像的架构」默认值收紧只对**从未保存过设置页的新用户**生效：现有用户的 storage 值不变。语义上「空 = 全平台」也仍然合法 —— 但 UI 上不再提供「空」这个状态，重置按钮会写到 `['linux/amd64']`。
+
+### 用户须知
+
+- 设置页侧栏「拉取镜像的架构」下面的 chip 选项没变（`linux/amd64` / `linux/arm64` / `linux/arm/v7` / `linux/ppc64le` / `linux/s390x`）；首次进入默认值是 `linux/amd64`，需要其它架构手动勾上。
+- 镜像列表复制按钮：鼠标悬浮不再有 tooltip；点按钮 → 菜单展开 → 选 runtime 才复制；成功反馈只弹一条 toast（runtime + 命令）。
+- 镜像列表 / 抽屉里的所有原有交互（删除 / 查看 digest / 架构列表 / 层列表）保持不变。
+
+---
+
 ## [0.6.18] - 2026-10-01
 
 本轮是 0.6.15-0.6.17 的 UAT 反馈收尾 —— 四条实测观察全部为「既有 UI 一致性 / 体验」修缮，无后端变更。一次发版，version +1。

@@ -56,7 +56,9 @@ export default function ImageDetailDrawer({
 
   const copy = async (text: string) => {
     if (await copyText(text)) {
-      message.success('已复制');
+      // v0.6.19: 这里不再 toast —— 调用方已经做了「已复制 <runtime> 命令」
+      // 的 toast,这里再弹一个「已复制」会出现两次 toast(用户反馈)。
+      // 调用方负责**唯一**一条成功反馈,本函数只负责"复制 + 失败处理"。
       return;
     }
     // 两条路径都失败时不假装成功：把命令摊开，让用户能手动选中复制。
@@ -208,24 +210,39 @@ export default function ImageDetailDrawer({
                   setSelectedRuntime(rt);
                   const cmd = buildPullCommand(host, repo, record.tag, rt);
                   void copy(cmd);
+                  // v0.6.19: 唯一一条成功反馈,带上 runtime 名(用户反馈:
+                  // 之前会同时弹出「已复制」+「已复制 docker 命令」两条)。
                   message.success(`已复制 ${rt} 命令: ${cmd}`);
                 },
                 selectedKeys: [selectedRuntime],
               }}
               trigger={['hover']}
             >
-              <Tooltip
-                title={
-                  buildPullCommand(host, repo, record.tag, selectedRuntime)
-                }
-              >
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<CopyOutlined />}
-                  aria-label="复制 pull 命令"
-                />
-              </Tooltip>
+              {/*
+               * v0.6.19: Tooltip 去掉。
+               *
+               * 用户反馈:鼠标悬浮在复制按钮上,tooltip 弹出「docker pull <ref>」/
+               * 「ctr -n k8s.io images pull <ref>」等完整命令字串 —— 这跟
+               * 「复制按钮就是干这个的」语义重复,悬浮的用户本来就是要
+               * 复制,看到这条字串只是「预演」一遍;真正复制时已经看到
+               * 顶部 toast「已复制 <runtime> 命令: <cmd>」,信息量比 tooltip
+               * 还多(包含 runtime 名)。
+               *
+               * 现在的语义:
+               *   - 按钮自身:图标 + aria-label="复制 pull 命令"(屏幕阅读器
+               *     友好,鼠标悬浮无字)
+               *   - 复制反馈:顶部 toast 一条(已含 runtime + 命令)
+               *
+               * 用户想提前看到命令怎么办?Hover 进 Dropdown 菜单,菜单
+               * 每一项的 label 是 runtime 名(没有命令字串 —— 命令拼装
+               * 在点击时才发生,因为 host / repo / tag 三个变量才决定)。
+               */}
+              <Button
+                type="text"
+                size="small"
+                icon={<CopyOutlined />}
+                aria-label="复制 pull 命令"
+              />
             </Dropdown>
             {allowDelete ? (
               <Popconfirm

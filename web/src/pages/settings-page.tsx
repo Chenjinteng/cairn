@@ -104,9 +104,19 @@ export default function SettingsPage({
   // Empty array = "pull every platform" (the behaviour before the
   // allow-list existed); non-empty = only fetch children whose
   // OS/architecture matches. The server stores this as a CSV string
-  // under config.MutableKey "pull.platforms"; the UI speaks a string
-  // array.
-  const [pullPlatformsDraft, setPullPlatformsDraft] = useState<string[]>([]);
+  // v0.6.19: 出厂默认从「空(全架构)」收紧到「linux/amd64」。
+  //
+  // 硬件主要跑 x86,默认「全架构」会把 13 个用不到的架构(arm/v7、386、
+  // ppc64le 等)也拉过来 —— 单个 alpine multi-arch 镜像就是 ~80MB × 13
+  // ≈ 1GB,用户绝大多数场景只需要 X86 这一份。其它架构(x86 之外的)
+  // 在 chip 列表里**仍然可选**,只是默认不勾上 —— 真要 arm64 / armv7
+  // 镜像,在设置页勾上即可,不需要改代码。
+  //
+  // 注意:storage 里既存的空值(老用户的「拉所有架构」配置)不受影响,
+  // 这次只改「未填过的用户」初始值 —— 老用户的空 = 拉所有平台 不变,
+  // 升级后第一次进设置页点保存才正式落到 X86-only。
+  const DEFAULT_PULL_PLATFORMS = ['linux/amd64'];
+  const [pullPlatformsDraft, setPullPlatformsDraft] = useState<string[]>(DEFAULT_PULL_PLATFORMS);
   // v0.5.48: 第三方拉取源（pull.known_hosts）。服务端存归一化后的
   // "<scheme>://host[:port]" CSV（保存时校验、小写、去重），UI 侧说数组。
   // 用途：拉取页镜像名智能解析认这些主机（含无点内网主机）+ 源地址
@@ -448,7 +458,7 @@ export default function SettingsPage({
               items: [
                 { key: 'settings-connection', label: '仓库连接' },
                 { key: 'settings-switches', label: '功能开关' },
-                { key: 'settings-platforms', label: '拉取平台' },
+                { key: 'settings-platforms', label: '拉取镜像的架构' },
                 { key: 'settings-heat', label: '热度记录' },
               ],
             },
@@ -738,17 +748,20 @@ export default function SettingsPage({
           </div>
 
           {/* v0.5.37.4：侧栏「拉取平台」锚点。之前它排在「热度保留天数」之后，
-              跟「多架构镜像怎么拉」的开关分散在两处；挪到开关组后面更顺。 */}
+              跟「多架构镜像怎么拉」的开关分散在两处；挪到开关组后面更顺。
+              v0.6.19：标题从「拉取平台白名单」→「拉取镜像的架构」+ 默认改 X86。 */}
           <div id="settings-platforms" className="settings-anchor">
-            {/* 拉取平台白名单 */}
+            {/* 拉取镜像的架构 —— 决定 cairn 拉取 multi-arch 镜像时只下哪些架构的 blobs。
+                v0.6.19 之前叫「拉取平台白名单」(功能等价但术语偏后端),
+                v0.6.19 改成更直白的「拉取镜像的架构」+ 默认勾上 X86。 */}
             <Form.Item
-              label={<span>拉取平台白名单</span>}
+              label={<span>拉取镜像的架构</span>}
               extra={
                 editing
-                  ? '勾选目标平台；取消勾选 = 排除；保存后对下一个 pull 任务立即生效。'
+                  ? '勾选目标架构；保存后对下一个 pull 任务立即生效。X86 默认勾上;其它架构(arm64 / armv7 / ppc64le 等)按需勾选 —— 真要内网 K8s 节点用的 arm64 镜像,在 chip 列表里点一下就行,不需要改代码。'
                   : pullPlatformsDraft.length === 0
-                    ? '当前未启用过滤：多架构镜像会按上游索引全部拉取（等同历史默认行为）。'
-                    : `已选 ${pullPlatformsDraft.length} 个：${pullPlatformsDraft.join(', ')}。`
+                    ? '当前未限制(等于拉所有架构)。常见原因:从未保存过设置页、storage 是老版本默认值;在「编辑」状态下保存一次即可生效。'
+                    : `当前限定：${pullPlatformsDraft.join(', ')}。其它架构的镜像不会下下来 —— x86 主机上要拉 arm64 镜像,在这里勾上「linux/arm64」保存,下次 pull 任务就会一起把 arm64 的 blobs 下下来。`
               }
             >
               {editing ? (
@@ -785,8 +798,8 @@ export default function SettingsPage({
                   </Space>
                   <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
                     {pullPlatformsDraft.length > 0 ? (
-                      <Button type="link" onClick={() => setPullPlatformsDraft([])}>
-                        清空（恢复全部）
+                      <Button type="link" onClick={() => setPullPlatformsDraft(['linux/amd64'])}>
+                        重置为仅 X86
                       </Button>
                     ) : null}
                   </div>
@@ -795,25 +808,27 @@ export default function SettingsPage({
                 <ReadonlyValue
                   value={
                     pullPlatformsDraft.length === 0
-                      ? '未启用（拉取所有平台）'
+                      ? '未限制（拉取所有架构 — 旧版本默认值）'
                       : pullPlatformsDraft.join(', ')
                   }
                 />
               )}
             </Form.Item>
 
-            {/* v0.5.48: 第三方拉取源 —— 让 cairn 在 pull 时知道哪些 host 走匿名 token(不发送
+            {/* v0.5.48：第三方拉取源。让 cairn 在 pull 时知道哪些 host 走匿名 token(不发送
                 Basic Auth 头)。匿名源如果不加进来,镜像名前缀识别不到时拉取会 401。
+                v0.6.19：标题从「第三方拉取源」→「其它匿名的第三方源」+ extra 收紧到只讲匿名场景。
                 已知公网匿名源已内置在 utils.ts KNOWN_HOSTS,这里只追加未内置的:
-                比如 nvcr.io(NVIDIA NGC)、docker.elastic.co、内网 HTTP registry(也是匿名场景)等。 */}
+                比如 nvcr.io(NVIDIA NGC)、docker.elastic.co、内网 HTTP registry(也是匿名场景)等。
+                需要账号密码的私有 registry 走「凭据管理」。 */}
             <Form.Item
-              label={<span>第三方拉取源</span>}
+              label={<span>其它匿名的第三方源</span>}
               extra={
                 editing
-                  ? '输入 host[:port] 或完整 URL 后回车;也可从下拉直接选匿名公网源。裸主机默认按 https 识别(端口非 443/8443/5000 时按 http),需要强制 http 请显式写 http://主机:端口。保存后:拉取页的镜像名智能解析会认这些主机前缀,识别成"匿名可访问"源(不发送 Basic Auth 头),否则 pull 会因 401 失败。需要认证的私有 registry 走「凭据管理」。'
+                  ? '输入 host[:port] 或完整 URL 后回车;也可从下拉直接选匿名公网源。裸主机默认按 https 识别(端口非 443/8443/5000 时按 http)。这里加的都是**匿名可访问**的源 —— pull 时不发送 Basic Auth。需要账号密码的私有 registry 不在这里加,改去「凭据管理」配。'
                   : pullKnownHostsDraft.length === 0
-                    ? '未配置:仅识别内置匿名源(Docker Hub / quay.io / ghcr.io / gcr.io / registry.k8s.io / mcr.microsoft.com / public.ecr.aws / registry.access.redhat.com)。'
-                    : `已配置 ${pullKnownHostsDraft.length} 个匿名源,镜像名带这些主机前缀时 cairn 不发送 Basic Auth 头,直接走匿名 token 流程。`
+                    ? '未配置。仅识别内置匿名源(Docker Hub / quay.io / ghcr.io / gcr.io / registry.k8s.io / mcr.microsoft.com / public.ecr.aws / registry.access.redhat.com);这些够覆盖大多数匿名镜像源,真要 nvcr.io / docker.elastic.co 之类再加。'
+                    : `已配置 ${pullKnownHostsDraft.length} 个匿名源,镜像名带这些主机前缀时 cairn 不发送 Basic Auth。`
               }
             >
               {editing ? (
