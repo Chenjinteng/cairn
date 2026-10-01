@@ -38,14 +38,64 @@ export function formatDateTime(value?: string | null, fallback = '--'): string {
   )}:${pad(date.getMinutes())}`;
 }
 
-/** registry 引用不带协议头：docker pull 里用 host[:port]/path:tag。 */
-export function buildPullCommand(host: string, repository: string, tag: string): string {
-  // v0.5.28 曾经在这里补 `http://` 前缀(担心 docker pull 拿到裸 host 默认按 https
-  // 处理会失败),v0.5.31 回退:docker daemon 配了 insecure-registry 时会从 https
-  // 自动回退到 http,而且 `docker pull` 本身不接受 URL 形式(scheme) —— 加了
-  // 反而让操作员复制出去 `docker pull http://registry.example.com/...` 跑不起来。
-  // 直接拼裸 host:port,跟原来的工作流一致。
-  return `docker pull ${host}/${repository}:${tag}`;
+/**
+ * v0.6.17: 拉取命令支持的 runtime 类型。
+ *
+ * 四种覆盖常见 OCI runtime 工具:
+ *   - docker:    Docker Engine(主流;v0.6.16 之前的唯一选项)
+ *   - podman:    Podman(Red Hat 系),命令语法跟 docker 兼容
+ *   - nerdctl:   containerd 的 CLI(nerdctl 跟 docker 命令形态一致),
+ *               适合不愿意装 docker CLI 的 K8s 节点
+ *   - ctr:       containerd 内置 CLI(原生,无 daemon 抽象),语法不同:
+ *               - 必须指定 namespace(用 k8s.io,跟 kubelet 一致)
+ *               - 子命令是 `images pull` 而不是 `pull`
+ *
+ * 字符串字面量顺序就是 UI Dropdown 的展示顺序。
+ */
+export type PullRuntime = 'docker' | 'podman' | 'nerdctl' | 'ctr';
+
+export const PULL_RUNTIMES: { value: PullRuntime; label: string }[] = [
+  { value: 'docker',  label: 'docker' },
+  { value: 'podman',  label: 'podman' },
+  { value: 'nerdctl', label: 'nerdctl (containerd CLI)' },
+  { value: 'ctr',     label: 'ctr (containerd 内置)' },
+];
+
+/**
+ * 默认 runtime。给「复制命令」按钮留个无歧义的起点 —— 99% 的 UAT 还在用
+ * docker,选 docker 不让任何人错愕;真要换 runtime 用户从 Dropdown 选。
+ */
+export const DEFAULT_PULL_RUNTIME: PullRuntime = 'docker';
+
+/**
+ * v0.6.17: 按 runtime 构造 pull 命令。
+ *
+ * - docker / podman / nerdctl: 全部是 `${cli} pull <host>/<repo>:<tag>` —— 三个
+ *   CLI 的 pull 命令形态完全一致,所以 buildPullCommand 退化成 runtime
+ *   参数的薄壳。
+ * - ctr 不同: `ctr -n k8s.io images pull <host>/<repo>:<tag>`,必须显式
+ *   选 namespace。`k8s.io` 是 kubelet 默认 namespace,跟生产环境对齐;
+ *   非 K8s 用户自己改成 default / 自建 namespace。
+ *
+ * registry 引用不带协议头:docker daemon 配了 insecure-registry 会自动
+ * 从 https 回退到 http,而且 docker pull 不接受 URL 形式(scheme) —
+ * v0.5.31 这条经验一直保留,新加的 runtime 也遵守同一规则。
+ */
+export function buildPullCommand(
+  host: string,
+  repository: string,
+  tag: string,
+  runtime: PullRuntime = DEFAULT_PULL_RUNTIME,
+): string {
+  const ref = `${host}/${repository}:${tag}`;
+  switch (runtime) {
+    case 'docker':
+    case 'podman':
+    case 'nerdctl':
+      return `${runtime} pull ${ref}`;
+    case 'ctr':
+      return `ctr -n k8s.io images pull ${ref}`;
+  }
 }
 
 /**

@@ -6,6 +6,28 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.6.17] - 2026-10-01
+
+本轮把「镜像列表 → 仓库抽屉 → tag 行」的复制命令从单一 `docker pull` 升级为按 runtime 切换（docker / podman / nerdctl / ctr）。证据与诉求见 [docs/issues/ui-0.6.14.md#ui-6a](./docs/issues/ui-0.6.14.md)。
+
+### 新增
+
+- **前端 · 复制命令按 runtime 切换**。`web/src/utils.ts` 暴露 `PullRuntime` 类型 + `PULL_RUNTIMES` 清单 + `buildPullCommand(host, repo, tag, runtime)` 工厂。`docker` / `podman` / `nerdctl` 三个 CLI 命令形态一致，统一用 `${cli} pull <ref>`；`ctr` 命令不同（必须指定 namespace），用 `ctr -n k8s.io images pull <ref>`（`k8s.io` 是 kubelet 默认 namespace）。
+- **前端 · 行操作按钮改为 Dropdown**。`web/src/components/image-detail-drawer.tsx` 把原来的 `<Button icon={CopyOutlined}>` 包进 `<Dropdown>`，单击 = 复制当前选中的 runtime 命令（保持原「一键复制」工作流），菜单 = 切换 runtime（选中即复制 + Toast 反馈）。当前选中 runtime 是组件级 state（多数用户在同一台机只用一种 CLI，逐行记忆无意义），Drawer 重开时回落到默认 `docker`。
+
+### 兼容性
+
+- 严格兼容：默认 runtime 是 `docker`，单击复制的命令与 0.6.16 完全相同。`buildPullCommand(host, repo, tag)` 不传 runtime 时退化为旧签名，老 caller 无需修改。
+- 不改后端 / API / 数据库。
+
+### 用户须知
+
+- 单击复制按钮：复制当前 runtime 的命令（默认 docker，UI 不变）。
+- 点开 Dropdown 选其它 runtime：立刻复制对应命令，顶部 toast 提示「已复制 podman 命令: …」。
+- `ctr` 多出来的 `-n k8s.io` 是 namespace 参数，非 K8s 用户需要手动从复制内容里删掉或换成自己的 namespace。
+
+---
+
 ## [0.6.16] - 2026-10-01
 
 本轮把 `sync_runs` 的「只露汇总 + 最后失败 tag」升级到「按 (repo, tag) 展开每条尝试」。记录在 [docs/issues/ui-0.6.14.md#ui-4](./docs/issues/ui-0.6.14.md) 的 schema 缺口，本轮一次性补上：后端落明细表 + 前端展开面板 + API 分页端点。证据与判定过程见 issue。
