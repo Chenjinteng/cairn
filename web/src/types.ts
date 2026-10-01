@@ -696,6 +696,41 @@ export interface SyncRun {
 }
 
 /**
+ * v0.6.16：单次 (repo, tag) 拉/推的明细。一条 SyncRunItem = 一次
+ * pullTag / pushTag 的成败。后端 granularity 是 (repo, tag) 而非
+ * (repo)，这样同一个 repo 多 tag 部分失败时能看清单。失败时 bytesDone=0
+ * bytesTotal 是声明的 manifest 大小（用户能区分"小镜像失败"还是
+ * "10G 镜像失败"）。state 有三种：succeeded / failed / cancelled
+ * （cancelled 当前不会写入，保留给未来 per-tag 取消）。
+ */
+export type SyncRunItemState = 'succeeded' | 'failed' | 'cancelled';
+
+export interface SyncRunItem {
+  id: number;
+  runId: number;
+  repository: string;
+  tag: string;
+  state: SyncRunItemState;
+  error?: string;
+  bytesDone: number;
+  bytesTotal: number;
+  startedAt: string;
+  finishedAt?: string;
+}
+
+/**
+ * v0.6.16：分页返回包络。原 /api/sync/{id}/runs 返裸数组，
+ * 这个返 { items, total, limit, offset } 让 UI 直接渲染
+ * "共 N 条 / 第 M 页" 而不需要单独跑 COUNT。
+ */
+export interface SyncRunItemsPage {
+  items: SyncRunItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/**
  * v0.6.5: 「测试连接」按钮的返回结构。后端打 `{remoteUrl}/v2/` 探测,
  * 按 HTTP 状态 + WWW-Authenticate 头归类成 AuthStatus。前端按这个
  * 字段选图标 / 颜色 / 文案,统一渲染。HTTP 200 = 探测请求本身成功,

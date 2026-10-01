@@ -6,6 +6,31 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.6.16] - 2026-10-01
+
+本轮把 `sync_runs` 的「只露汇总 + 最后失败 tag」升级到「按 (repo, tag) 展开每条尝试」。记录在 [docs/issues/ui-0.6.14.md#ui-4](./docs/issues/ui-0.6.14.md) 的 schema 缺口，本轮一次性补上：后端落明细表 + 前端展开面板 + API 分页端点。证据与判定过程见 issue。
+
+### 新增
+
+- **后端 · `sync_run_items` 表（schema v10）**。`internal/db/db.go` 新增 v10 迁移：`CREATE TABLE sync_run_items` + `(run_id, state, error, bytes_done, bytes_total, started_at, finished_at)` + `FOREIGN KEY(run_id) REFERENCES sync_runs(id) ON DELETE CASCADE` + 索引。粒度 (repo, tag) 对齐引擎实际的一次 `pullTag` / `pushTag` 调用，与已有 `pull_jobs` 对称。
+- **后端 · 引擎写入路径改造**。`internal/sync/engine.go` 把 `pullRepo` / `pushRepo` 的内层循环从「遇错即返回整个 repo」改成「每 tag 独立 attempt」：`recordRunItem` 在 `pullTag` / `pushTag` 完成后写一行（succeeded / failed），失败不阻断剩余 tag。仓库级失败计数仍然映射到 `repos_failed`，但**真正的失败明细**现在在 `sync_run_items` 里。
+- **后端 · `GET /api/sync/{id}/runs/{rid}/items?limit=&offset=`**。新增 `RunItemsPage` envelope（items + total + limit + offset），limit 默认 50、上限 500，cross-tenant guard 校验 run 真的属于 URL 里的 task。
+- **前端 · 历史 Modal 行可展开**。`web/src/pages/sync-page.tsx` 的 `<Table>` 加 `expandable`：每条 run 行有 + / − 按钮，展开区是内层 `<Table>`，列：仓库 / tag / 结果（succeeded / failed / cancelled）/ 耗时 / 字节（失败时 `0 B / X`，红字）/ 错误。明细懒加载（首次展开触发，缓存到 Modal 关闭），「加载更多」按 50 条/页翻页。
+- **前端 · `formatBytes` 工具函数**。镜像层大小用 KiB / MiB / GiB 二进制单位显示，跟 cairn 自己的「镜像层合计」口径一致。
+
+### 兼容性
+
+- 旧 run（schema < v10 时写入的）`sync_run_items` 表为空 —— 前端展开区显示 Empty「该 run 没有明细（旧版本引擎或运行中尚未落库）」。这是预期的历史数据空窗，不是 bug。
+- 引擎层「第一次 tag 失败就 short-circuit 整个 repo」的行为被改掉 —— 同一个 repo 多个 tag 部分失败时，原本只能看到第一条错误；现在能看到所有 tag 的成败明细。`repos_synced` / `repos_failed` 计数语义不变（任一 tag 失败 → repo 计数为 failed）。
+
+### 用户须知
+
+- 「同步」页历史 Modal 里每条 run 现在可以 + / − 展开看 (repo, tag) 明细。一个有 77 个 tag 的 run 展开后只显示前 50 条，要看更多点「加载更多」。
+- 镜像大小列：成功时显示「总字节」（manifest 声明的 layer + config 合计），失败时显示「0 B / 总字节」，用红色 0 提示「压根没传完」。
+- 已有的「镜像拉取」页历史可展开明细是 v0.4 起的功能，本轮同步镜像对齐到同一信息粒度。
+
+---
+
 ## [0.6.15] - 2026-10-01
 
 本轮是 0.6.14「UI 一致性收尾」延续：UAT 手工测试发现代理管理 / 设置 / 热度三个页仍有 4 处提示或布局上的小毛刺，统一在此收尾。证据与判定见 [docs/issues/ui-0.6.14.md](./docs/issues/ui-0.6.14.md)。

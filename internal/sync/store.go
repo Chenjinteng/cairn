@@ -419,3 +419,85 @@ func (s *Store) ScheduleUpdateAfterFire(ctx context.Context, sched *Schedule, la
 	sched.NextRunAt = next.UTC()
 	return s.db.SyncScheduleUpdate(ctx, scheduleToRow(*sched))
 }
+// --- run items (v0.6.16) ----------------------------------------------------
+
+// CreateRunItem inserts one (repo, tag) detail row for an in-flight
+// run. Called by the engine from inside pullTag / pushTag — once per
+// attempt, after the attempt terminates. The caller has already
+// determined State ("succeeded" / "failed") and Error ("" on
+// success). StartedAt is the attempt's start time; FinishedAt is the
+// attempt's end. The engine takes time.Now() UTC at the right two
+// points so it can stamp duration without holding timestamps in a
+// variable across function calls.
+//
+// Errors are NOT swallowed here — they bubble back to the engine,
+// which logs at WARN and continues. A failure to write a per-item row
+// must NOT abort a healthy sync; this is consistent with
+// UpdateRunProgress (which writes on every transition).
+func (s *Store) CreateRunItem(ctx context.Context, item SyncRunItem) error {
+	return s.db.SyncRunItemCreate(ctx, db.SyncRunItemRow{
+		RunID:      item.RunID,
+		Repository: item.Repository,
+		Tag:        item.Tag,
+		State:      item.State,
+		Error:      item.Error,
+		BytesDone:  item.BytesDone,
+		BytesTotal: item.BytesTotal,
+		StartedAt:  item.StartedAt,
+		FinishedAt: item.FinishedAt,
+	})
+}
+
+// ListRunItems returns one page of (repo, tag) attempts for a run,
+// ordered by insertion time (engine iteration order). limit<=0 means
+// "no limit" — used internally for tests. The handler always passes a
+// positive limit so the API is bounded.
+//
+// total is the unpaged count so the UI can render "共 N 条" without a
+// separate round trip. When total==0 the returned slice is nil.
+func (s *Store) ListRunItems(ctx context.Context, runID int64, limit, offset int) ([]SyncRunItem, int, error) {
+	rows, total, err := s.db.SyncRunItemListByRun(ctx, runID, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	if rows == nil {
+		return nil, 0, nil
+	}
+	out := make([]SyncRunItem, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, itemRowToDomain(r))
+	}
+	return out, total, nil
+}
+
+// RunItemSummary returns the per-state count breakdown for a run.
+// Cheap (single grouped COUNT(*) on the run_id index) — meant to be
+// called by handlers that want to enrich a SyncRun response without
+// forcing the UI to load the full items list.
+func (s *Store) RunItemSummary(ctx context.Context, runID int64) (SyncRunItemSummary, error) {
+	succ, fail, canc, err := s.db.SyncRunItemSummaryByRun(ctx, runID)
+	if err != nil {
+		return SyncRunItemSummary{}, err
+	}
+	return SyncRunItemSummary{Succeeded: succ, Failed: fail, Cancelled: canc}, nil
+}
+
+// itemRowToDomain converts a db.SyncRunItemRow into the domain
+// SyncRunItem. Trivial today; the indirection matches the rowToRun /
+// rowToTask pattern in this file and gives a single place to add
+// normalization later (e.g. trimming tag whitespace, normalizing
+// state casing).
+func itemRowToDomain(r db.SyncRunItemRow) SyncRunItem {
+	return SyncRunItem{
+		ID:         r.ID,
+		RunID:      r.RunID,
+		Repository: r.Repository,
+		Tag:        r.Tag,
+		State:      r.State,
+		Error:      r.Error,
+		BytesDone:  r.BytesDone,
+		BytesTotal: r.BytesTotal,
+		StartedAt:  r.StartedAt,
+		FinishedAt: r.FinishedAt,
+	}
+}

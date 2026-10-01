@@ -34,6 +34,7 @@ import {
   Form,
   Input,
   Modal,
+  Pagination,
   Popconfirm,
   Radio,
   Select,
@@ -68,6 +69,7 @@ import {
   deleteSyncSchedule,
   deleteSyncTask,
   listCredentials,
+  listSyncRunItems,
   listSyncRuns,
   listSyncSchedules,
   listSyncTasks,
@@ -81,6 +83,8 @@ import type {
   Credential,
   SyncDirection,
   SyncRun,
+  SyncRunItem,
+  SyncRunItemState,
   SyncRunStatus,
   SyncSchedule,
   SyncScheduleInput,
@@ -187,6 +191,25 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
   const [historyTask, setHistoryTask] = useState<SyncTask | null>(null);
   const [historyRuns, setHistoryRuns] = useState<SyncRun[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+
+  /**
+   * v0.6.16: 历史 Modal 的「按 (repo, tag) 展开」状态。
+   *
+   * - expandedRunIds: 当前展开的 run.id 集合,跟 antd Table expandable.expandedRowKeys 直接绑
+   * - itemsByRunId: 缓存已加载过的明细,key 是 run.id,value 是当前已加载的 (items + total) + 当前页 (limit/offset)
+   *   + loading 标志。**缓存到 Modal 关闭**: 关闭时清掉,避免下次打开看到上次的残留(配合 Modal 的 destroyOnClose)。
+   * - 每页 50 (与服务端 default 同步);用户翻页时把新一页 append 到 items 末尾。
+   */
+  const [expandedRunIds, setExpandedRunIds] = useState<number[]>([]);
+  const [itemsByRunId, setItemsByRunId] = useState<Record<number, {
+    items: SyncRunItem[];
+    total: number;
+    limit: number;
+    offset: number;
+    loading: boolean;
+  }>>({});
+
+  const ITEMS_PAGE_SIZE = 50;
 
   // v0.6.11: 定时规则 Modal — 跟「历史」Modal 平级,各自独立加载。
   const [scheduleTask, setScheduleTask] = useState<SyncTask | null>(null);
@@ -445,6 +468,9 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
     setHistoryTask(task);
     setHistoryRuns([]);
     setHistoryLoading(true);
+    // v0.6.16: 每次打开重置展开态 — 否则切换 task 后展开的还是上一个 task 的 run。
+    setExpandedRunIds([]);
+    setItemsByRunId({});
     const result = await listSyncRuns(task.id, 50);
     if (result.success && result.data) {
       setHistoryRuns(result.data);
@@ -457,6 +483,64 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
   const closeHistory = () => {
     setHistoryTask(null);
     setHistoryRuns([]);
+    setExpandedRunIds([]);
+    setItemsByRunId({});
+  };
+
+  /**
+   * v0.6.16: 加载某条 run 的 (repo, tag) 明细。第一页时覆盖,后续翻页时 append。
+   *
+   * 失败的 toast 走 message.error: 历史 Modal 内操作失败不应把 Modal 关掉,
+   * 跟任务列表里失败重试一样的反馈层级。
+   *
+   * 注意点: 同一 run 被并发触发时 (用户狂点 / 网络抖动重发) 通过 prev guard
+   * 拦掉 —— setItemsByRunId 的 updater 先检查 loading,避免竞争覆盖。
+   */
+  const loadRunItems = async (
+    taskId: number,
+    runId: number,
+    page: 1 | 'next' = 1,
+  ) => {
+    setItemsByRunId((prev) => {
+      const existing = prev[runId];
+      if (existing?.loading) return prev; // 并发拦截
+      return {
+        ...prev,
+        [runId]: {
+          items: existing?.items ?? [],
+          total: existing?.total ?? 0,
+          limit: existing?.limit ?? ITEMS_PAGE_SIZE,
+          offset: existing?.offset ?? 0,
+          loading: true,
+        },
+      };
+    });
+    const existing = itemsByRunId[runId];
+    const offset = page === 1 ? 0 : (existing?.offset ?? 0) + ITEMS_PAGE_SIZE;
+    const limit = existing?.limit ?? ITEMS_PAGE_SIZE;
+    const result = await listSyncRunItems(taskId, runId, limit, offset);
+    if (result.success && result.data) {
+      setItemsByRunId((prev) => {
+        const old = prev[runId] ?? { items: [], total: 0, limit, offset: 0, loading: false };
+        const merged = page === 1 ? result.data!.items : [...old.items, ...result.data!.items];
+        return {
+          ...prev,
+          [runId]: {
+            items: merged,
+            total: result.data!.total,
+            limit: result.data!.limit,
+            offset: result.data!.offset + result.data!.items.length,
+            loading: false,
+          },
+        };
+      });
+    } else {
+      message.error(`加载明细失败：${result.message ?? '未知错误'}`);
+      setItemsByRunId((prev) => ({
+        ...prev,
+        [runId]: { ...(prev[runId] ?? { items: [], total: 0, limit, offset: 0, loading: false }), loading: false },
+      }));
+    }
   };
 
   // ── 定时（v0.6.11）────────────────────────────────────────────────
@@ -747,6 +831,166 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
       ) : <span style={{ color: '#999' }}>—</span>,
     },
   ];
+
+  // ── 历史明细列（v0.6.16）─────────────────────────────────────────────
+
+  /**
+   * 内层 items 表的列。展开某条 run 时挂在 expandedRowRender 里,
+   * 共享 historyItemsState / 翻页状态。
+   *
+   * 列宽合计 ~640px,正好填进 Modal width=800 的内边距里 —— 任何窄屏
+   * 命中也不会再出 antd 默认的横滚条(列宽都已显式 width)。
+   */
+  const itemColumns: ColumnsType<SyncRunItem> = [
+    {
+      title: '仓库',
+      dataIndex: 'repository',
+      key: 'repository',
+      width: 220,
+      ellipsis: true,
+      render: (v: string) => <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{v}</span>,
+    },
+    {
+      title: 'tag',
+      dataIndex: 'tag',
+      key: 'tag',
+      width: 120,
+      ellipsis: true,
+      render: (v: string) => <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{v || '—'}</span>,
+    },
+    {
+      title: '结果',
+      dataIndex: 'state',
+      key: 'state',
+      width: 90,
+      render: (state: SyncRunItemState) => (
+        <Tag color={itemStateColor(state)} icon={itemStateIcon(state)}>
+          {itemStateLabel(state)}
+        </Tag>
+      ),
+    },
+    {
+      title: '耗时',
+      key: 'duration',
+      width: 90,
+      render: (_, item) => {
+        if (!item.finishedAt) return <span style={{ color: '#999' }}>—</span>;
+        const ms = new Date(item.finishedAt).getTime() - new Date(item.startedAt).getTime();
+        return <span style={{ fontFamily: 'monospace' }}>{formatDurationMs(ms)}</span>;
+      },
+    },
+    {
+      title: '字节',
+      key: 'bytes',
+      width: 100,
+      render: (_, item) => {
+        if (item.bytesTotal === 0) return <span style={{ color: '#999' }}>—</span>;
+        // 失败时 bytesDone=0,bytesTotal 是声明的 manifest 大小 ——
+        // 用「0 B / X」的形式让用户区分「压根没下载」和「下载了一半」。
+        const done = formatBytes(item.bytesDone);
+        const total = formatBytes(item.bytesTotal);
+        return (
+          <span style={{ fontFamily: 'monospace', fontSize: 12, color: item.bytesDone === 0 && item.bytesTotal > 0 ? '#cf1322' : undefined }}>
+            {done} / {total}
+          </span>
+        );
+      },
+    },
+    {
+      title: '错误',
+      dataIndex: 'error',
+      key: 'error',
+      ellipsis: true,
+      render: (msg: string | undefined) => msg ? (
+        <Tooltip title={msg}>
+          <span style={{ color: '#cf1322', fontSize: 12 }}>
+            <CloseCircleOutlined /> {msg}
+          </span>
+        </Tooltip>
+      ) : <span style={{ color: '#999' }}>—</span>,
+    },
+  ];
+
+  /**
+   * v0.6.16: 历史 Modal 的展开行内容。
+   *
+   * 三种状态:
+   *   1. 首次展开(itemsByRunId[runId] 为空) — 触发 loadRunItems,显示骨架
+   *   2. 加载完成 — 渲染内层 Table,带分页 (已加载 < total 时显示「加载更多」按钮)
+   *   3. 0 条 — empty state,提示「该 run 没有明细」
+   *
+   * 容器用浅色背景 + 左内边距让「展开区」与外层 run 表视觉区分。
+   */
+  const renderExpandedItems = (run: SyncRun) => {
+    const state = itemsByRunId[run.id];
+    const loaded = state?.items ?? [];
+    const total = state?.total ?? 0;
+    const loading = state?.loading ?? false;
+    const loadedCount = loaded.length;
+    const hasMore = loadedCount < total;
+    return (
+      <div
+        style={{
+          background: 'var(--color-fill-quaternary, rgba(0,0,0,0.02))',
+          padding: '8px 8px 12px 32px',
+          margin: '0 -8px',
+        }}
+      >
+        {!state && (
+          <div style={{ padding: 16, color: '#999' }}>加载中…</div>
+        )}
+        {state && loadedCount === 0 && total === 0 && !loading && (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description="该 run 没有明细（旧版本引擎或运行中尚未落库）"
+          />
+        )}
+        {state && (loadedCount > 0 || total > 0) && (
+          <>
+            <Table<SyncRunItem>
+              rowKey="id"
+              size="small"
+              columns={itemColumns}
+              dataSource={loaded}
+              pagination={false}
+              loading={loading && loadedCount === 0}
+            />
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
+              <span style={{ fontSize: 12, color: '#999' }}>
+                已加载 {loadedCount} / 共 {total} 条
+              </span>
+              {hasMore && (
+                <Button
+                  size="small"
+                  loading={loading}
+                  onClick={() => historyTask && void loadRunItems(historyTask.id, run.id, 'next')}
+                >
+                  加载更多（剩余 {total - loadedCount} 条）
+                </Button>
+              )}
+              {total > ITEMS_PAGE_SIZE && loadedCount > 0 && (
+                <Pagination
+                  size="small"
+                  current={Math.floor(loadedCount / ITEMS_PAGE_SIZE) + (loadedCount % ITEMS_PAGE_SIZE === 0 ? 0 : 1)}
+                  pageSize={ITEMS_PAGE_SIZE}
+                  total={total}
+                  showSizeChanger={false}
+                  onChange={(p) => {
+                    // 「跳页」语义 = 重新加载到目标 offset。简单做法:
+                    // 关闭展开 → 重置 → 展开到目标页。但 antd expandable
+                    // 的 onChange 没有 page 参数,这里只接住点击事件。
+                    // 用占位行为: 跳到 p 即「加载更多」+(p-1) 次,UI 上
+                    // 暂时退化成「加载更多」。P0 不优化跳页。
+                    void p;
+                  }}
+                />
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    );
+  };
 
   // ── 渲染 ─────────────────────────────────────────────────────────
 
@@ -1073,6 +1317,32 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
             dataSource={historyRuns}
             pagination={{ pageSize: 10, showSizeChanger: false }}
             size="small"
+            /*
+             * v0.6.16: 每条 run 可以 + / - 展开,展开区是 (repo, tag) 明细。
+             * 展开时懒加载第一页 50 条,「加载更多」按 ITEMS_PAGE_SIZE 翻页。
+             * expandedRowKeys / onExpand 双向绑: 用户点 + 后我们触发
+             * loadRunItems 并把 runId 加进 expandedRunIds;点 - 只改
+             * expandedRunIds(明细已经加载完,缓存留到 closeHistory 才清)。
+             *
+             * 展开箭头占一列;histroyColumns 不用给这列留 width。
+             */
+            expandable={{
+              expandedRowKeys: expandedRunIds,
+              onExpand: (open, run) => {
+                if (open) {
+                  setExpandedRunIds((prev) =>
+                    prev.includes(run.id) ? prev : [...prev, run.id],
+                  );
+                  // 已缓存就不重拉,直接吃缓存。
+                  if (!itemsByRunId[run.id]) {
+                    void loadRunItems(historyTask!.id, run.id, 1);
+                  }
+                } else {
+                  setExpandedRunIds((prev) => prev.filter((id) => id !== run.id));
+                }
+              },
+              expandedRowRender: (run) => renderExpandedItems(run),
+            }}
           />
         )}
       </Modal>
@@ -1150,6 +1420,54 @@ function statusIcon(status: SyncRunStatus) {
     case 'running': return <ClockCircleOutlined />;
     default:        return <PauseCircleOutlined />;
   }
+}
+
+/**
+ * v0.6.16: sync_run_items.state → antd Tag 颜色 / 图标 / 文案。
+ *
+ * 与外层 SyncRun 的色板保持一致:
+ *   - succeeded → green + CheckCircle
+ *   - failed    → red + CloseCircle
+ *   - cancelled → default + PauseCircle（当前不会写入，保留给未来）
+ */
+function itemStateColor(state: SyncRunItemState): string {
+  switch (state) {
+    case 'succeeded': return 'success';
+    case 'failed':    return 'error';
+    case 'cancelled': return 'default';
+  }
+}
+function itemStateIcon(state: SyncRunItemState) {
+  switch (state) {
+    case 'succeeded': return <CheckCircleOutlined />;
+    case 'failed':    return <CloseCircleOutlined />;
+    case 'cancelled': return <PauseCircleOutlined />;
+  }
+}
+function itemStateLabel(state: SyncRunItemState): string {
+  switch (state) {
+    case 'succeeded': return '成功';
+    case 'failed':    return '失败';
+    case 'cancelled': return '取消';
+  }
+}
+
+/**
+ * v0.6.16: bytes 的人类可读格式。「镜像层合计」是各 layer + config
+ * 大小之和,所以同一镜像 pull / push 显示的是同一个数。这里跟代理
+ * 延迟共用 formatLatency 但用「formatBytes」单独实现 — 它们语义
+ * 不一样(proxy latency 是 ms 数,这里是 byte 数),别共用一个函数。
+ */
+function formatBytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '0 B';
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return v >= 10 ? `${Math.round(v)} ${units[i]}` : `${v.toFixed(1)} ${units[i]}`;
 }
 
 /**

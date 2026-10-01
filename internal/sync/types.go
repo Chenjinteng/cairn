@@ -228,6 +228,48 @@ type SyncRun struct {
 	CurrentTag  string `json:"currentTag,omitempty"`
 }
 
+// SyncRunItem is one (repo, tag) attempt inside a SyncRun (v0.6.16).
+//
+// Persisted as one row per pullTag / pushTag call. Granularity is
+// per-(repo, tag) — symmetric to pull_jobs on the pull side — because
+// that's what the engine actually iterates: one blob-copy attempt per
+// tag. The UI history modal renders these as expandable rows under
+// each run.
+//
+// State matches the CHECK constraint on sync_run_items.state:
+//   - "succeeded" — copy completed (BytesDone == BytesTotal expected)
+//   - "failed"    — copy errored; Error carries the engine's text
+//   - "cancelled" — reserved for future per-tag cancellation; not
+//                  currently emitted because the engine returns from
+//                  pullRepo/pushRepo before writing per-tag rows when
+//                  the run is being torn down
+//
+// BytesDone / BytesTotal mirror pull_jobs: meaningful for both pull
+// (where bytes_done tracks progress through blob stream) and push
+// (where bytes_done tracks what made it to the remote before any
+// failure). 0/0 on cancellation is fine.
+type SyncRunItem struct {
+	ID         int64      `json:"id"`
+	RunID      int64      `json:"runId"`
+	Repository string     `json:"repository"`
+	Tag        string     `json:"tag"`
+	State      string     `json:"state"`
+	Error      string     `json:"error,omitempty"`
+	BytesDone  int64      `json:"bytesDone"`
+	BytesTotal int64      `json:"bytesTotal"`
+	StartedAt  time.Time  `json:"startedAt"`
+	FinishedAt *time.Time `json:"finishedAt,omitempty"`
+}
+
+// SyncRunItemSummary is the pre-aggregated count breakdown for one
+// run's items, used by the UI to render a summary row without walking
+// the full items list. Total = Succeeded + Failed + Cancelled.
+type SyncRunItemSummary struct {
+	Succeeded int `json:"succeeded"`
+	Failed    int `json:"failed"`
+	Cancelled int `json:"cancelled"`
+}
+
 // Sentinel errors used by Validate and the store layer. Handlers should
 // match on these (with errors.Is) to return 400 vs 409 vs 500 correctly.
 var (

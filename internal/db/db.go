@@ -25,7 +25,7 @@ import (
 
 // SCHEMA_VERSION is bumped together with new migrations.
 // Bump rule: +1 per migration; never reuse a number; never delete a migration.
-const SCHEMA_VERSION = 9
+const SCHEMA_VERSION = 10
 
 // Db is the SQLite wrapper. All exported methods are safe for concurrent use.
 type Db struct {
@@ -329,6 +329,50 @@ var migrations = map[int]string{
 	CREATE INDEX IF NOT EXISTS sync_schedules_due
 		ON sync_schedules(enabled, next_run_at)
 		WHERE enabled = 1;
+	`,
+	10: `
+	-- v0.6.16: per-(repo, tag) detail rows for one sync run.
+	--
+	-- Before this, sync_runs only carried repos_total / repos_synced /
+	-- repos_failed counters. A partial run like "76 succeeded, 1 failed
+	-- on zookeeper:3.8" was visible only as a single error string with
+	-- the last failing image name; the user had no way to see which other
+	-- tags succeeded/failed on the same repo, or whether multiple repos
+	-- failed. This table stores one row per attempted (repo, tag),
+	-- symmetric to pull_jobs but inside the sync side.
+	--
+	-- Granularity is per (repo, tag) — matches what the engine actually
+	-- iterates (one pullTag / pushTag call = one row). When a repo has
+	-- many tags, this table can hold hundreds of rows per run. That's
+	-- by design: the UI history modal paginates / virtual-scrolls the
+	-- expanded detail, and the retention setting on sync_runs (still
+	-- the UI's source-of-truth for which runs to display) can be
+	-- tightened to bound growth.
+	--
+	-- bytes_done / bytes_total mirror pull_jobs — sync copies blobs
+	-- too, so size is meaningful for both directions. state uses the
+	-- same three buckets as pull_jobs (succeeded / failed / cancelled);
+	-- sync currently only emits succeeded/failed because per-tag
+	-- cancellation only happens when the whole run is being torn down,
+	-- in which case the engine returns before writing per-tag rows.
+	--
+	-- ON DELETE CASCADE on run_id mirrors sync_runs(task_id): deleting
+	-- the parent run (via "clear run history" or task cascade-delete)
+	-- takes its items with it in one transaction.
+	CREATE TABLE IF NOT EXISTS sync_run_items (
+		id          INTEGER PRIMARY KEY,
+		run_id      INTEGER NOT NULL,
+		repository  TEXT    NOT NULL,
+		tag         TEXT    NOT NULL DEFAULT '',
+		state       TEXT    NOT NULL CHECK(state IN ('succeeded','failed','cancelled')),
+		error       TEXT    NOT NULL DEFAULT '',
+		bytes_done  INTEGER NOT NULL DEFAULT 0,
+		bytes_total INTEGER NOT NULL DEFAULT 0,
+		started_at  INTEGER NOT NULL,
+		finished_at INTEGER,
+		FOREIGN KEY(run_id) REFERENCES sync_runs(id) ON DELETE CASCADE
+	);
+	CREATE INDEX IF NOT EXISTS sync_run_items_run ON sync_run_items(run_id);
 	`,
 }
 

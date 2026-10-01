@@ -48,6 +48,10 @@ type SyncHandlers struct {
 //	                                409 while another run is in flight
 //	GET    /sync/{id}/runs        — list recent runs (newest first,
 //	                                default limit 50)
+//	GET    /sync/{id}/runs/{rid}/items?limit=&offset=
+//	                              — paginated (repo, tag) attempts inside
+//	                                one run (v0.6.16). Used by the
+//	                                history modal's expandable rows.
 //	POST   /sync/test             — probe remote reachability + auth posture;
 //	                                powers the form's "测试连接" button.
 //	                                Does NOT require a saved task.
@@ -60,6 +64,7 @@ func (s *SyncHandlers) RegisterRoutes(r chi.Router) {
 		r.Delete("/{id}", s.DeleteTask)
 		r.Post("/{id}/run", s.RunTask)
 		r.Get("/{id}/runs", s.ListRuns)
+		r.Get("/{id}/runs/{rid}/items", s.ListRunItems)
 		r.Post("/test", s.TestConnection)
 		r.Route("/{id}/schedules", func(r chi.Router) {
 			r.Get("/", s.ListSchedules)
@@ -599,4 +604,104 @@ func (s *SyncHandlers) DeleteSchedule(w http.ResponseWriter, r *http.Request) {
 	// (task_id match is implicit: schedules live under one task; if the
 	// id doesn't belong to taskID, the row was simply not found above.)
 	writeJSON(w, http.StatusOK, map[string]any{"id": scheduleID, "deleted": true})
+}
+
+// RunItemsPage is the response shape for ListRunItems.
+//
+// Envelope (items + total + limit + offset) instead of bare []SyncRunItem
+// so the UI can render "共 N 条 / 第 M 页" without a separate count
+// request. total comes from the COUNT(*) returned by SyncRunItemListByRun
+// — cheap thanks to the sync_run_items_run index.
+type RunItemsPage struct {
+	Items  []sync.SyncRunItem `json:"items"`
+	Total  int                `json:"total"`
+	Limit  int                `json:"limit"`
+	Offset int                `json:"offset"`
+}
+
+// ListRunItems — GET /api/sync/{id}/runs/{rid}/items?limit=50&offset=0
+//
+// v0.6.16: returns one page of (repo, tag) attempts for one run.
+// limit defaults to 50 (matches the runs-list default) and is capped
+// at 500 so a runaway client can't ask for the whole history in one
+// round trip. offset defaults to 0.
+//
+// 404 cases:
+//   - task id not in DB
+//   - run id not in DB
+//   - run id belongs to a different task than {id} (cross-tenant
+//     guard — the URL says "the run under task {id}" so a run that
+//     lives under another task must not be readable here)
+//
+// Pagination ordering is id ASC (= engine iteration order); the UI
+// doesn't need a separate sort.
+func (s *SyncHandlers) ListRunItems(w http.ResponseWriter, r *http.Request) {
+	taskID, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	runID, err := strconv.ParseInt(chi.URLParam(r, "rid"), 10, 64)
+	if err != nil || runID <= 0 {
+		writeError(w, r, http.StatusBadRequest, errors.New("rid must be a positive integer"))
+		return
+	}
+	if _, err := s.Store.GetTask(r.Context(), taskID); err != nil {
+		if errors.Is(err, sync.ErrTaskNotFound) {
+			writeError(w, r, http.StatusNotFound, err)
+			return
+		}
+		writeError(w, r, http.StatusInternalServerError, err)
+		return
+	}
+
+	// Cross-tenant guard: confirm the run actually belongs to the task
+	// in the URL. Without this, /api/sync/1/runs/999/items would happily
+	// dump items belonging to task 2's runs.
+	runs, err := s.Store.ListRunsByTask(r.Context(), taskID, 0)
+	if err != nil {
+		writeError(w, r, http.StatusInternalServerError, err)
+		return
+	}
+	runBelongs := false
+	for _, run := range runs {
+		if run.ID == runID {
+			runBelongs = true
+			break
+		}
+	}
+	if !runBelongs {
+		writeError(w, r, http.StatusNotFound, sync.ErrRunNotFound)
+		return
+	}
+
+	limit := 50
+	offset := 0
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+	if limit > 500 {
+		limit = 500
+	}
+
+	items, total, err := s.Store.ListRunItems(r.Context(), runID, limit, offset)
+	if err != nil {
+		writeError(w, r, http.StatusInternalServerError, err)
+		return
+	}
+	if items == nil {
+		items = []sync.SyncRunItem{}
+	}
+	writeJSON(w, http.StatusOK, RunItemsPage{
+		Items:  items,
+		Total:  total,
+		Limit:  limit,
+		Offset: offset,
+	})
 }

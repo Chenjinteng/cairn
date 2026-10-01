@@ -30,6 +30,7 @@ import type {
   StatsTopBy,
   SyncProbeResult,
   SyncRun,
+  SyncRunItemsPage,
   SyncSchedule,
   SyncScheduleInput,
   SyncTask,
@@ -535,6 +536,22 @@ export const runSyncTask = (id: number) =>
  */
 export const listSyncRuns = (id: number, limit = 50) =>
   request<SyncRun[]>(`/api/sync/${id}/runs?limit=${limit}`);
+
+/**
+ * v0.6.16: 拉一个 run 的 (repo, tag) 明细（分页）。limit 默认 50,
+ * 上限 500（服务端 enforce）；offset 默认 0。返回 SyncRunItemsPage
+ * 包络：items + total + limit + offset。total 让 UI 直接渲染
+ * "共 N 条 / 第 M 页" 不需要单独跑 COUNT。
+ */
+export const listSyncRunItems = (
+  taskId: number,
+  runId: number,
+  limit = 50,
+  offset = 0,
+) =>
+  request<SyncRunItemsPage>(
+    `/api/sync/${taskId}/runs/${runId}/items?limit=${limit}&offset=${offset}`,
+  );
 
 /**
  * v0.6.11: 列出 / 新建 / 更新 / 删除某任务的定时规则。

@@ -528,3 +528,136 @@ func (d *Db) SyncScheduleListDue(ctx context.Context, now time.Time, limit int) 
 	}
 	return out, rows.Err()
 }
+
+// SyncRunItemRow is the SQL-side view of one sync_run_items row
+// (v0.6.16). One row per (repo, tag) the engine attempted during a run.
+// Times are Unix seconds (UTC); nullable fields use sql.Null* scan
+// types. Bytes mirror pull_jobs so the size column is meaningful for
+// both pull and push.
+//
+// state matches the CHECK constraint on the column:
+//   - "succeeded" — copy completed
+//   - "failed"    — copy errored; Error field carries the reason
+//   - "cancelled" — run aborted mid-iteration; currently never written
+//                  because the engine returns from pullRepo/pushRepo
+//                  before writing per-tag rows on cancellation
+type SyncRunItemRow struct {
+	ID         int64
+	RunID      int64
+	Repository string
+	Tag        string
+	State      string
+	Error      string
+	BytesDone  int64
+	BytesTotal int64
+	StartedAt  time.Time
+	FinishedAt *time.Time
+}
+
+// SyncRunItemCreate inserts one (repo, tag) detail row. Called by the
+// engine once per pullTag / pushTag attempt, so a run with N tags
+// generates N rows. Errors are logged + swallowed at the engine level
+// (per-item row failure must NOT abort a healthy sync — same contract
+// as SyncRunUpdateProgress).
+func (d *Db) SyncRunItemCreate(ctx context.Context, r SyncRunItemRow) error {
+	var finishedAt *int64
+	if r.FinishedAt != nil {
+		v := r.FinishedAt.Unix()
+		finishedAt = &v
+	}
+	_, err := d.conn.ExecContext(ctx, `
+		INSERT INTO sync_run_items(
+			run_id, repository, tag, state, error,
+			bytes_done, bytes_total, started_at, finished_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, r.RunID, r.Repository, r.Tag, r.State, r.Error,
+		r.BytesDone, r.BytesTotal, r.StartedAt.Unix(), finishedAt)
+	return err
+}
+
+// SyncRunItemListByRun returns items for a run ordered by id ASC —
+// this matches the order the engine wrote them, which is the natural
+// "first repo, first tag, then next tag, then next repo" iteration
+// order, so the UI's expanded detail renders chronologically without a
+// separate sort. limit+offset support pagination; total is returned as
+// a separate count(*) query so the UI can render "共 N 条 / 第 1 页"
+// even when only one page is loaded.
+//
+// For very large runs the count(*) is cheap thanks to the
+// sync_run_items_run index — it's a covering scan of the index leaves
+// only, no row reads.
+func (d *Db) SyncRunItemListByRun(ctx context.Context, runID int64, limit, offset int) ([]SyncRunItemRow, int, error) {
+	var total int
+	if err := d.conn.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sync_run_items WHERE run_id = ?`,
+		runID).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	if total == 0 {
+		return nil, 0, nil
+	}
+	rows, err := d.conn.QueryContext(ctx, `
+		SELECT id, run_id, repository, tag, state, error,
+		       bytes_done, bytes_total, started_at, finished_at
+		FROM sync_run_items WHERE run_id = ?
+		ORDER BY id ASC
+		LIMIT ? OFFSET ?
+	`, runID, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var out []SyncRunItemRow
+	for rows.Next() {
+		var r SyncRunItemRow
+		var startedAt int64
+		var finishedAt sql.NullInt64
+		if err := rows.Scan(&r.ID, &r.RunID, &r.Repository, &r.Tag, &r.State, &r.Error,
+			&r.BytesDone, &r.BytesTotal, &startedAt, &finishedAt); err != nil {
+			return nil, 0, err
+		}
+		r.StartedAt = time.Unix(startedAt, 0).UTC()
+		if finishedAt.Valid {
+			t := time.Unix(finishedAt.Int64, 0).UTC()
+			r.FinishedAt = &t
+		}
+		out = append(out, r)
+	}
+	return out, total, rows.Err()
+}
+
+// SyncRunItemSummaryByRun returns counts of (succeeded, failed,
+// cancelled) for one run. Useful as a server-side pre-aggregation so
+// the UI doesn't have to walk the full items list to render a summary
+// row — items are loaded lazily on row expand. Mirrors the
+// repos_total/repos_synced/repos_failed split on sync_runs but at
+// per-item granularity.
+//
+// Returns zeros when the run has no items yet (engine still iterating,
+// or an older run written before this migration).
+func (d *Db) SyncRunItemSummaryByRun(ctx context.Context, runID int64) (succeeded, failed, cancelled int, err error) {
+	rows, err := d.conn.QueryContext(ctx, `
+		SELECT state, COUNT(*) FROM sync_run_items
+		WHERE run_id = ? GROUP BY state
+	`, runID)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var state string
+		var n int
+		if err := rows.Scan(&state, &n); err != nil {
+			return 0, 0, 0, err
+		}
+		switch state {
+		case "succeeded":
+			succeeded = n
+		case "failed":
+			failed = n
+		case "cancelled":
+			cancelled = n
+		}
+	}
+	return succeeded, failed, cancelled, rows.Err()
+}

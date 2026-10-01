@@ -277,27 +277,63 @@ func (e *Engine) runPull(ctx context.Context, task SyncTask, run *SyncRun) error
 	return nil
 }
 
+// pullRepo iterates every tag in the remote repo and writes one
+// sync_run_items row per (repo, tag) attempt. Per-tag failures no
+// longer abort the whole repo — they're recorded as failed items and
+// counted into ReposFailed by the caller (runPull). This is the v0.6.16
+// behavior change: before, the first tag failure short-circuited the
+// inner loop and the remaining tags in the same repo were never
+// attempted, hiding partial-success repos behind a single error.
+//
+// The boolean return reports whether the repo succeeded (zero tag
+// failures). runPull uses it for the repos_synced counter; the items
+// table already holds the per-tag detail for the UI.
+//
+// A non-nil error return signals a *non-per-tag* failure (list-tags
+// error, context cancellation) — these still abort the whole repo and
+// propagate up.
 func (e *Engine) pullRepo(ctx context.Context, rc *registry.Client, run *SyncRun, repoName string) error {
 	tags, err := rc.ListTags(ctx, repoName)
 	if err != nil {
 		return fmt.Errorf("list tags: %w", err)
 	}
+	repoOK := true
 	for _, tag := range tags {
 		e.progress(ctx, run, repoName, tag)
-		if err := e.pullTag(ctx, rc, repoName, tag); err != nil {
-			return fmt.Errorf("tag %q: %w", tag, err)
+		startedAt := time.Now().UTC()
+		bytesTotal, tagErr := e.pullTag(ctx, rc, repoName, tag)
+		finishedAt := time.Now().UTC()
+		e.recordRunItem(ctx, run.ID, repoName, tag, startedAt, finishedAt, bytesTotal, tagErr)
+		if errors.Is(tagErr, context.Canceled) {
+			return fmt.Errorf("run aborted: %w", tagErr)
 		}
+		if tagErr != nil {
+			e.log.Warn("sync: pull tag failed",
+				"task_id", run.TaskID, "run_id", run.ID,
+				"repo", repoName, "tag", tag, "err", tagErr)
+			repoOK = false
+			continue
+		}
+	}
+	if !repoOK {
+		return errors.New("one or more tags failed")
 	}
 	return nil
 }
 
-func (e *Engine) pullTag(ctx context.Context, rc *registry.Client, repoName, tag string) error {
+// pullTag returns the total bytes pulled for this tag (sum of layer
+// sizes from the manifest) and any error. On error, bytesTotal still
+// returns the declared manifest size so the failed item row in
+// sync_run_items can show the user "X bytes / Y bytes" — useful for
+// distinguishing "tiny image failed" from "10GB image failed" at a
+// glance.
+func (e *Engine) pullTag(ctx context.Context, rc *registry.Client, repoName, tag string) (int64, error) {
 	mf, err := rc.GetManifest(ctx, repoName, tag)
 	if err != nil {
-		return fmt.Errorf("get manifest: %w", err)
+		return 0, fmt.Errorf("get manifest: %w", err)
 	}
 	if isIndexMediaType(mf.MediaType) {
-		return errors.New("multi-arch manifest index not supported in v0.6.0")
+		return mf.Size, errors.New("multi-arch manifest index not supported in v0.6.0")
 	}
 
 	// Copy layers + config blob. Layers is populated by registry.Client
@@ -305,19 +341,19 @@ func (e *Engine) pullTag(ctx context.Context, rc *registry.Client, repoName, tag
 	// we already returned above.
 	for _, layer := range mf.Layers {
 		if err := e.copyBlobToLocal(ctx, rc, repoName, layer.Digest); err != nil {
-			return fmt.Errorf("layer %s: %w", layer.Digest, err)
+			return mf.Size, fmt.Errorf("layer %s: %w", layer.Digest, err)
 		}
 	}
 	if mf.ConfigDigest != "" {
 		if err := e.copyBlobToLocal(ctx, rc, repoName, mf.ConfigDigest); err != nil {
-			return fmt.Errorf("config %s: %w", mf.ConfigDigest, err)
+			return mf.Size, fmt.Errorf("config %s: %w", mf.ConfigDigest, err)
 		}
 	}
 
 	if _, err := e.local.PutManifest(ctx, repoName, tag, mf.MediaType, mf.Raw); err != nil {
-		return fmt.Errorf("put manifest: %w", err)
+		return mf.Size, fmt.Errorf("put manifest: %w", err)
 	}
-	return nil
+	return mf.Size, nil
 }
 
 func (e *Engine) copyBlobToLocal(ctx context.Context, rc *registry.Client, repo, digest string) error {
@@ -388,27 +424,49 @@ func (e *Engine) runPush(ctx context.Context, task SyncTask, run *SyncRun) error
 	return nil
 }
 
+// pushRepo mirrors pullRepo on the push side: iterates local tags,
+// writes one sync_run_items row per (repo, tag), and converts any
+// per-tag failure into a failed item row + repoOK=false instead of
+// aborting the whole repo. Same v0.6.16 contract as pullRepo.
 func (e *Engine) pushRepo(ctx context.Context, w *Writer, run *SyncRun, repoName string) error {
 	tags, err := e.local.Tags(ctx, repoName)
 	if err != nil {
 		return fmt.Errorf("list tags: %w", err)
 	}
+	repoOK := true
 	for _, tag := range tags {
 		e.progress(ctx, run, repoName, tag)
-		if err := e.pushTag(ctx, w, repoName, tag); err != nil {
-			return fmt.Errorf("tag %q: %w", tag, err)
+		startedAt := time.Now().UTC()
+		bytesTotal, tagErr := e.pushTag(ctx, w, repoName, tag)
+		finishedAt := time.Now().UTC()
+		e.recordRunItem(ctx, run.ID, repoName, tag, startedAt, finishedAt, bytesTotal, tagErr)
+		if errors.Is(tagErr, context.Canceled) {
+			return fmt.Errorf("run aborted: %w", tagErr)
 		}
+		if tagErr != nil {
+			e.log.Warn("sync: push tag failed",
+				"task_id", run.TaskID, "run_id", run.ID,
+				"repo", repoName, "tag", tag, "err", tagErr)
+			repoOK = false
+			continue
+		}
+	}
+	if !repoOK {
+		return errors.New("one or more tags failed")
 	}
 	return nil
 }
 
-func (e *Engine) pushTag(ctx context.Context, w *Writer, repoName, tag string) error {
+// pushTag returns the total bytes pushed for this tag and any error.
+// Same shape as pullTag — bytesTotal still returns the declared
+// manifest size on failure so the failed item row shows "X / Y bytes".
+func (e *Engine) pushTag(ctx context.Context, w *Writer, repoName, tag string) (int64, error) {
 	mf, err := e.local.GetManifest(ctx, repoName, tag)
 	if err != nil {
-		return fmt.Errorf("get manifest: %w", err)
+		return 0, fmt.Errorf("get manifest: %w", err)
 	}
 	if isIndexMediaType(mf.MediaType) {
-		return errors.New("multi-arch manifest index not supported in v0.6.0")
+		return 0, errors.New("multi-arch manifest index not supported in v0.6.0")
 	}
 
 	// storage.Manifest doesn't expose layer digests as a struct field, so
@@ -416,24 +474,31 @@ func (e *Engine) pushTag(ctx context.Context, w *Writer, repoName, tag string) e
 	// an OCI/Docker manifest when the local image was originally pulled).
 	layers, configDigest, err := parseManifestBlobs(mf.Body)
 	if err != nil {
-		return fmt.Errorf("parse manifest body: %w", err)
+		return 0, fmt.Errorf("parse manifest body: %w", err)
 	}
 
+	// bytesTotal is the sum of layer sizes + config size — same
+	// derivation as registry.Manifest.Size. We re-derive it from
+	// mf.Body here because storage.Manifest doesn't expose the parsed
+	// fields.
+	var bytesTotal int64
 	for _, l := range layers {
 		if err := e.copyBlobToRemote(ctx, w, repoName, l); err != nil {
-			return fmt.Errorf("layer %s: %w", l, err)
+			return bytesTotal, fmt.Errorf("layer %s: %w", l, err)
 		}
+		bytesTotal += blobSizeFromManifest(mf.Body, l)
 	}
 	if configDigest != "" {
 		if err := e.copyBlobToRemote(ctx, w, repoName, configDigest); err != nil {
-			return fmt.Errorf("config %s: %w", configDigest, err)
+			return bytesTotal, fmt.Errorf("config %s: %w", configDigest, err)
 		}
+		bytesTotal += blobSizeFromManifest(mf.Body, configDigest)
 	}
 
 	if _, err := w.PutManifest(ctx, repoName, tag, mf.MediaType, mf.Body); err != nil {
-		return fmt.Errorf("put manifest: %w", err)
+		return bytesTotal, fmt.Errorf("put manifest: %w", err)
 	}
-	return nil
+	return bytesTotal, nil
 }
 
 func (e *Engine) copyBlobToRemote(ctx context.Context, w *Writer, repo, digest string) error {
@@ -500,4 +565,82 @@ func newRemoteClient(remoteURL, username, password string) (*registry.Client, er
 		Password: password,
 		Timeout:  5 * time.Minute,
 	})
+}
+// recordRunItem persists one row to sync_run_items reflecting a single
+// (repo, tag) attempt. Errors are logged + swallowed — a failed item
+// row write must never abort a healthy sync (same contract as
+// UpdateRunProgress).
+//
+// On success, state="succeeded", bytes_done=bytes_total.
+// On failure, state="failed", bytes_done=0 (the engine doesn't track
+// per-tag partial progress through a multi-layer copy), bytes_total
+// is the declared manifest size when known so the UI can show
+// "X / Y bytes" context.
+//
+// Cancellation is not a state we currently emit: by the time the
+// engine knows the run is being cancelled (context.Canceled in the
+// tag handler), it's already returning up the stack and never reaches
+// this call. The "cancelled" enum value is reserved for future use.
+func (e *Engine) recordRunItem(
+	ctx context.Context, runID int64,
+	repo, tag string,
+	startedAt, finishedAt time.Time,
+	bytesTotal int64, tagErr error,
+) {
+	state := "succeeded"
+	errStr := ""
+	var bytesDone int64 = bytesTotal
+	if tagErr != nil {
+		state = "failed"
+		errStr = tagErr.Error()
+		bytesDone = 0
+	}
+	item := SyncRunItem{
+		RunID:      runID,
+		Repository: repo,
+		Tag:        tag,
+		State:      state,
+		Error:      errStr,
+		BytesDone:  bytesDone,
+		BytesTotal: bytesTotal,
+		StartedAt:  startedAt,
+		FinishedAt: &finishedAt,
+	}
+	if err := e.store.CreateRunItem(ctx, item); err != nil {
+		e.log.Warn("sync: write run item failed",
+			"run_id", runID, "repo", repo, "tag", tag, "err", err)
+	}
+}
+
+// blobSizeFromManifest looks up a single blob's size in a parsed
+// manifest body. Used by pushTag to compute bytes_total without
+// re-fetching the manifest through the registry client. Returns 0
+// when the digest isn't found in the body — non-fatal; the resulting
+// sync_run_items row just shows bytes_total=0 for that layer.
+func blobSizeFromManifest(body []byte, digest string) int64 {
+	if digest == "" {
+		return 0
+	}
+	var m struct {
+		Layers []struct {
+			Digest string `json:"digest"`
+			Size   int64  `json:"size"`
+		} `json:"layers"`
+		Config struct {
+			Digest string `json:"digest"`
+			Size   int64  `json:"size"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(body, &m); err != nil {
+		return 0
+	}
+	if m.Config.Digest == digest {
+		return m.Config.Size
+	}
+	for _, l := range m.Layers {
+		if l.Digest == digest {
+			return l.Size
+		}
+	}
+	return 0
 }
