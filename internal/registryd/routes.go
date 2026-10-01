@@ -108,7 +108,13 @@ func New(store storage.Storage, getCreds basicAuthCreds, eventsH *events.Handler
 		if h.getCreds != nil {
 			r.Use(h.requireBasicAuth)
 		}
-		r.Get("/", h.apiVersion)
+		// v0.6.13 (REG-3): register HEAD on "/" too. docker daemon / skopeo
+		// / monitoring probes that only send HEAD expect 200 (and the
+		// version header below). Previously a HEAD /v2/ fell through to
+		// chi's default 404, mis-reporting the service as down to those
+		// callers. r.HandleFunc covers GET + HEAD on the same path with
+		// one handler; the handler itself doesn't care which verb came in.
+		r.HandleFunc("/", h.apiVersion)
 
 		r.Get("/_catalog", h.catalog)
 
@@ -132,7 +138,13 @@ func (h *Handler) apiVersion(w http.ResponseWriter, r *http.Request) {
 	// 导致 docker daemon 误判为「不需要 auth」后续请求不发 Authorization → server 401。
 	// 现在让 requireBasicAuth middleware 处理:带对 creds 走到这里返 200,否则早就
 	// 401 challenge 拦掉了。这里只关心 happy path。
+	//
+	// v0.6.13 (REG-3): 加上 Docker-Distribution-Api-Version: registry/2.0
+	// 头。Distribution Spec §"Docker Distribution API Version Header" 要求
+	// V2 registry 在 200 响应里带这个头;docker daemon 与各家 SDK / 监控探针
+	// 普遍用它来确认「这是 V2 registry」,缺头会让探测方走猜测逻辑。
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Docker-Distribution-Api-Version", "registry/2.0")
 	_, _ = w.Write([]byte(`{}`))
 }
 
@@ -454,7 +466,15 @@ func (h *Handler) blobGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer body.Close()
+	// v0.6.13 (REG-5): 显式声明 Content-Type 与 Accept-Ranges。之前两
+	// 个头都缺:Content-Type 靠 Go 的内容嗅探给出 "text/plain; charset=utf-8"
+	// (取决于层文件头几个字节),Range 请求被完全忽略(永远 200 + 全量)。
+	// docker 拉层按 digest 校验不依赖 Content-Type,但自研客户端/镜像校验
+	// 工具会因嗅探值误判;Range 在 Distribution 里是 MAY,这里只声明
+	// 不支持,把"沉默忽略"变成契约("Accept-Ranges: none" 即可)。
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", size))
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Accept-Ranges", "none")
 	w.Header().Set("Docker-Content-Digest", digest)
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, body)
@@ -471,7 +491,10 @@ func (h *Handler) blobHead(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	// v0.6.13 (REG-5): HEAD 也补 Content-Type / Accept-Ranges,语义与 GET 一致。
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", size))
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Accept-Ranges", "none")
 	w.Header().Set("Docker-Content-Digest", digest)
 	w.WriteHeader(http.StatusOK)
 	// v0.5.32: 跟 manifestHead 同样的 keep-alive 僵持问题,见 manifestHead 注释。
@@ -550,6 +573,41 @@ func (h *Handler) uploadPatch(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Location", absoluteLocation(r, fmt.Sprintf("/v2/%s/blobs/uploads/%s", repo, uuid)))
 	w.Header().Set("Content-Length", "0")
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// uploadCancel handles DELETE /v2/<repo>/blobs/uploads/<uuid>
+//
+// v0.6.13 (REG-6): was previously not in the upload dispatcher's switch at
+// all (only GET/PATCH/PUT were routed; DELETE fell through to writeV2MethodNotAllowed).
+// Docker CLI sends DELETE to cancel an in-progress push when the user hits
+// Ctrl-C; without this the server side kept a stale uploads/<repo>/<uuid>/
+// directory until the next GC sweep (up to 24h, see Filesystem.GC). We now
+// route DELETE to Store.CancelUpload which rm-rf's the directory and returns
+// 204 No Content per spec:
+//
+//	On a successful response, the server MUST remove the upload session
+//	directory and any in-progress blobs associated with it.
+//	— OCI Distribution Spec §"Blob Upload"
+//
+// Idempotent: a second DELETE on an already-cancelled session also returns
+// 204, because CancelUpload's underlying os.RemoveAll is silent when the
+// directory doesn't exist. This matches typical REST DELETE semantics and
+// keeps two racing DELETEs (e.g. duplicate browser tabs) safe. ErrNotFound
+// from CancelUpload would surface as 404 BLOB_UPLOAD_UNKNOWN, but in
+// practice only triggers when storage-layer access fails (permissions etc.).
+func (h *Handler) uploadCancel(w http.ResponseWriter, r *http.Request) {
+	repo := chi.URLParam(r, "repo")
+	uuid := chi.URLParam(r, "uuid")
+	if err := h.Store.CancelUpload(r.Context(), repo, uuid); err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			writeV2Error(w, http.StatusNotFound, "BLOB_UPLOAD_UNKNOWN", "upload not found")
+			return
+		}
+		writeV2Error(w, http.StatusInternalServerError, "UNKNOWN", err.Error())
+		return
+	}
+	w.Header().Set("Docker-Upload-UUID", uuid)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) uploadPut(w http.ResponseWriter, r *http.Request) {
@@ -764,8 +822,13 @@ func (h *Handler) dispatchRepoRoute(w http.ResponseWriter, r *http.Request) {
 			h.uploadPatch(w, r)
 		case http.MethodPut:
 			h.uploadPut(w, r)
+		// v0.6.13 (REG-6): DELETE cancels an in-progress upload session
+		// (see uploadCancel). Without it docker's Ctrl-C mid-push leaves
+		// a stale uploads/<repo>/<uuid>/ directory until the next GC sweep.
+		case http.MethodDelete:
+			h.uploadCancel(w, r)
 		default:
-			writeV2MethodNotAllowed(w, http.MethodGet, http.MethodPatch, http.MethodPut)
+			writeV2MethodNotAllowed(w, http.MethodGet, http.MethodPatch, http.MethodPut, http.MethodDelete)
 		}
 		return
 	}

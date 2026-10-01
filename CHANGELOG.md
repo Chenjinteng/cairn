@@ -6,6 +6,29 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.6.13] - 2026-10-01
+
+本轮是 0.6.11 回归报告 [docs/issues/](./docs/issues/) 仓内剩余 3 条 Low 协议缺陷的合并修复版:REG-3 / REG-5 / REG-6。三项按 patch 口径发布(REG-6 的「新增取消能力」按「既有功能漏写」归类,不到中版本门槛)。
+
+### 修复
+
+- **REG-3 · `/v2/` 缺 `Docker-Distribution-Api-Version` 响应头 + `HEAD` 返 404**。`apiVersion` handler 现在带 `Docker-Distribution-Api-Version: registry/2.0` 头(OCI Distribution Spec §"Docker Distribution API Version Header" 要求),并且把根路由从 `r.Get("/", ...)` 改成 `r.HandleFunc("/", ...)`,让 `GET /v2/` 和 `HEAD /v2/` 都返 200。之前 docker daemon / skopeo / 监控探针(只发 HEAD 的)会因 404 误判服务不可用。详见 [docs/issues/registry-protocol.md REG-3](./docs/issues/registry-protocol.md)。
+- **REG-5 · blob 缺显式 `Content-Type` + `Range` 被静默忽略**。`blobGet` / `blobHead` 现在显式声明 `Content-Type: application/octet-stream` + `Accept-Ranges: none`(Distribution Spec 的「不实现 Range」标准声明)。之前 Content-Type 来自 Go 的内容嗅探,层文件头几字节决定返回 `text/plain; charset=utf-8` 还是别的,误导自研客户端/镜像校验工具。Range 行为没真实现(仍是 `200` + 全量,不是 `206`),只是把「沉默忽略」改成契约明示 —— 真要做 Range 是单独议题。详见 [docs/issues/registry-protocol.md REG-5](./docs/issues/registry-protocol.md)。
+- **REG-6 · `DELETE /v2/<repo>/blobs/uploads/<uuid>` 返 405,无法取消 upload session**。docker CLI 在 push 中途 Ctrl-C 时发 DELETE 取消上传,以前服务端返 405 + `Allow: GET, PATCH, PUT`(DELETE 不在支持集合),session 目录只能等下次 GC(最坏 24h)回收。`Storage.CancelUpload` 接口早已存在但从未被 dispatch,现在补上 `uploadCancel` handler + 在 dispatcher 的 upload `switch r.Method` 加 DELETE case + `Allow` 头加 `DELETE`。成功 → 204;二次 DELETE 仍返 204(`os.RemoveAll` 对不存在的 dir 静默 no-op),符合 REST DELETE 幂等语义。详见 [docs/issues/registry-protocol.md REG-6](./docs/issues/registry-protocol.md)。
+
+### 兼容性
+
+- **REG-3** 严格向后兼容(只新增响应头 + 把 GET 路由扩展到 HEAD);但仍要扫一遍 docker daemon / 监控探针是否对版本头有奇怪的解析(已知 history 上没人做白名单检查,应无事)。
+- **REG-5** 严格向后兼容(只新增响应头);Range 行为从「沉默忽略」变「契约明示」,客户端没有任何破坏性影响。
+- **REG-6** 兼容性微妙:`405 UNSUPPORTED` 不再出现;客户端按 405 → 405 重试的代码路径会变成 204。需要给 docker daemon / 自研客户端提个醒 —— 但实际上客户端都在等 204 / 404,405 是错路径,这次修复只是把错误形态对到主流实现。
+
+### 用户须知
+
+- 上传过程的 Ctrl-C 行为从此生效:以前 docker push 失败后 `uploads/<repo>/<uuid>/startedat` 残留;现在 Ctrl-C 时会真的清掉。**长期运行下孤儿目录堆积问题得到根治。**
+- 给 upload session 加 TTL 清理(启动时扫 `startedat`/mtime 超期目录自动 `rm -rf`)的补丁本轮**没做**,理由:REG-6 已经覆盖了主要场景(客户端发 DELETE 就清),TTL 清理只针对断连、客户端 crash 这类"客户端来不及发 DELETE"的边角,可放后续下版。
+
+---
+
 ## [0.6.12] - 2026-10-01
 
 本轮是 0.6.11 回归报告 [docs/issues/](./docs/issues/) 列出的 10 条仓内可修缺陷（MA-1/3/4/5/6 + REG-1/2/4 + TH-1/4/5）的统一修复版。其余 8 条（REG-5/6、TH-2/3/6/7/8/9/10）按登记文档留待下版或 53 runner 侧独立处理。

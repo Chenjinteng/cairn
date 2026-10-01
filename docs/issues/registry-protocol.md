@@ -3,8 +3,11 @@
 > 被测版本：cairn `0.6.11`（commit `f66bd4d`）｜环境：`registry.local:10001`（容器 `cairn:0.6.11`，`env=prod`）
 > 范围：CNCF Distribution（Docker Registry HTTP API V2）协议行为，编号 `REG-1` … `REG-6`
 > 每条包含：现象 / 根因 / 证据（源码 file:line + 实机实测）/ 修复方向
-> 修复状态：**REG-1 / REG-2 / REG-4 在 0.6.12 已修复**。详见各章末尾"修复落地"段。
-> 未修复：REG-3（HEAD /v2/ 一致性 + 版本头）/ REG-6（upload cancel）—— Low，下版。
+> 修复状态：**全部 6 条均已修复**：
+> - REG-1 / REG-2 / REG-4 在 0.6.12 (commit `a5577ea`)
+> - REG-3 / REG-5 / REG-6 在 0.6.13
+>
+> 详见各章末尾"修复落地"段。
 
 ## 前置：两条路由机制（理解 MA-1 与 REG 系列的前提）
 
