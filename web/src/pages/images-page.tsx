@@ -17,7 +17,7 @@ import {
 } from '../api';
 import ImageDetailDrawer from '../components/image-detail-drawer';
 import MetricCard from '../components/metric-card';
-import TableSkeleton from '../components/table-skeleton';
+import PageLoading from '../components/page-loading';
 import type { SidebarGroup, SidebarSelection } from '../components/page-sidebar';
 import { useAppConfig } from '../config-store';
 import type {
@@ -503,11 +503,10 @@ export default function ImagesPage({
       <div className="panel">
         {/* 表格自己滚（表头粘住），页面不滚 —— 见 app.css 的 .page--fill。 */}
         <div className="table-scroll" ref={tableWrapRef}>
-          {/* v0.5.41: loading 时改用 TableSkeleton 占位(列数跟实际表对齐),
-              替换 antd Table 自带的居中 spinner —— 之前 spinner 让人以为「页面空了」。
-              实际表没数据(rows 为空)时仍走 Empty 走文案的逻辑。 */}
+          {/* v0.6.21: loading 时改用居中 spinner 占位(原来的 TableSkeleton 灰块
+              shimmer 反馈「一闪一闪」,换成 spinner 更明确「在等接口」)。 */}
           {loading ? (
-            <TableSkeleton rows={10} columns={statsEnabled ? 6 : 5} title={false} description={false} />
+            <PageLoading tip="正在读取镜像列表…" />
           ) : (
             <Table<RegistryRepository>
               rowKey="name"

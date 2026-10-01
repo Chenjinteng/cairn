@@ -63,7 +63,7 @@ import {
   splitRepoTag,
 } from '../utils';
 import type { SidebarGroup, SidebarItem, SidebarSelection } from '../components/page-sidebar';
-import TableSkeleton from '../components/table-skeleton';
+import PageLoading from '../components/page-loading';
 
 interface Props {
   config: AppConfig | null;
@@ -1057,10 +1057,11 @@ export default function PullPage({ config, sidebarFilter, onPublishGroups }: Pro
       ) : null}
 
       <div className="panel">
-        {/* v0.5.41: 首屏 loading 走 TableSkeleton —— 切到本页时直接给骨架占位,
-            不再「空白 → Empty 文案 → 表格」三段闪。后续轮询不闪骨架(loading=false)。 */}
+        {/* v0.6.21: 首屏 loading 走 PageLoading 居中 spinner —— 之前的
+            灰块骨架 shimmer「一闪一闪」,换成 spinner 更明确「在等接口」。
+            后续轮询不闪(spinner 不出,antd Table loading 自带)。 */}
         {loading && jobs.length === 0 ? (
-          <TableSkeleton rows={6} columns={5} title={false} description={false} />
+          <PageLoading tip="正在读取拉取任务…" />
         ) : (
           <Table<PullJob>
             rowKey="id"

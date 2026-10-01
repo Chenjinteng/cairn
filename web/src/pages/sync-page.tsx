@@ -91,7 +91,7 @@ import type {
   SyncTaskInput,
 } from '../types';
 import type { SidebarGroup, SidebarItem, SidebarSelection } from '../components/page-sidebar';
-import TableSkeleton from '../components/table-skeleton';
+import PageLoading from '../components/page-loading';
 
 interface Props {
   /**
@@ -1037,7 +1037,7 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
       )}
 
       {loading ? (
-        <TableSkeleton columns={6} />
+        <PageLoading tip="正在读取同步任务…" />
       ) : tasks.length === 0 ? (
         <Empty
           description={
@@ -1086,9 +1086,9 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
             },
             expandedRowRender: (task) => {
               const runsState = runsByTaskId[task.id];
-              if (!runsState) return <div style={{ padding: 16, color: '#999' }}>加载中…</div>;
+              if (!runsState) return <PageLoading tip="正在读取运行历史…" height={120} />;
               if (runsState.loading && runsState.runs.length === 0) {
-                return <TableSkeleton columns={4} />;
+                return <PageLoading tip="正在读取运行历史…" height={120} />;
               }
               if (runsState.runs.length === 0) {
                 return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有运行记录" />;
@@ -1618,7 +1618,7 @@ function ScheduleTab({ schedules, loading, onCreate, onUpdate, onDelete }: Sched
   return (
     <div>
       {loading ? (
-        <TableSkeleton columns={6} />
+        <PageLoading tip="正在读取定时规则…" height={120} />
       ) : schedules.length === 0 ? (
         <Empty description="还没有定时规则，点下方「新建」添加" />
       ) : (

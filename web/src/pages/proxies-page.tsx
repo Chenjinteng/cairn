@@ -37,7 +37,7 @@ import {
   updateProxy,
 } from '../api';
 import LoadError from '../components/load-error';
-import TableSkeleton from '../components/table-skeleton';
+import PageLoading from '../components/page-loading';
 import { useAppConfig } from '../config-store';
 import type {
   ApiResult,
@@ -836,10 +836,10 @@ export default function ProxiesPage({ config, sidebarFilter, onPublishGroups }: 
           ) : null}
 
           <div className="panel">
-            {/* v0.5.41: loading 走 TableSkeleton —— 首次切到代理管理页直接给骨架,
-                避免「空白 → Empty 文案 → 表格」三段闪。 */}
+            {/* v0.6.21: loading 走 PageLoading 居中 spinner —— 之前的灰块骨架
+                shimmer「一闪一闪」,换成 spinner 更明确「在等接口」。 */}
             {loading && proxies.length === 0 ? (
-              <TableSkeleton rows={6} columns={5} title={false} description={false} />
+              <PageLoading tip="正在读取代理列表…" />
             ) : (
               <Table<ProxyEntry>
                 rowKey="id"

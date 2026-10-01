@@ -23,7 +23,7 @@ import type { ColumnsType } from 'antd/es/table';
 
 import IgnoreRuleModal from '../components/ignore-rule-modal';
 import LoadError from '../components/load-error';
-import TableSkeleton from '../components/table-skeleton';
+import PageLoading from '../components/page-loading';
 
 import { useAppConfig } from '../config-store';
 
@@ -713,10 +713,12 @@ export default function StatsPage({
            * 的备忘。
            */}
           <div className="table-scroll" ref={topWrapRef}>
-            {/* v0.5.41: top 榜单 loading 走骨架 —— 切时间窗时直接给骨架占位,
-                避免「spinner → 空表 → 数据回来」三段闪。首屏也用同一路径。 */}
+            {/* v0.6.21: top 榜单 loading 走 PageLoading 居中 spinner —— 灰块
+                骨架 shimmer「一闪一闪」,换成 spinner 更明确「在等接口」。
+                切时间窗时同样走 spinner(loading=true + 数据已存在 → 仍走
+                spinner,放在原表的位置上)。 */}
             {loading && topItems.length === 0 ? (
-              <TableSkeleton rows={8} columns={4} title={false} description={false} />
+              <PageLoading tip="正在读取 Top 10 榜单…" />
             ) : (
               <Table<StatsTopItem>
                 /*
@@ -800,7 +802,7 @@ export default function StatsPage({
           </Space>
         </div>
         {loading && clients.length === 0 ? (
-          <TableSkeleton rows={6} columns={3} title={false} description={false} />
+          <PageLoading tip="正在读取客户端列表…" />
         ) : (
           <Table<StatsClientItem>
             rowKey="useragent"
@@ -884,7 +886,7 @@ export default function StatsPage({
                   （它落盘，重启不丢）。
                 </div>
                 {loading && events.length === 0 ? (
-                  <TableSkeleton rows={8} columns={5} title={false} description={false} />
+                  <PageLoading tip="正在读取最近事件…" />
                 ) : (
                   <Table<StatsEventItem>
                     rowKey={(record) => `${record.at}-${record.id}`}

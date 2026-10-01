@@ -31,7 +31,7 @@ import {
   updateCredential,
 } from '../api';
 import LoadError from '../components/load-error';
-import TableSkeleton from '../components/table-skeleton';
+import PageLoading from '../components/page-loading';
 import { useAppConfig } from '../config-store';
 import type {
   ApiResult,
@@ -457,10 +457,10 @@ export default function CredentialsPage({ config, sidebarFilter, onPublishGroups
           ) : null}
 
           <div className="panel">
-            {/* v0.5.41: loading 走 TableSkeleton —— 跟 pull/proxies 一致,首次访问
-                看到「骨架占位」而不是「空表 + Empty」,避免误以为坏了。 */}
+            {/* v0.6.21: loading 走 PageLoading 居中 spinner —— 之前的灰块
+                骨架 shimmer「一闪一闪」,换成 spinner 更明确「在等接口」。 */}
             {loading && credentials.length === 0 ? (
-              <TableSkeleton rows={6} columns={5} title={false} description={false} />
+              <PageLoading tip="正在读取凭据…" />
             ) : (
               <Table<Credential>
                 rowKey="id"

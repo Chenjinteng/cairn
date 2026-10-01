@@ -6,6 +6,32 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.6.21] - 2026-10-01
+
+本轮是第五轮 UAT 反馈 —— 用户实测全站加载占位「一闪一闪的」，要求加一个明确的加载图标。
+
+### 变更
+
+- **全站首屏加载占位：TableSkeleton → PageLoading**。`web/src/components/page-loading.tsx` 新增；六个页面的首屏占位从「antd Skeleton 灰块 shimmer 假装表格」换成「居中 `<Spin>` + 一行小字」。
+  - 之前 TableSkeleton 的灰块 shimmer 动画频率看着像在闪；「假装表格」跟真实表格差太远，数据到达瞬间「假装 → 真」的硬切也有 flicker 感。
+  - 现在 `<PageLoading tip="正在读取镜像列表…" />`：明确告诉用户「在等接口数据」，数据到达时 spinner 直接收掉，过渡更干净。
+  - 颜色自动跟 ConfigProvider 的 `colorPrimary` 对齐（默认 teal `#0d9488`），不用每个页面单独配。
+  - 删除 `web/src/components/table-skeleton.tsx`（无人再 import）。
+  - 受影响页面：images / sync（任务列表 / 运行历史 / 定时规则 共 3 处）/ pull / proxies / stats（Top 10 / 客户端 / 事件 共 3 处）/ credentials。每个调用位都定制了 tip 文案（例：「正在读取镜像列表…」）。
+
+### 兼容性
+
+- 严格兼容：纯前端加载占位的视觉样式替换，**无后端 / API / 数据库变更**。
+- API：没有新增任何 type / 接口。
+- 用户操作路径不变：仍然「首次切页 → 等接口 → 数据出现」，中间环节变成居中 spinner 而已。
+
+### 用户须知
+
+- 所有页面首屏的灰块骨架换成居中旋转图标 + 一行小字（具体小字根据页面不同：「正在读取镜像列表…」/「正在读取同步任务…」/「正在读取 Top 10 榜单…」等）。
+- 「刷新」（已有数据，loading=true）依然走 antd Table 自带 spinner（半透明遮罩），跟首屏居中 spinner 不冲突。
+
+---
+
 ## [0.6.20] - 2026-10-01
 
 本轮是第四轮 UAT 反馈 —— 用户实测 sync 历史两大问题：
