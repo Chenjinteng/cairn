@@ -6,6 +6,40 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.6.12] - 2026-10-01
+
+本轮是 0.6.11 回归报告 [docs/issues/](./docs/issues/) 列出的 10 条仓内可修缺陷（MA-1/3/4/5/6 + REG-1/2/4 + TH-1/4/5）的统一修复版。其余 8 条（REG-5/6、TH-2/3/6/7/8/9/10）按登记文档留待下版或 53 runner 侧独立处理。
+
+### 修复
+
+- **MA-1 · `/api/repositories/{repo}` 含 `/` 的仓库名路由失效**（High）。158 上 84% 真实仓库受影响，前端「删除仓库」「按 digest 删 manifest」对这批仓库全报错。改为 wildcard dispatcher 仿协议侧 `internal/registryd/routes.go:115-123` 的处理：自己切分路径，把 `repo` / `tag` / `digest` 注入 chi route context，让现有 handler 零改动。前端 `web/src/api.ts:234, 241` 同步去掉 `encodeURIComponent(repo)`，URL 可读性顺便好转。详见 [docs/issues/management-api.md MA-1](./docs/issues/management-api.md)。
+- **MA-5 · sync 删除端点返 `204` 撞前端 JSON 信封 → 假阴性「删除失败」**（High）。`DELETE /api/sync/{id}` 与 `DELETE /api/sync/{id}/schedules/{sid}` 改为 `200` + JSON 信封 `{"id":...,"deleted":true}`，与本仓其他 DELETE 端点口径一致。前端 `request()` 不再把空 body 误判为「非 JSON 响应」，列表自动刷新。详见 [docs/issues/management-api.md MA-5](./docs/issues/management-api.md)。
+- **MA-3 · `POST /api/gc` 非法 JSON body 被静默忽略**。之前 `_ = decodeJSON(r, &body)` 把「EOF（无 body）」和「真解析错误（截断 JSON 等）」一起吞掉，导致 `{"cleanEmptyRepos": tru` 这种残缺 body 也走完 GC、参数静默回落为默认值。改为：EOF 仍视为「无 body」走默认；其他解析错误返 `400 BAD_REQUEST`。同时修正 `:695-697` 那段把契约描述错的注释。
+- **MA-4 · `DELETE /api/repositories/{repo}` 不存在返 `500`**。补上 `storage.ErrNotFound` → `404 NOT_FOUND` 分支，与同文件 `DeleteManifestByDigest:650-656` 已有写法一致。
+- **MA-6 · `GET /api/sync/{id}/runs` 漏任务存在性守卫**。不存在的任务 id 之前返 `200 + ` `[]`，与兄弟端点 `/sync/{id}`（404）和 `/sync/{id}/schedules`（404）的答案互相矛盾。补上 `Store.GetTask` 前置校验，与 `ListSchedules:426-434` 的守卫同款。
+- **REG-1 · `PUT /v2/<repo>/manifests/<ref>` 不校验 payload**。47 字节垃圾 JSON 也能 `201 Created` 并持久化，错误推到客户端 unpack 阶段。补最小校验（JSON + `schemaVersion` ∈ {1, 2} + body 或 Content-Type 至少一处有 `mediaType`），不合法 → `400 MANIFEST_INVALID`。形态校验留给客户端，符合「不替 caller 做协议解释」的分轨。
+- **REG-2 · 未知仓库 `tags/list` 返 `200` + 空数组**。`storage.Filesystem.Tags` 区分「仓库目录不存在」（→ `ErrNotFound`）与「tags 目录为空但仓库存在」（→ 仍 `[]`）；路由层把 `ErrNotFound` 映射成 `404 NAME_UNKNOWN`。`_catalog` 里 `tags:null` 的空仓库容忍约定（AGENTS.md 已明确）**未动**。
+- **REG-4 · `DELETE /v2/<repo>/manifests/<digest>` 错误响应不规范**。`ErrNotFound` 之前返 `404` + 0 字节 body（docker CLI 报 "unexpected end of JSON input"），补上 `MANIFEST_UNKNOWN` 标准错误体；其余内部错误从错误码 `"UNSUPPORTED"` 改成 `"UNKNOWN"`（Distribution 实际码位）。顺手扫了一遍同文件其他 6 处 `500` 内部错误分支，统一替换为 `"UNKNOWN"`；`writeV2MethodNotAllowed` 里的 `"UNSUPPORTED"` 是 `405` 的规范码，保留。
+- **TH-1 · Makefile 场景前缀 `cairn/` → `go-hub/`**。53 runner 实际加载的目录是 `go-hub/*`（项目曾用名），`cairn/*` 前缀全部 `ENOENT`。两处 `:` 大循环的 `scenario` 字段 + 顶部注释同步修。
+- **TH-4 · `test-frontend-fast` 注释与列表脱节**。注释称「9 只读场景」、实际列 8 个、且包含 `pull-real`（写路径，会真往 registry 推送/拉取）。移除 `pull-real`（留给 `test-frontend`），注释同步改成「7 只读场景」。
+- **TH-5 · `test-backend` 硬编码 `cairn:0.5.18-dev`**。改为 `$(IMAGE)` 复用版本号变量；`/root/.regpw` 不存在时直接 fail-fast 并给可读错误（不再 `|| echo admin` 静默用错密码）。
+
+### 兼容性
+
+- **MA-1 破坏性变更**（API 端点 URL 形态）：`/api/repositories/{repo}/*` 从「`{repo}` 必须单段」改为「`{repo}` 可含 `/`」。旧客户端若仍用 `encodeURIComponent` 把 `/` 编成 `%2F`，现在会落到 `storage: not found` → 仍然报错但语义不变（已不再 500）；修法的成本是把 `encodeURIComponent(repo)` 去掉一行。本仓前端同步修了，第三方客户端若存在需自行适配。
+- **MA-5 破坏性变更**（HTTP 状态码）：`/api/sync/{id}` `DELETE` 与 `/api/sync/{id}/schedules/{sid}` `DELETE` 从 `204` 改为 `200` + JSON 信封。任何按 204 编程的脚本需改判 200。
+- **REG-1 兼容性**：未对仓内分发过的镜像做回放实验。仓库自带的已有 manifest 都不在本校验之内（v2 schemaVersion=2），现状安全。
+- **REG-2 兼容性**：客户端需把「拼错仓库名」从「安静看到空列表」改为「看到 404 NAME_UNKNOWN」，调用方代码若此前把 200+[] 当成功可能需要补 404 分支。
+- **REG-4 兼容性**：错误体 / 错误码本身就在改的是「之前错了」的形态，调用方按空 body 解析失败的情况会改成按 `MANIFEST_UNKNOWN` 解析，更稳。
+
+### 用户须知
+
+- `docs/issues/` 下登记的 8 条「仓外缺陷」未在本轮处理：
+  - **REG-3**（`HEAD /v2/` 一致性 + `Docker-Distribution-Api-Version` 头）、**REG-5**（blob `Content-Type` + `Range` 支持）、**REG-6**（upload cancel + 孤儿目录 TTL）：Low，下版一起做。
+  - **TH-2/3/6/7/8/9/10**：均在 53 runner 侧（runner 源码 / `web-auto.dev.yaml` / 场景 YAML），不在本仓库；按各自修复方向跨期处理。
+
+---
+
 ## [0.6.11] - 2026-09-30
 
 ### 新增

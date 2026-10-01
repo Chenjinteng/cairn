@@ -138,10 +138,11 @@ func (e *ExtraHandlers) RegisterRoutes(r chi.Router) {
 
 	// v0.5.0: deletion is operational work, so it lives on the API surface
 	// (UI buttons) and is gated by AllowDelete.
-	r.Route("/repositories", func(r chi.Router) {
-		r.Delete("/{repo}", e.DeleteRepository)
-		r.Delete("/{repo}/manifests/{digest}", e.DeleteManifestByDigest)
-	})
+	//
+	// v0.6.12 (MA-1): /api/repositories/* is now served by a wildcard
+	// dispatcher registered in api.go — the GET/DELETE handlers share the
+	// same path parser so repo names with "/" (e.g. "library/alpine",
+	// "3proxy/3proxy") work everywhere. See internal/api/dispatch.go.
 	r.Post("/gc", e.RunGC)
 
 	r.Route("/stats", func(r chi.Router) {
@@ -614,6 +615,13 @@ func (e *ExtraHandlers) DeleteRepository(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err := e.Store.DeleteRepository(r.Context(), repo); err != nil {
+		// v0.6.12 (MA-4): "repo doesn't exist" is a normal client outcome,
+		// not an internal error. storage.ErrNotFound → 404, anything else → 500.
+		// Mirrors DeleteManifestByDigest right below.
+		if errors.Is(err, storage.ErrNotFound) {
+			writeError(w, r, http.StatusNotFound, errRepoNotFound)
+			return
+		}
 		writeError(w, r, http.StatusInternalServerError, err)
 		return
 	}
@@ -692,10 +700,18 @@ func (e *ExtraHandlers) RunGC(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		CleanEmptyRepos bool `json:"cleanEmptyRepos"`
 	}
-	// A missing or empty body is the v0.5.18 path — leave CleanEmptyRepos
-	// at its zero value (false). decodeJSON tolerates EOF and surfaces
-	// real parse errors, but we don't want an empty POST to 400.
-	_ = decodeJSON(r, &body)
+	// v0.6.12 (MA-3): a missing or empty body is the v0.5.18 path —
+	// leave CleanEmptyRepos at its zero value (false). EOF from the
+	// decoder is the "no body" case and stays 200. A real parse error
+	// (truncated JSON, mismatched brace, etc.) used to be silently
+	// dropped along with EOF — that's the bug: callers would assume
+	// their flag took effect while it silently fell back to false.
+	// Now we surface it as 400 so the caller can fix the body.
+	if err := decodeJSON(r, &body); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, r, http.StatusBadRequest,
+			fmt.Errorf("invalid JSON body: %w", err))
+		return
+	}
 
 	res, err := e.Store.GC(r.Context(), storage.GCOption{CleanEmptyRepos: body.CleanEmptyRepos})
 	if err != nil {

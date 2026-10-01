@@ -16,7 +16,7 @@
 #   make test                       # 跑本机门禁
 #
 # 环境变量(全部可覆盖,默认值见对应 target):
-#   IMAGE          cairn:0.6.11
+#   IMAGE          cairn:0.6.12
 #   PORT           8787(容器内监听)
 #   HOST_PORT      80(宿主机映射端口)
 #   DATA_DIR       /data/cairn(宿主机数据目录)
@@ -25,7 +25,7 @@
 #   NPM_REGISTRY   https://registry.npmmirror.com
 
 # ───────────────────────── 变量 ─────────────────────────
-IMAGE       ?= cairn:0.6.11
+IMAGE       ?= cairn:0.6.12
 PORT        ?= 8787
 HOST_PORT   ?= 80
 DATA_DIR    ?= /data/cairn
@@ -33,7 +33,7 @@ REGISTRY_URL ?= registry.example.com
 GOPROXY     ?= https://goproxy.io,direct
 NPM_REGISTRY ?= https://registry.npmmirror.com
 
-# 运行时构造 (从镜像 tag 解析版本号, 例: cairn:0.6.11 → 0.6.11)
+# 运行时构造 (从镜像 tag 解析版本号, 例: cairn:0.6.12 → 0.6.12)
 VERSION     := $(shell echo $(IMAGE) | sed 's/.*://')
 
 # 工具检测
@@ -194,7 +194,10 @@ gate-test:      ## 单跑 go test -race
 
 # ───────────────────────── 六、验收 — 前端 ─────────────────────────
 # 53 上 web-auto runner 跑 cairn 全 14 场景。
-# 注意:场景名必须带 cairn/ 前缀,env=dev 必带,真实动作场景 timeout=300000。
+# v0.6.12 (TH-1): 场景名前缀从 cairn/ 改为 go-hub/ —— runner 实际加载
+# 的是 /scenarios/go-hub/*.yaml(项目曾用名 go-hub,改产品名 cairn 后
+# runner 侧目录没跟着改;docs/issues/test-harness.md TH-1)。任何 cairn/
+# 前缀的请求 runner 都会返 ENOENT。
 
 RUNNER_BASE ?= http://proxy.example.com:8080
 RUNNER_ENV  ?= dev
@@ -207,19 +210,22 @@ test-frontend:  ## 跑全部 14 场景(慢,~3 分钟)
 		echo "=== $$sc ==="; \
 		curl --noproxy '*' -sS -X POST $(RUNNER_BASE)/api/run \
 			-H 'Content-Type: application/json' \
-			-d "{\"scenario\":\"cairn/$$sc\",\"env\":\"$(RUNNER_ENV)\",\"timeout\":300000}" | \
+			-d "{\"scenario\":\"go-hub/$$sc\",\"env\":\"$(RUNNER_ENV)\",\"timeout\":300000}" | \
 		python3 -c "import json,sys; d=json.load(sys.stdin); \
 			print(f'  status={d.get(\"status\")} runId={d.get(\"runId\")} dur={d.get(\"duration\")}ms steps={len(d.get(\"steps\",[]))}')"; \
 	done
 
+# v0.6.12 (TH-4): 列表里曾经有 9 个,实际是 8 个,而且其中含 pull-real(写路径,
+# 会真的往 registry 推送/拉取镜像 —— 跟「只读」表述不符)。从 fast 拉走 pull-real,
+# 留给 test-frontend 跑;注释里的 9 → 8。
 .PHONY: test-frontend-fast
-test-frontend-fast:  ## 只跑 9 只读场景(~1 分钟)
+test-frontend-fast:  ## 只跑 7 只读场景(~1 分钟);写路径走 test-frontend
 	@for sc in _smoke-all-pages images-page credentials-page proxies-page pull-page \
-	           pull-real settings-page stats-page; do \
+	           settings-page stats-page; do \
 		echo "=== $$sc ==="; \
 		curl --noproxy '*' -sS -X POST $(RUNNER_BASE)/api/run \
 			-H 'Content-Type: application/json' \
-			-d "{\"scenario\":\"cairn/$$sc\",\"env\":\"$(RUNNER_ENV)\",\"timeout\":120000}" | \
+			-d "{\"scenario\":\"go-hub/$$sc\",\"env\":\"$(RUNNER_ENV)\",\"timeout\":120000}" | \
 		python3 -c "import json,sys; d=json.load(sys.stdin); \
 			print(f'  status={d.get(\"status\")} runId={d.get(\"runId\")} dur={d.get(\"duration\")}ms steps={len(d.get(\"steps\",[]))}')"; \
 	done
@@ -227,16 +233,17 @@ test-frontend-fast:  ## 只跑 9 只读场景(~1 分钟)
 # ───────────────────────── 七、验收 — 后端(158 docker 数据面) ─────────────────────────
 .PHONY: test-backend
 test-backend:   ## 后端四项鉴权矩阵 + docker 数据面
-	@unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy; \
+	@if [ ! -f /root/.regpw ]; then echo "ERROR: /root/.regpw not found (host-only file)"; exit 1; fi; \
+	unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy; \
 		echo '=== L1 /v2/ 鉴权矩阵 ==='; \
 		echo '--- /v2/ no creds (expect 401) ---'; \
 		curl -sS -w 'HTTP=%{http_code}\n' -o /dev/null http://$(REGISTRY_URL):$(HOST_PORT)/v2/; \
 		echo '--- /v2/ with creds (expect 200) ---'; \
-		curl -sS -w 'HTTP=%{http_code}\n' -u admin:$$(cat /root/.regpw 2>/dev/null || echo admin) -o /dev/null http://$(REGISTRY_URL):$(HOST_PORT)/v2/; \
+		curl -sS -w 'HTTP=%{http_code}\n' -u admin:$$(cat /root/.regpw) -o /dev/null http://$(REGISTRY_URL):$(HOST_PORT)/v2/; \
 		echo ''; \
 		echo '=== L2 docker 数据面 ==='; \
 		docker login $(REGISTRY_URL) -u admin --password-stdin < /root/.regpw 2>&1 | tail -1; \
-		docker tag cairn:0.5.18-dev $(REGISTRY_URL)/webauto-push/accept-$(VERSION):v1 2>&1; \
+		docker tag $(IMAGE) $(REGISTRY_URL)/webauto-push/accept-$(VERSION):v1 2>&1; \
 		docker push $(REGISTRY_URL)/webauto-push/accept-$(VERSION):v1 2>&1 | tail -1; \
 		docker pull $(REGISTRY_URL)/webauto-push/accept-$(VERSION):v1 2>&1 | tail -1
 

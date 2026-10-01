@@ -136,7 +136,24 @@ func (f *Filesystem) Tags(_ context.Context, repo string) ([]string, error) {
 	tagsDir := filepath.Join(f.root, "repos", repo, "tags")
 	entries, err := os.ReadDir(tagsDir)
 	if err != nil {
+		// v0.6.12 (REG-2): distinguish "repo doesn't exist" (the parent
+		// repos/<repo> directory is missing) from "repo exists but has no
+		// tags" (the tags subdir happens to be empty). Before this fix both
+		// collapsed to nil, nil and the registryd layer rendered 200 + [] —
+		// indistinguishable from a real empty repo. Callers couldn't tell
+		// a typo from a clean checkout.
+		//
+		// We still tolerate the case where the parent repos/<repo> exists
+		// but tags/ doesn't (a brand-new repo before any manifest push):
+		// that's the legitimate "repo exists, []" answer and stays
+		// (nil, nil). Only an absent repos/<repo> parent propagates.
 		if errors.Is(err, os.ErrNotExist) {
+			if _, statErr := os.Stat(filepath.Join(f.root, "repos", repo)); statErr != nil {
+				if errors.Is(statErr, os.ErrNotExist) {
+					return nil, ErrNotFound
+				}
+				return nil, statErr
+			}
 			return nil, nil
 		}
 		return nil, err

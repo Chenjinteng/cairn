@@ -231,7 +231,16 @@ func (s *SyncHandlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 // DeleteTask — DELETE /api/sync/{id}
 //
 // CASCADE removes all sync_runs for the task (FK in schema v5).
-// Returns 204 No Content on success.
+//
+// v0.6.12 (MA-5): used to return 204 No Content, which the frontend's
+// request() helper could not parse — it always JSON-parses the body, and
+// JSON.parse("") throws SyntaxError that surfaces as "删除失败：服务返回了非
+// JSON 响应 (HTTP 204)". The deletion was actually happening but the UI
+// was telling the user it failed. Now we return 200 + a JSON envelope
+// like every other DELETE in /api/* (Handlers.DeleteRepository,
+// DeleteManifestByDigest, etc.) so the frontend's envelope parser
+// succeeds and the success branch runs (including the missing-list-refresh
+// behaviour previously suppressed by the bogus failure path).
 func (s *SyncHandlers) DeleteTask(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseID(w, r)
 	if !ok {
@@ -245,7 +254,7 @@ func (s *SyncHandlers) DeleteTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusInternalServerError, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "deleted": true})
 }
 
 // RunTask — POST /api/sync/{id}/run
@@ -303,9 +312,23 @@ func (s *SyncHandlers) RunTask(w http.ResponseWriter, r *http.Request) {
 // defaults to 50; pass 0 or omit to get all runs (UI uses 50 to
 // keep the history table small — older history is a retention concern
 // for v0.6.2+).
+//
+// v0.6.12 (MA-6): adds the same task-exists guard ListSchedules already has
+// (see the comment on that function for the rationale). Without it,
+// "GET /api/sync/999/runs" for a typo'd id returns 200 + [] instead of 404,
+// silently masking the URL typo. Mirrors the contract /sync/{id} itself
+// has been returning 404 for since the beginning.
 func (s *SyncHandlers) ListRuns(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseID(w, r)
 	if !ok {
+		return
+	}
+	if _, err := s.Store.GetTask(r.Context(), id); err != nil {
+		if errors.Is(err, sync.ErrTaskNotFound) {
+			writeError(w, r, http.StatusNotFound, err)
+			return
+		}
+		writeError(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	limit := 50
@@ -547,8 +570,12 @@ func (s *SyncHandlers) UpdateSchedule(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, *current)
 }
 
-// DeleteSchedule — DELETE /api/sync/{id}/schedules/{sid}\//
-// 404 when the schedule doesn't exist on this task; 204 on success.
+// DeleteSchedule — DELETE /api/sync/{id}/schedules/{sid}
+//
+// 404 when the schedule doesn't exist on this task; otherwise 200 + a
+// JSON envelope with the deleted id (v0.6.12 MA-5 fix — used to be 204
+// No Content, which broke the frontend's envelope parser; see the long
+// comment on DeleteTask above for the same story).
 func (s *SyncHandlers) DeleteSchedule(w http.ResponseWriter, r *http.Request) {
 	scheduleID, err := strconv.ParseInt(chi.URLParam(r, "sid"), 10, 64)
 	if err != nil || scheduleID <= 0 {
@@ -571,5 +598,5 @@ func (s *SyncHandlers) DeleteSchedule(w http.ResponseWriter, r *http.Request) {
 	}
 	// (task_id match is implicit: schedules live under one task; if the
 	// id doesn't belong to taskID, the row was simply not found above.)
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, map[string]any{"id": scheduleID, "deleted": true})
 }

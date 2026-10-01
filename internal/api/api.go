@@ -24,8 +24,11 @@ func chiURLParam(r *http.Request, key string) string {
 // Sentinel errors used by handlers. Centralized so /api/tags 403/400 messages
 // are stable and easy to grep in the frontend.
 var (
-	errDeleteDisabled = errors.New("delete is disabled (allow.delete=false)")
-	errMissingParam   = errors.New("missing required query parameter")
+	errDeleteDisabled      = errors.New("delete is disabled (allow.delete=false)")
+	errMissingParam        = errors.New("missing required query parameter")
+	errRepoRequired        = errors.New("repository name required")
+	errRepoNotFound        = errors.New("repository not found")
+	errUnsupportedRepoPath = errors.New("unsupported repository path")
 )
 
 // registryErr is a typed-nil alias for type assertions in handlers.
@@ -80,9 +83,21 @@ func NewRouterWithExtras(h *Handlers, extras *ExtraHandlers, cfg *config.Config)
 		r.Post("/probe", h.Probe)
 		r.Get("/inventory", h.GetInventory)
 		r.Delete("/tags", h.DeleteTag)
-		r.Get("/repositories/{repo}/tags/{tag}/manifest", h.GetManifest)
+
+		// v0.6.12 (MA-1): /api/repositories/{repo}* uses a wildcard
+		// dispatcher instead of chi's "{repo}" named param — repo names
+		// naturally contain "/" and chi can't span it. See
+		// internal/api/dispatch.go and docs/issues/management-api.md MA-1.
+		// GET is registered here so v0.1 callers (extras==nil) still get
+		// the manifest endpoint; DELETE goes through extras below.
+		r.Get("/repositories/*", func(w http.ResponseWriter, req *http.Request) {
+			dispatchRepositoriesRoute(w, req, h, extras)
+		})
 
 		if extras != nil {
+			r.Delete("/repositories/*", func(w http.ResponseWriter, req *http.Request) {
+				dispatchRepositoriesRoute(w, req, h, extras)
+			})
 			extras.RegisterRoutes(r)
 		}
 	})

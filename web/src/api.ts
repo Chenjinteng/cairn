@@ -229,16 +229,23 @@ export const deleteTag = (repository: string, tag: string) =>
   );
 
 // v0.5.0: 删除整个仓库（不可逆；UI 必须二次确认）。
+// v0.6.12 (MA-1): 去掉 encodeURIComponent(repo) —— 后端 wildcard dispatcher
+// 自己切分 "/"，%2F 反而落进 storage.ErrNotFound（"3proxy%2F3proxy" 在磁盘
+// 上不存在）。repo 字面塞进 URL 即可；server 端不接受 .. / 空段。
 export const deleteRepository = (repo: string) =>
   requestSlow<DeleteRepositoryPayload>(
-    `/api/repositories/${encodeURIComponent(repo)}`,
+    `/api/repositories/${repo}`,
     { method: 'DELETE' }
   );
 
 // v0.5.0: 按 digest 删除 manifest，返回受影响 tag 列表。
+// v0.6.12 (MA-1): 同样去掉 encodeURIComponent(repo)，reason 同上。
+// digest 仍走 encodeURIComponent —— 它本身形如 "sha256:abc..."，
+// 后端 (DeleteManifestByDigest) 用 chi 单段参数接 digest，不含 "/" 没问题；
+// 保留 escape 只是为了一致性（前端 HTTP 层安全）。
 export const deleteManifestByDigest = (repo: string, digest: string) =>
   requestSlow<DeleteManifestPayload>(
-    `/api/repositories/${encodeURIComponent(repo)}/manifests/${encodeURIComponent(digest)}`,
+    `/api/repositories/${repo}/manifests/${encodeURIComponent(digest)}`,
     { method: 'DELETE' }
   );
 

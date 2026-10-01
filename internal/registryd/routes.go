@@ -215,7 +215,7 @@ func challenge(w http.ResponseWriter, realm string) {
 func (h *Handler) catalog(w http.ResponseWriter, r *http.Request) {
 	repos, err := h.Store.Repositories(r.Context())
 	if err != nil {
-		writeV2Error(w, http.StatusInternalServerError, "UNSUPPORTED", err.Error())
+		writeV2Error(w, http.StatusInternalServerError, "UNKNOWN", err.Error())
 		return
 	}
 	sort.Strings(repos)
@@ -271,7 +271,15 @@ func (h *Handler) tagsList(w http.ResponseWriter, r *http.Request) {
 	}
 	tags, err := h.Store.Tags(r.Context(), repo)
 	if err != nil {
-		writeV2Error(w, http.StatusInternalServerError, "UNSUPPORTED", err.Error())
+		// v0.6.12 (REG-2): an unknown repo is now propagated as ErrNotFound
+		// from the storage layer (see filesystem.go Tags); map it to the
+		// spec-canonical NAME_UNKNOWN 404. A real but empty repo still gets
+		// 200 + {"tags":[]} per Distribution.
+		if errors.Is(err, storage.ErrNotFound) {
+			writeV2Error(w, http.StatusNotFound, "NAME_UNKNOWN", "repository name is unknown")
+			return
+		}
+		writeV2Error(w, http.StatusInternalServerError, "UNKNOWN", err.Error())
 		return
 	}
 	if tags == nil {
@@ -323,7 +331,7 @@ func (h *Handler) manifestGet(w http.ResponseWriter, r *http.Request) {
 			writeV2Error(w, http.StatusNotFound, "MANIFEST_UNKNOWN", "manifest unknown")
 			return
 		}
-		writeV2Error(w, http.StatusInternalServerError, "UNSUPPORTED", err.Error())
+		writeV2Error(w, http.StatusInternalServerError, "UNKNOWN", err.Error())
 		return
 	}
 	w.Header().Set("Content-Type", m.MediaType)
@@ -379,6 +387,17 @@ func (h *Handler) manifestPut(w http.ResponseWriter, r *http.Request) {
 		writeV2Error(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
 		return
 	}
+	// v0.6.12 (REG-1): minimal manifest sanity check. Without this the
+	// server happily accepted 47 bytes of garbage JSON, computed a digest
+	// over it, and returned 201 Created — pushing the failure all the way
+	// to docker's unpack step. The check below is intentionally permissive
+	// (JSON + schemaVersion/mediaType) so we don't reject experimental
+	// mediaTypes; the strict shape checks live downstream when a real
+	// client tries to use the result.
+	if err := validateManifestShape(body, mediaType); err != nil {
+		writeV2Error(w, http.StatusBadRequest, "MANIFEST_INVALID", err.Error())
+		return
+	}
 	digest, err := h.Store.PutManifest(r.Context(), repo, ref, mediaType, body)
 	if err != nil {
 		writeV2Error(w, http.StatusBadRequest, "MANIFEST_INVALID", err.Error())
@@ -402,10 +421,15 @@ func (h *Handler) manifestDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, err := h.Store.DeleteManifest(r.Context(), repo, ref); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
-			w.WriteHeader(http.StatusNotFound)
+			// v0.6.12 (REG-4): previously returned 404 with a 0-byte body.
+			// Docker CLI and most SDKs parse `{"errors":[{"code":...}]}` and
+			// surface "unexpected end of JSON input" on empty bodies, hiding
+			// the real reason. Write the standard envelope so callers can
+			// actually see MANIFEST_UNKNOWN.
+			writeV2Error(w, http.StatusNotFound, "MANIFEST_UNKNOWN", "manifest unknown")
 			return
 		}
-		writeV2Error(w, http.StatusInternalServerError, "UNSUPPORTED", err.Error())
+		writeV2Error(w, http.StatusInternalServerError, "UNKNOWN", err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
@@ -426,7 +450,7 @@ func (h *Handler) blobGet(w http.ResponseWriter, r *http.Request) {
 			writeV2Error(w, http.StatusBadRequest, "DIGEST_INVALID", "invalid digest")
 			return
 		}
-		writeV2Error(w, http.StatusInternalServerError, "UNSUPPORTED", err.Error())
+		writeV2Error(w, http.StatusInternalServerError, "UNKNOWN", err.Error())
 		return
 	}
 	defer body.Close()
@@ -466,7 +490,7 @@ func (h *Handler) uploadStart(w http.ResponseWriter, r *http.Request) {
 	}
 	uuid, err := h.Store.StartUpload(r.Context(), repo)
 	if err != nil {
-		writeV2Error(w, http.StatusInternalServerError, "UNSUPPORTED", err.Error())
+		writeV2Error(w, http.StatusInternalServerError, "UNKNOWN", err.Error())
 		return
 	}
 	// v0.5.44: 绝对 URL —— skopeo / docker daemon 拒绝相对路径的 Location。
@@ -485,7 +509,7 @@ func (h *Handler) uploadGet(w http.ResponseWriter, r *http.Request) {
 			writeV2Error(w, http.StatusNotFound, "BLOB_UPLOAD_UNKNOWN", "upload not found")
 			return
 		}
-		writeV2Error(w, http.StatusInternalServerError, "UNSUPPORTED", err.Error())
+		writeV2Error(w, http.StatusInternalServerError, "UNKNOWN", err.Error())
 		return
 	}
 	w.Header().Set("Docker-Upload-UUID", u.UUID)
@@ -513,7 +537,7 @@ func (h *Handler) uploadPatch(w http.ResponseWriter, r *http.Request) {
 			writeV2Error(w, http.StatusNotFound, "BLOB_UPLOAD_UNKNOWN", "upload not found")
 			return
 		}
-		writeV2Error(w, http.StatusInternalServerError, "UNSUPPORTED", err.Error())
+		writeV2Error(w, http.StatusInternalServerError, "UNKNOWN", err.Error())
 		return
 	}
 	w.Header().Set("Docker-Upload-UUID", uuid)
@@ -550,7 +574,7 @@ func (h *Handler) uploadPut(w http.ResponseWriter, r *http.Request) {
 			writeV2Error(w, http.StatusBadRequest, "BLOB_UPLOAD_INVALID", err.Error())
 			return
 		}
-		writeV2Error(w, http.StatusInternalServerError, "UNSUPPORTED", err.Error())
+		writeV2Error(w, http.StatusInternalServerError, "UNKNOWN", err.Error())
 		return
 	}
 	w.Header().Set("Docker-Content-Digest", digest)
@@ -616,6 +640,44 @@ func digestMatches(body []byte, declared string) bool {
 	sum := sha256.Sum256(body)
 	actual := "sha256:" + hex.EncodeToString(sum[:])
 	return actual == declared
+}
+
+// validateManifestShape is the v0.6.12 (REG-1) minimal sanity check applied
+// in manifestPut before handing the bytes to the storage layer.
+//
+// It accepts anything that:
+//   1. Parses as a JSON object
+//   2. Carries a numeric schemaVersion (1 or 2; both are still in the wild)
+//   3. Carries a mediaType string (the request's Content-Type is allowed
+//      to differ, but the body should at least carry the field; this guards
+//      against the "47 bytes of garbage JSON" case the docs/issues report)
+//
+// We deliberately do NOT enforce the config/layers shape — that's a spec
+// contract callers are expected to know, and validating here would risk
+// rejecting experimental mediaTypes (OCI artifact, WASM modules, etc.)
+// that real registries store as-is. The real "did the client actually push
+// something usable" check happens at the consumer's unpack step, which is
+// where it belongs.
+func validateManifestShape(body []byte, mediaType string) error {
+	if len(body) == 0 {
+		return errors.New("manifest body is empty")
+	}
+	var probe map[string]any
+	if err := json.Unmarshal(body, &probe); err != nil {
+		return fmt.Errorf("manifest is not JSON: %w", err)
+	}
+	probeMT, _ := probe["mediaType"].(string)
+	if probeMT == "" && mediaType == "application/octet-stream" {
+		return errors.New("manifest has no mediaType field and request had no Content-Type")
+	}
+	probeSV, ok := probe["schemaVersion"].(float64) // json.Unmarshal always uses float64 for numbers
+	if !ok {
+		return errors.New("manifest is missing schemaVersion (expected 1 or 2)")
+	}
+	if probeSV != 1 && probeSV != 2 {
+		return fmt.Errorf("manifest schemaVersion=%v is not 1 or 2", probeSV)
+	}
+	return nil
 }
 
 // --- repository dispatch ----------------------------------------------------
