@@ -6,6 +6,29 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.6.14] - 2026-10-01
+
+本轮是 UI 一致性收尾:把「测试连接」类的弹窗内嵌结果从 `<Alert>` 渲染载体换成 message toast,与「探测 N 个代理」等其他动作共用同一条 message channel。
+
+### 变更
+
+- **「同步」页 / 「代理管理」页：测试连接结果从内嵌 Alert 改成 message toast**。
+  - 此前「新建/编辑同步任务」弹窗与「新增/编辑代理」弹窗里的「测试连接」按钮把结果(可达 / 凭据错 / URL 不像 registry / 连通失败 / 上游异常)渲染在弹窗顶部,占掉一整段垂直空间 —— 在窄屏 / 长表单上会撑出整页滚动条。改成 `message.success / error / warning / info` 后,结果用跟「探测 N 个代理」「已删除代理」「已更新代理」同样的 toast 通道弹出,不占弹窗内空间,也不再有滚动条。
+  - 状态码分档不变:2xx 绿 / 4xx 蓝(代理可达,目标按业务规则拒绝) / 5xx 黄(代理可达,上游异常) / 传输层失败红;sync 探测的 authStatus 分类(ok / no_auth_required / wrong_creds / required_but_missing / not_registry)也按原有语义映射到 message 等级。
+  - 两处 handler 共用一个 `proxyResultToast()` helper(sync-page 的转换就地写在「测试连接」按钮 onClick 里,因为它的 authStatus 分类跟 proxies 不一样,跟 proxyResultToast 不通用),文案不再两边漂移。
+
+### 兼容性
+
+- 严格兼容:UI 行为变化只发生在「用户点了弹窗里的『测试连接』按钮」之后那一瞬间;之前的内嵌 Alert 让用户多滚动一次才能看到结果,新 toast 直接浮在视口顶端,交互更顺。
+- 无后端 / API 变更。
+
+### 用户须知
+
+- 现在测完一次,改完 URL / 密码再点测试,会看到一条**新**的 toast,而不是覆盖之前那条内嵌 Alert —— 连续测两次会有两条 toast 短暂并存,符合 antd message 的默认行为。
+- 内嵌 Alert 退场,但页面级的 load failure / vault 不可用 等 `<Alert>` 仍保留(那是页面状态而非操作反馈,职责不同)。
+
+---
+
 ## [0.6.13] - 2026-10-01
 
 本轮是 0.6.11 回归报告 [docs/issues/](./docs/issues/) 仓内剩余 3 条 Low 协议缺陷的合并修复版:REG-3 / REG-5 / REG-6。三项按 patch 口径发布(REG-6 的「新增取消能力」按「既有功能漏写」归类,不到中版本门槛)。

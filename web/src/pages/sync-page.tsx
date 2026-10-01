@@ -80,8 +80,6 @@ import type {
   ApiResult,
   Credential,
   SyncDirection,
-  SyncProbeAuthStatus,
-  SyncProbeResult,
   SyncRun,
   SyncRunStatus,
   SyncSchedule,
@@ -199,11 +197,10 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
   const [runningId, setRunningId] = useState<number | null>(null);
 
   /**
-   * 「测试连接」结果（v0.6.5 新增）。null = 没测过 / 改了表单字段被自动清空；
-   * 非空 = 后端最后一次探测结果,顶部 Alert 渲染。改表单字段不清,让操作员看到
-   * 上一次结果对照现在的输入——改完「远端 URL」再点「测试连接」覆盖。
+   * v0.6.13 (UI): 「测试连接」结果不再落进 state,而是按状态码分档直接
+   * 弹 message.toast(见「测试连接」按钮的 onClick)。弹窗顶部不再渲染
+   * Alert,改完 URL/凭据再点「测试连接」立即看到新一条。
    */
-  const [probe, setProbe] = useState<SyncProbeResult | null>(null);
   /** 「测试连接」进行中——按钮 loading + 顶部 Alert 收起。 */
   const [testing, setTesting] = useState(false);
 
@@ -306,7 +303,6 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
       enabled: true,
     });
     setCredMode('anonymous');  // v0.6.11（SYNC-3）：新建默认匿名,要认证就选「引用凭据」
-    setProbe(null);  // 新建时清掉上次探测结果——避免「A 任务的探测结果留在 B 任务 Modal 上」
     setModalOpen(true);
     void loadCredentials();  // 让「引用凭据」档的选择框一开就有数据
   };
@@ -334,7 +330,6 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
       include: task.include,
       enabled: task.enabled,
     });
-    setProbe(null);  // 编辑同上——避免上一个任务的探测残留
     setModalOpen(true);
     void loadCredentials();
   };
@@ -846,7 +841,6 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
                   message.warning('内联凭据模式下,测连接需要重填一次「远端密码」');
                   return;
                 }
-                setProbe(null);
                 setTesting(true);
                 try {
                   const result = await testSyncConnection({
@@ -856,16 +850,34 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
                     remoteUsername: credMode === 'inline' ? (cur.remoteUsername ?? '') : '',
                     remotePassword: credMode === 'inline' ? (cur.remotePassword ?? '') : '',
                   });
+                  // v0.6.13 (UI): 结果改用 toast 而不是 modal 顶部内嵌 Alert。
+                  // 内嵌 Alert 会撑高 modal、覆盖 form 多出一列内容,在小屏
+                  // 上甚至撑出滚动条(operator 改完 URL/凭据后想立刻看结果,
+                  // 滚到 Alert 之前还得先滚一下 form);toast 跟「探测 N 个代理」
+                  // 等其他动作共用一条 message channel,形态统一。
                   if (result.success && result.data) {
-                    setProbe(result.data);
+                    const r = result.data;
+                    if (
+                      r.authStatus === 'ok' ||
+                      r.authStatus === 'no_auth_required'
+                    ) {
+                      message.success(
+                        r.reachable
+                          ? `${r.message},可达 HTTP ${r.httpStatus}`
+                          : r.message,
+                      );
+                    } else if (
+                      r.authStatus === 'wrong_creds' ||
+                      r.authStatus === 'required_but_missing'
+                    ) {
+                      message.error(`认证失败:${r.message} (HTTP ${r.httpStatus})`);
+                    } else if (r.authStatus === 'not_registry') {
+                      message.warning(`URL 不像 registry:${r.message}`);
+                    } else {
+                      message.info(r.message);
+                    }
                   } else {
                     message.error(`探测失败：${result.message}`);
-                    setProbe({
-                      reachable: false,
-                      authStatus: 'unknown',
-                      httpStatus: 0,
-                      message: result.message,
-                    });
                   }
                 } finally {
                   // v0.6.6 hotfix:与 submit 同样原因 —— 探测请求本身抛错时,
@@ -892,33 +904,9 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
           </Space>
         }
       >
-        {/* probe 结果挂在最顶部,操作员改完 URL/凭据可立刻重测看变化 */}
-        {probe && (
-          <Alert
-            type={probeAlertType(probe.authStatus)}
-            showIcon
-            style={{ marginBottom: 16 }}
-            message={
-              <Space size={4}>
-                {probe.authStatus === 'ok' || probe.authStatus === 'no_auth_required' ? (
-                  <Tag color="green">OK</Tag>
-                ) : probe.authStatus === 'wrong_creds' || probe.authStatus === 'required_but_missing' ? (
-                  <Tag color="red">认证</Tag>
-                ) : probe.authStatus === 'not_registry' ? (
-                  <Tag color="orange">URL</Tag>
-                ) : (
-                  <Tag>HTTP {probe.httpStatus}</Tag>
-                )}
-                <span>{probe.message}</span>
-              </Space>
-            }
-            description={
-              probe.reachable
-                ? `可达,HTTP ${probe.httpStatus}`
-                : '远端不可达 (网络问题 / URL 错 / 防火墙)'
-            }
-          />
-        )}
+        {/* v0.6.13 (UI): 探测结果不再挂在 modal 顶部 —— 见「测试连接」按钮
+            onClick 里的 toast 注释块。结果改用 message.X() 弹窗,
+            不占 modal 内部垂直空间,小屏不再撑出滚动条。 */}
 
         <Form<FormValues> form={form} layout="vertical" requiredMark="optional">
           <Form.Item
@@ -1165,26 +1153,11 @@ function statusIcon(status: SyncRunStatus) {
 }
 
 /**
- * probe.authStatus → antd Alert 的视觉等级（v0.6.5 新增）。
- *   ok / no_auth_required → success（绿）
- *   wrong_creds / required_but_missing → error（红）
- *   not_registry → warning（黄）
- *   unknown → info（蓝灰）—— 兜底,后端目前不会出这个,留着
+ * v0.6.13 (UI): 探测结果的视觉等级（success / error / warning / info）
+ * 走 message.X() toast,等级直接体现在调用上（message.success / error /
+ * warning / info）。v0.6.5 留下的 probeAlertType 函数已无 caller,删除
+ * 以免误导后人去维护一条没在跑的代码路径。
  */
-function probeAlertType(status: SyncProbeAuthStatus): 'success' | 'error' | 'warning' | 'info' {
-  switch (status) {
-    case 'ok':
-    case 'no_auth_required':
-      return 'success';
-    case 'wrong_creds':
-    case 'required_but_missing':
-      return 'error';
-    case 'not_registry':
-      return 'warning';
-    default:
-      return 'info';
-  }
-}
 
 // ── ScheduleTab（v0.6.11）──────────────────────────────────────────────
 //

@@ -115,63 +115,45 @@ interface FormValues {
 }
 
 /**
- * v0.5.13: 测连结果提示。新增弹窗的「测试连接」与行内测试弹窗共用一份渲染,
- * 免得两处文案/颜色各改各的漂移。
+ * v0.6.13 (UI): 把「测试连接」的结果从弹窗内嵌 Alert 改成 message toast,
+ * 与本仓「探测 N 个代理」等其他动作共用一条 message channel。具体分类
+ * 保留原来的状态码分档(2xx 绿,4xx 蓝,5xx 黄,传输层红),只是渲染载体
+ * 从 <Alert> 换到 message.X。两处测试 handler 共用本函数,免得文案漂移。
  *
- * v0.5.19: 着色按状态码分档 —— 2xx 绿色,4xx 蓝色(代理可达、目标按业务规则拒绝),
- * 5xx 黄色(代理可达、上游异常),传输层失败仍是红色。原来是 ok:true 一律绿、
- * ok:false 一律红,会把 Docker Hub / ghcr.io / quay.io 对匿名 /v2/ 的标准 401
- * 应答误报成「连通失败」(v0.5.18 之前一直存在,0.5.19 修)。
+ * 状态码分档的历史(留作 context,防后人翻 CHANGELOG):
+ * - v0.5.13 起:新增/编辑弹窗 + 行内测试共用一份渲染
+ * - v0.5.19:2xx 绿 / 4xx 蓝(代理可达,目标按业务规则拒绝) /
+ *   5xx 黄(代理可达,上游异常) / 传输层失败红;之前 ok:true 一律绿
+ *   会把 Docker Hub / ghcr.io / quay.io 对匿名 /v2/ 的标准 401 误报成
+ *   「连通失败」(0.5.18 之前的洞,0.5.19 修)。
  */
-function ProxyTestAlert({ result }: { result: ProxyTestResult }) {
+function proxyResultToast(
+  message: {
+    success: (s: string) => void;
+    info: (s: string) => void;
+    warning: (s: string) => void;
+    error: (s: string) => void;
+  },
+  result: ProxyTestResult,
+) {
   const status = result.status;
-  let alertType: 'success' | 'info' | 'warning' | 'error' = 'success';
-  let headline: string;
   if (!result.ok) {
-    alertType = 'error';
-    headline = '连通失败';
-  } else if (status === undefined) {
-    alertType = 'success';
-    headline = `连通正常 · ${result.elapsedMs} ms`;
-  } else if (status < 400) {
-    alertType = 'success';
-    headline = `连通正常 · HTTP ${status} · ${result.elapsedMs} ms`;
-  } else if (status < 500) {
-    alertType = 'info';
-    headline = `代理可达 · HTTP ${status} · ${result.elapsedMs} ms`;
-  } else {
-    alertType = 'warning';
-    headline = `代理可达,上游异常 · HTTP ${status} · ${result.elapsedMs} ms`;
+    message.error(`连通失败：${result.error}`);
+    return;
   }
-  return (
-    <Alert
-      type={alertType}
-      showIcon
-      message={headline}
-      description={
-        <div>
-          <div style={{ whiteSpace: 'pre-wrap' }}>
-            {result.ok ? result.targetUrl : result.error}
-          </div>
-          {result.ok ? (
-            <>
-              <div style={{ marginTop: 4, color: 'var(--color-text-3)' }}>
-                目标：<span className="mono">{result.targetUrl}</span>
-                {result.registryApiVersion
-                  ? ` · registry API ${result.registryApiVersion}`
-                  : ''}
-              </div>
-              {result.note ? (
-                <div style={{ marginTop: 4, color: 'var(--color-text-3)' }}>
-                  {result.note}
-                </div>
-              ) : null}
-            </>
-          ) : null}
-        </div>
-      }
-    />
-  );
+  if (status === undefined) {
+    message.success(`连通正常 · ${result.elapsedMs} ms`);
+    return;
+  }
+  if (status < 400) {
+    message.success(`连通正常 · HTTP ${status} · ${result.elapsedMs} ms`);
+    return;
+  }
+  if (status < 500) {
+    message.info(`代理可达 · HTTP ${status} · ${result.elapsedMs} ms`);
+    return;
+  }
+  message.warning(`代理可达,上游异常 · HTTP ${status} · ${result.elapsedMs} ms`);
 }
 
 export default function ProxiesPage({ config, sidebarFilter, onPublishGroups }: Props) {
@@ -198,12 +180,10 @@ export default function ProxiesPage({ config, sidebarFilter, onPublishGroups }: 
   const [testing, setTesting] = useState<ProxyEntry | null>(null);
   const [testTarget, setTestTarget] = useState('');
   const [testRunning, setTestRunning] = useState(false);
-  const [testResult, setTestResult] = useState<ProxyTestResult | null>(null);
 
   /** v0.5.13: 新增弹窗内的「测试连接」（保存前试连，不落库）。 */
   const [draftTarget, setDraftTarget] = useState('');
   const [draftTesting, setDraftTesting] = useState(false);
-  const [draftTestResult, setDraftTestResult] = useState<ProxyTestResult | null>(null);
   /**
    * v0.5.13: footer 改成自定义按钮之后，antd 不再代管提交按钮的加载态。这里自己
    * 兜两件事 —— 保存期间有忙碌反馈；连点两次不会建出两条。
@@ -329,7 +309,6 @@ export default function ProxiesPage({ config, sidebarFilter, onPublishGroups }: 
     setEditing(null);
     form.resetFields();
     setDraftTarget('');
-    setDraftTestResult(null);
     setSaving(false);
     setModalOpen(true);
   };
@@ -346,7 +325,6 @@ export default function ProxiesPage({ config, sidebarFilter, onPublishGroups }: 
       note: p.note,
     });
     setDraftTarget('');
-    setDraftTestResult(null);
     setSaving(false);
     setModalOpen(true);
   };
@@ -424,26 +402,21 @@ export default function ProxiesPage({ config, sidebarFilter, onPublishGroups }: 
   const handleOpenTest = (p: ProxyEntry) => {
     setTesting(p);
     setTestTarget('');
-    setTestResult(null);
   };
 
   const handleRunTest = async () => {
     if (!testing) return;
     setTestRunning(true);
-    setTestResult(null);
     try {
       const result = await testProxy(testing.id, testTarget.trim() || undefined);
+      // v0.6.13 (UI): 走 message toast 而不是 setTestResult + <Alert>
+      // —— 见文件顶部的 v0.6.13 (UI) 注释。
       if (!result.success) {
-        setTestResult({
-          ok: false,
-          elapsedMs: 0,
-          targetUrl: testTarget.trim() || '(默认：本仓库 /v2/)',
-          error: result.message,
-        });
+        message.error(`连通失败：${result.message}`);
         return;
       }
       if (result.data) {
-        setTestResult(result.data);
+        proxyResultToast(message, result.data);
       }
     } finally {
       setTestRunning(false);
@@ -463,23 +436,17 @@ export default function ProxiesPage({ config, sidebarFilter, onPublishGroups }: 
     const values = form.getFieldsValue() as Partial<FormValues>;
     const url = (values.url ?? '').trim();
     const target = draftTarget.trim();
-    setDraftTestResult(null);
+    // v0.6.13 (UI): 前置校验也走 message toast,不再写状态:
+    //   - 空 url:warning
+    //   - scheme 不对:warning
+    //   - 服务端失败:error
+    //   - 服务端成功:proxyResultToast (按状态码分档)
     if (!url) {
-      setDraftTestResult({
-        ok: false,
-        elapsedMs: 0,
-        targetUrl: target || '(默认：本仓库 /v2/)',
-        error: '请先填写代理地址',
-      });
+      message.warning('请先填写代理地址');
       return;
     }
     if (!/^https?:\/\//i.test(url)) {
-      setDraftTestResult({
-        ok: false,
-        elapsedMs: 0,
-        targetUrl: target || '(默认：本仓库 /v2/)',
-        error: '代理地址需要以 http:// 或 https:// 开头，例如 http://proxy.example.com:8080',
-      });
+      message.warning('代理地址需要以 http:// 或 https:// 开头，例如 http://proxy.example.com:8080');
       return;
     }
     setDraftTesting(true);
@@ -493,16 +460,11 @@ export default function ProxiesPage({ config, sidebarFilter, onPublishGroups }: 
         targetUrl: target,
       });
       if (!result.success) {
-        setDraftTestResult({
-          ok: false,
-          elapsedMs: 0,
-          targetUrl: target || '(默认：本仓库 /v2/)',
-          error: result.message,
-        });
+        message.error(`连通失败：${result.message}`);
         return;
       }
       if (result.data) {
-        setDraftTestResult(result.data);
+        proxyResultToast(message, result.data);
       }
     } finally {
       setDraftTesting(false);
@@ -855,7 +817,7 @@ export default function ProxiesPage({ config, sidebarFilter, onPublishGroups }: 
           </div>
         }
       >
-        <Form<FormValues> form={form} layout="vertical" preserve={false} onValuesChange={() => setDraftTestResult(null)}>
+        <Form<FormValues> form={form} layout="vertical" preserve={false}>
           <Form.Item
             label="名称"
             name="name"
@@ -917,14 +879,12 @@ export default function ProxiesPage({ config, sidebarFilter, onPublishGroups }: 
             <Input
               placeholder="https://registry-1.docker.io/v2/"
               value={draftTarget}
-              onChange={(e) => {
-                setDraftTarget(e.target.value);
-                setDraftTestResult(null);
-              }}
+              onChange={(e) => setDraftTarget(e.target.value)}
               allowClear
             />
           </Form.Item>
-          {draftTestResult ? <ProxyTestAlert result={draftTestResult} /> : null}
+          {/* v0.6.13 (UI): 探测结果改走 message toast,见 handleTestDraft 注释。
+              这里不再挂 <ProxyTestAlert>,删掉以免旧状态在表单里残留误导用户。 */}
         </Form>
       </Modal>
 
@@ -958,7 +918,7 @@ export default function ProxiesPage({ config, sidebarFilter, onPublishGroups }: 
               开始测试
             </Button>
 
-            {testResult ? <ProxyTestAlert result={testResult} /> : null}
+            {/* v0.6.13 (UI): 走 message toast,见 handleRunTest 注释。 */}
           </Space>
         ) : null}
       </Modal>
