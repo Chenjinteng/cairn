@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { CSSProperties } from 'react';
 import {
   Alert,
   App as AntdApp,
@@ -92,6 +93,24 @@ const PROBE_LABELS: Record<'ok' | 'failed' | 'untested', string> = {
   ok: '可用',
   failed: '不可用',
   untested: '未探测',
+};
+
+/**
+ * v0.6.15 (UI-1): 「状态」列四种状态共用的定宽样式。
+ *
+ * 「探测中」(3 字) 与「可用」(2 字) 的文字宽度不同，antd <Table> 在 auto layout
+ * 下按单元格内容重算列宽 —— 一次探测完成的那一帧，整表重排把右侧固定列的首按钮
+ * 挤到文字截断（「探测中…」只露前半截）。给 Tag 定宽 + 文字居中，四种状态同宽，
+ * 列宽不再随状态跳变。
+ *
+ * 宽度取最长的一种状态「不可用」(3 字带图标) 再留一点余量。
+ */
+const STATUS_TAG_STYLE: CSSProperties = {
+  minWidth: 88,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  marginInlineEnd: 0,
 };
 
 interface Props {
@@ -281,28 +300,49 @@ export default function ProxiesPage({ config, sidebarFilter, onPublishGroups }: 
    * 表现就是"点了没反应"。构建脚本只跑 vite build（不含 tsc），所以没拦住。
    * 顺带补上 catch：api 层若改回抛异常，也会变成可见提示而不是静默失败。
    */
-  const probeOne = async (id: string, name: string) => {
+  /**
+   * v0.6.15 (UI-2): probeOne 的结果不再由本函数自己 toast，改为把结果 return
+   * 给调用方决定怎么播报。
+   *
+   * 之前「新建代理」提交路径上会连弹两条：先「已创建代理，正在探测连通性…」，
+   * 再「Bigops53 可用 · 延迟 0.9 ms」—— 探测是纯 TCP 建连（同网段通常 < 5ms），
+   * 两条 toast 几乎同时出现，观感是同一件事被播报两次。
+   *
+   * 现在逐行「探测」按钮的调用方仍会播报（行为不变），只有「新建后自动探测」
+   * 这条路径改成合并成一条。
+   *
+   * 返回值语义：探测**确实拿到结论**时返回该结论（含 ok=false 的不可用），
+   * 请求本身失败 / 抛异常时返回 null（此时本函数已经自己播报过错误）。
+   */
+  const probeOne = async (id: string, name: string, opts?: { silent?: boolean }) => {
+    const silent = opts?.silent === true;
     setProbingIds((prev) => ({ ...prev, [id]: true }));
+    let outcome: { ok: boolean; latencyMs?: number; error?: string } | null = null;
     try {
       const r = await probeProxy(id);
       if (r.success && r.data) {
         const out = r.data;
-        if (out.ok) {
+        if (silent) {
+          // 调用方（新建后自动探测）会自己合并成一条 toast，这里不播报。
+          outcome = { ok: out.ok, latencyMs: out.latencyMs, error: out.error };
+        } else if (out.ok) {
           // v0.5.15: 探测现在会带回建连延迟，顺手一起告诉用户。
           message.success(`${name} 可用 · 延迟 ${formatLatency(out.latencyMs)}`);
         } else {
           message.warning(`${name} 不可用: ${out.error || '未知错误'}`);
         }
-      } else {
+      } else if (!silent) {
         message.error(r.message ?? '探测失败');
       }
     } catch (err) {
+      // 异常路径不合并：silent 模式下调用方拿不到 outcome，必须让本函数自己报。
       message.error(`探测 ${name} 出错: ${String((err as Error)?.message ?? err)}`);
     } finally {
       // 先清"探测中"再刷新：反过来的话刷完列表状态又盖回旧值。
       setProbingIds((prev) => ({ ...prev, [id]: false }));
       await refresh();
     }
+    return outcome;
   };
 
   const handleOpenCreate = () => {
@@ -376,15 +416,36 @@ export default function ProxiesPage({ config, sidebarFilter, onPublishGroups }: 
           return;
         }
         created = result.data ?? null;
-        // 真实连通性由随后的探测给出，这里只说"建好了、正在测"。
-        message.success('已创建代理，正在探测连通性…');
       }
       setModalOpen(false);
       await refresh();
       if (created) {
         // 探测最坏 5 秒（internal/proxies.Probe 的总预算）。此刻 modal 已关、
         // 列表已刷新，用户在行上能看到"探测中"再变成最终状态，不会以为卡住了。
-        await probeOne(created.id, created.name);
+        //
+        // v0.6.15 (UI-2): silent=true 走合并路径 —— probeOne 不再自己播报 toast，
+        // 本函数按探测结果分流成一条：
+        //   - 可用     → success   「已创建代理 Bigops53，可用 · 延迟 0.9 ms」
+        //   - 不可用   → warning   「已创建代理 Bigops53，但探测失败 · <原因>」
+        //                （必须明确「已创建」—— 代理已落库，不能让用户误以为失败
+        //                去重填表单）
+        //   - 探测请求失败 / 异常 → 退到两条 toast（旧形态）：
+        //     「已创建代理 Bigops53」+ probeOne 自己的 error toast
+        //   （silent 模式下探测请求失败 → outcome=null → 走 fallback）
+        const outcome = await probeOne(created.id, created.name, { silent: true });
+        if (outcome?.ok) {
+          message.success(
+            `已创建代理 ${created.name}，可用 · 延迟 ${formatLatency(outcome.latencyMs)}`,
+          );
+        } else if (outcome) {
+          message.warning(
+            `已创建代理 ${created.name}，但探测失败：${outcome.error || '未知错误'}`,
+          );
+        } else {
+          // 探测请求没拿到结论（请求层失败 / 异常）。代理已落库，先告知成功
+          // 创建这一段事实，避免用户以为"创建也没成功"。
+          message.success(`已创建代理 ${created.name}`);
+        }
       }
     } catch (err) {
       message.error(String((err as Error)?.message ?? err));
@@ -580,22 +641,34 @@ export default function ProxiesPage({ config, sidebarFilter, onPublishGroups }: 
       render: (_, p) => {
         // v0.5.12: 探测进行中优先于落库状态 —— 否则刚点完按钮行上还是旧结果，
         // 看不出"已经在测了"。
+        //
+        // v0.6.15 (UI-1): 四个状态标签统一挂 STATUS_TAG_STYLE。「探测中」(3 字)
+        // 与「可用」(2 字) 文字宽度不同，antd <Table> 的 auto layout 会按内容
+        // 重算列宽 —— 探测完成那一帧整表重排，把右侧「操作」列的首按钮文字挤到
+        // 截断（「探测中…」只看得见前半截）。定宽后四种状态同宽，不再抖。
         if (probingIds[p.id]) {
           return (
-            <Tag color="processing" icon={<LoadingOutlined />}>
+            <Tag color="processing" icon={<LoadingOutlined />} style={STATUS_TAG_STYLE}>
               探测中
             </Tag>
           );
         }
         const s = p.lastProbeStatus || '';
-        if (s === 'ok') return <Tag color="success" icon={<CheckCircleOutlined />}>可用</Tag>;
+        if (s === 'ok')
+          return (
+            <Tag color="success" icon={<CheckCircleOutlined />} style={STATUS_TAG_STYLE}>
+              可用
+            </Tag>
+          );
         if (s === 'failed')
           return (
             <Tooltip title={p.lastProbeError || '探测失败'}>
-              <Tag color="error" icon={<CloseCircleOutlined />}>不可用</Tag>
+              <Tag color="error" icon={<CloseCircleOutlined />} style={STATUS_TAG_STYLE}>
+                不可用
+              </Tag>
             </Tooltip>
           );
-        return <Tag>未探测</Tag>;
+        return <Tag style={STATUS_TAG_STYLE}>未探测</Tag>;
       },
     },
     {

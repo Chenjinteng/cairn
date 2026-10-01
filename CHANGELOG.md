@@ -6,6 +6,37 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.6.15] - 2026-10-01
+
+本轮是 0.6.14「UI 一致性收尾」延续：UAT 手工测试发现代理管理 / 设置 / 热度三个页仍有 4 处提示或布局上的小毛刺，统一在此收尾。证据与判定见 [docs/issues/ui-0.6.14.md](./docs/issues/ui-0.6.14.md)。
+
+### 变更
+
+- **代理管理 · 「状态」列定宽（UI-1）**。`proxies-page.tsx` 引入 `STATUS_TAG_STYLE`（`minWidth: 88`、`inline-flex` + 居中），四种状态标签（`探测中` / `可用` / `不可用` / `未探测`）挂同一份样式。antd `<Table>` 在 auto layout 下原本按单元格内容重算列宽——`探测中` (3 字) → `可用` (2 字) 切换时整表重排，把右侧固定列首按钮挤到文字截断（`探测中…` 只露前半截）。定宽后四种状态同宽，列宽不再随状态跳变。宽度按最长状态「不可用」+ 图标定 88px。
+- **代理管理 · 新建代理合并双 toast（UI-2）**。`probeOne` 增加 `opts.silent` 选项，新建代理提交路径改用 `silent: true`，由调用方根据探测结果播报一条合并 toast：可用 → `已创建代理 Bigops53，可用 · 延迟 0.9 ms`，不可用 → `已创建代理 Bigops53，但探测失败：<原因>`（必须明确「已创建」—— 代理已落库，不让用户误以为失败去重填）。逐行「探测」按钮仍走原路径，行为不变。
+- **设置 · 测试连接 / 刷新清单走单一 message channel（UI-3）**。`settings-page.tsx` 的 `handleProbe` / `handleRefresh` 改为**只**走 `message.success / error`，不再写 `notice` state、也不再渲染顶部 `<Alert>`。旧行为：刷新清单成功时**同时**弹 Alert 与 toast，两种提示载体同屏并存。0.6.14 划清的边界「页面级 `<Alert>` 仅保留 load failure / vault 不可用」不变，本条只处理**操作反馈**。
+- **镜像热度 · Top 榜单只显示 Top 10（UI-5）**。`stats-page.tsx` 新增常量 `TOP_LIMIT = 10`，`Table.dataSource` 改为 `topItems.slice(0, TOP_LIMIT)`，关掉分页器（不存在「第二页」，留着分页 UI 反而误导）。`max-height: 460px` 的 bounded 容器原本在 15 项时出第二条竖向滚动条（页面外层还有一条），10 项 ~360px 全部放得下，不再触发内层滚动。
+
+### 不修项（已登记，单独议题）
+
+- **UI-4 同步历史缺逐 tag 明细** —— 已源码确认：`sync_runs` 表只存 `repos_total / repos_synced / repos_failed` 三个计数器，逐 tag 错误只进日志（`engine.go:381-382`），需要新增 `sync_run_items` 表 + 改造写入路径，属 schema 变更。详见 [docs/issues/ui-0.6.14.md#ui-4](./docs/issues/ui-0.6.14.md)。
+- **UI-6a 按 runtime 复制命令** —— 新增能力（中版本口径），需人拍板。
+- **UI-6b 页面直接导出 tar** —— 新增能力 + 架构议题（cairn 后端流式生成 vs 退到「复制 `docker save` 命令」），需人拍板。
+
+### 兼容性
+
+- 严格兼容：四项都是 UI 表现层微调，无后端 / API / 数据格式变更。
+- 「操作反馈」从 `<Alert>` 改 message toast：成功路径不再在设置页顶部留绿色横条，0.6.14 用户须知已说明「同一种反馈可能并存短暂」—— 本条进一步把它合并成一条，行为更收敛。
+
+### 用户须知
+
+- 代理列表首列「状态」标签从此四种状态同宽；不再有「按钮被压到截断」现象。
+- 新建代理后看到的就是**一条** toast，内容是「创建 + 探测结果」的合并结果。
+- 设置页点「测试连接」/「刷新清单」后只弹一条 toast，顶部不再出现横条。
+- 镜像热度 Top 榜单从此只显示前 10 名；下方 KPI 卡片「有活动的仓库数」继续显示真实总数（可能 > 10）。
+
+---
+
 ## [0.6.14] - 2026-10-01
 
 本轮是 UI 一致性收尾:把「测试连接」类的弹窗内嵌结果从 `<Alert>` 渲染载体换成 message toast,与「探测 N 个代理」等其他动作共用同一条 message channel。

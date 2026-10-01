@@ -237,16 +237,31 @@ export default function SettingsPage({
   };
 
 
+  /**
+   * v0.6.15 (UI-3): 「测试连接」与「刷新清单」两条用户操作的反馈统一走
+   * message toast,与 0.6.14 之后建立的原则保持一致。
+   *
+   * 旧行为:
+   *   - handleProbe:成功只 push 顶部 `<Alert>`(绿色 success 级),不弹 toast
+   *   - handleRefresh:成功**同时** push Alert + 右上 toast,两条反馈同屏并存
+   * 0.6.14 已确立「弹窗内嵌 Alert 改成 message toast」,但本页是页面级按钮,
+   * 旧 Alert 没改,导致同一页同时出现两种提示载体。
+   *
+   * 新行为:两种操作的成功 / 失败都走 message channel,顶部不再留 `<Alert>`
+   * 反馈条。0.6.14 的边界划分(「页面级 Alert 保留 load failure / vault 不可用」)
+   * 不变 —— 那是页面状态,本条只处理**操作反馈**。
+   */
   const handleProbe = async () => {
     setProbing(true);
-    setNotice(null);
     try {
       const result = await probeRegistry();
-      setNotice(
-        result.success
-          ? { ...result, message: `连接成功（API ${result.data?.apiVersion ?? 'registry/2.0'}）` }
-          : result
-      );
+      if (result.success && result.data) {
+        message.success(
+          `连接成功（API ${result.data.apiVersion ?? 'registry/2.0'}）`,
+        );
+      } else {
+        message.error(result.message ?? '连接失败');
+      }
     } finally {
       setProbing(false);
     }
@@ -254,13 +269,13 @@ export default function SettingsPage({
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    setNotice(null);
     try {
       const result = await fetchInventory();
-      setNotice(result);
       if (result.success && result.data) {
         onInventoryChange(result.data);
         message.success(`清单刷新完成，用时 ${result.data.durationMs} ms`);
+      } else {
+        message.error(result.message ?? '清单刷新失败');
       }
     } finally {
       setRefreshing(false);

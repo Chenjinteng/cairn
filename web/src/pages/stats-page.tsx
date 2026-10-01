@@ -88,6 +88,18 @@ const DEFAULT_WINDOW: StatsWindow = 30;
  */
 const HEATMAP_DAYS = 365;
 
+/**
+ * v0.6.15 (UI-5): Top 榜单硬上限 10 条。
+ *
+ * 用户诉求「只要 Top 10 就行,太长会出双滚动条」,本质上是嵌套滚动条
+ * 可读性问题(`.table-scroll--bounded` max-height 460px + 15 条目时
+ * 内层出第二条竖向滚动条)。Top 10 大致 ~320px + 表头 ≈ 360px,
+ * 落在 bounded 容器内,不再触发内层滚动。
+ *
+ * 服务端目前不限条数,客户端切片是双保险。
+ */
+const TOP_LIMIT = 10;
+
 const BY_OPTIONS: { label: string; value: StatsTopBy }[] = [
   { label: '按仓库', value: 'repository' },
   { label: '按 tag', value: 'tag' },
@@ -701,15 +713,23 @@ export default function StatsPage({
                 rowKey={(record) => `${record.repository}\u0000${record.tag ?? ''}`}
                 size="middle"
                 columns={topColumns}
-                dataSource={topItems}
+                dataSource={topItems.slice(0, TOP_LIMIT)}
                 scroll={{ x: 800 }}
                 sticky={{ getContainer: () => topWrapRef.current ?? window }}
-              pagination={{
-                size: 'small',
-                showSizeChanger: false,
-                defaultPageSize: 20,
-                showTotal: (total) => `共 ${total} 项`,
-              }}
+                /*
+                 * v0.6.15 (UI-5): 榜单只显示 Top 10。两条原因：
+                 *   1. 用户诉求 —— Top 10 足够看清热点，再多也是 1~2 次活动,
+                 *      看不出相对热度。
+                 *   2. `.table-scroll--bounded`（max-height 460px）下,15 项时表格
+                 *      内部出第二条竖向滚动条（页面外层还有一条）,嵌套滚动条
+                 *      操作别扭 —— Top 10 全部放得下,不再触发内层滚动。
+                 * 服务端依旧按 by 分组返回前若干条(目前接口不限),
+                 * 这里客户端切片 .slice(0, TOP_LIMIT) 是双保险:就算后端某天调大
+                 * 上限也不会突破本页"只看 Top 10"的约定。
+                 * 关闭分页器 —— Top 10 是硬上限,不存在「分页到第二页」,留着
+                 * 分页 UI 反而误导。
+                 */
+                pagination={false}
                 locale={{ emptyText: <Empty description="该时间窗内没有可排行的数据" /> }}
               />
             )}
