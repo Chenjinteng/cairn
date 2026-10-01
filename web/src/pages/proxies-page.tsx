@@ -835,11 +835,15 @@ export default function ProxiesPage({ config, sidebarFilter, onPublishGroups }: 
             />
           ) : null}
 
-          <div className="panel">
+          <div className="panel" style={{ position: 'relative', minHeight: 200 }}>
             {/*
-             * v0.6.22: 改成同时渲染 spinner + Table。`loading && proxies.length === 0`
-             * 才需要 spinner(后续轮询走 antd Table 自带半透层)。
-             * Table hidden 控制显示,PageLoading visible 控制淡出。
+             * v0.6.23: PageLoading 改成 position: absolute 覆盖在 panel 内,
+             * 不再占 flow 高度(解决 0.6.22 「拉址感」)。Table hidden=true
+             * 时 panel 内空,spinner 覆盖整个 panel 200px 区域;Table 露脸后
+             * spinner 在 Table **上面**淡出。
+             *
+             * `loading && proxies.length === 0` 才需要 spinner(后续轮询
+             * 走 antd Table 自带半透层)。
              */}
             <div hidden={loading && proxies.length === 0}>
             <Table<ProxyEntry>

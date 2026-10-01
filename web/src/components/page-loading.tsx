@@ -3,12 +3,9 @@
  *
  * v0.6.22: 改成"被外部控制 + 内部平滑淡出"。
  *
- * 用户反馈 v0.6.21 的两个问题:
- *   1. 转圈太快,看着「一闪一闪的」—— 加慢 animation-duration 到 2s(默认 1s)。
- *   2. 「数据回来 → spinner 立刻消失 → 真表格出现」太突兀,希望「等页面元素
- *      都渲染好后再淡出 spinner」。
+ * v0.6.23: 改成"绝对定位覆盖在内容之上",而不是放在 flow 里。
  *
- * 第 2 条的实现思路:
+ * v0.6.22 的实现 (现在 controlled) 会:
  *   - 不再让调用方用 ternary `{loading ? <PageLoading /> : <Table />}` —
  *     那样 spinner 元素会被 React 立即卸载,CSS transition 没用。
  *   - 改成受控: `<PageLoading visible={loading} />` + `<Table hidden={loading} />`
@@ -16,30 +13,36 @@
  *       a. Table 的 `hidden` 解除,立刻渲染(React 同步提交,首帧就在 DOM 里)
  *       b. PageLoading 走内部状态机:再展示 minDuration(默认 250ms) →
  *          opacity 1→0 淡出 fadeDuration(默认 350ms) → 卸载
- *     用户看到的就是:「spinner → spinner 半透明(底下能瞄到表格) → 表格」
- *     三段渐变,而不是硬切。
  *
- *   - 为什么要 minDuration?  答: 接口 < 200ms 回来时,「spinner 闪一下消失」
- *     比「持续展示 250ms+ 再淡出」更刺眼。250ms 是参考值,跟 antd Skeleton
- *     默认 200ms 接近,但留 50ms 余量。
+ * v0.6.22 的 bug(用户反馈):
+ *   - 「spinner 跟表格是同一层」—— 等等,我把 PageLoading 写在 Table 后面,
+ *     在 normal flow 里 PageLoading 应该堆在 Table **下面**,不重叠。Table
+ *     hidden 时 PageLoading 占位 200px 高,Table 露脸时 PageLoading 又
+ *     占 200px 高度 —— 整页内容区在切换瞬间被「推」了一下,就是用户说的
+ *     「拉址感」(页面被拽了一下)。
+ *   - 真正想要的语义是:**spinner 是覆盖在表格上面的一层**,而不是 flow 里
+ *     的一行。Table 在底层正常渲染,spinner 浮在上面,淡出时不挤占空间。
  *
- * 设计要点:
- *   - 颜色自动跟 ConfigProvider 的 colorPrimary 对齐(默认 teal)
- *   - 居中布局,默认 200px 高 —— 调用方可以传 height
- *   - 不再要 title / description / rows / columns 等骨架参数 —— 真不假装表格了
- *   - 销毁时机严格靠 fadeDuration,不会提前(避免淡出过程中又被 visible=true 触发闪)
+ * v0.6.23 的实现:
+ *   - PageLoading 改成 `position: absolute; inset: 0`,需要父容器是
+ *     `position: relative`(6 个页面已经把容器包好,详见各页注释)。
+ *   - 加 `background: var(--color-bg-container, #fff)`,否则透下去能看到
+ *     表格数据 → spinner 像「浮在数据上」,跟设计意图不符。
+ *   - 保留 v0.6.22 的状态机(minDuration + fadeDuration 淡出),
+ *     现在 fade 时 spinner 在 Table **上面**淡出 → 用户看到「spinner
+ *     半透明 → 表格透出来」,而不是「spinner 拉走 → 表格弹进」。
+ *   - 保留 v0.6.22 的 [role=status][aria-live=polite] 让 app.css 的
+ *     慢速转圈 CSS 还能命中(2s/圈)。
  */
 
 import { Spin } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 
 export interface PageLoadingProps {
-  /** 调用方告知 spinner 是否需要展示。配合 `<Table hidden={!visible} />` 使用。 */
+  /** 调用方告知 spinner 是否需要展示。 */
   visible: boolean;
   /** 加载文案;默认「加载中…」 */
   tip?: string;
-  /** 占位高度(像素);默认 200。页面内容区更高时设大点,免得 spinner 缩在角落。 */
-  height?: number;
   /**
    * 最短展示时间(毫秒)。`visible` 从 true 变 false 时,至少再展示这么久才开始淡出。
    * 默认 250ms。设 0 = 接口一回来立刻开始淡出。
@@ -52,37 +55,29 @@ export interface PageLoadingProps {
 export default function PageLoading({
   visible,
   tip = '加载中…',
-  height = 200,
   minDuration = 250,
   fadeDuration = 350,
 }: PageLoadingProps) {
   /**
    * 状态机:
-   *   shown=true,  hiding=false  → 正常展示(opacity 1)
+   *   shown=true,  hiding=false  → 正常展示(opacity 1,覆盖在内容之上)
    *   shown=true,  hiding=true   → 淡出中(opacity 1→0,持续 fadeDuration ms)
    *   shown=false                → 已卸载(返回 null)
-   *
-   * 转移:
-   *   visible=false → 等 minDuration → hiding=true → 等 fadeDuration → shown=false
-   *   visible=true  → 取消所有定时器,shown=true, hiding=false
    */
   const [shown, setShown] = useState<boolean>(visible);
   const [hiding, setHiding] = useState<boolean>(false);
   const timersRef = useRef<number[]>([]);
 
   useEffect(() => {
-    // 先清掉上一次的(visible 反复翻转时避免旧定时器把 shown 提前关掉)
     timersRef.current.forEach((t) => window.clearTimeout(t));
     timersRef.current = [];
 
     if (visible) {
-      // 调用方要求展示 → 立刻回到「正常展示」状态
       setShown(true);
       setHiding(false);
       return;
     }
 
-    // visible === false: 延迟 minDuration → 开始淡出 → 再 fadeDuration 后卸载
     const minTimer = window.setTimeout(() => {
       setHiding(true);
       const fadeTimer = window.setTimeout(() => {
@@ -104,19 +99,32 @@ export default function PageLoading({
     <div
       role="status"
       aria-live="polite"
+      /*
+       * 关键:position: absolute + inset: 0 把自身覆盖到父容器(content box)上,
+       * 不参与 flow —— 这就是用户要的「覆盖在表格上面一层」的语义。
+       *
+       * 父容器必须 position: relative;否则会以视口为定位基准,跑到屏幕中央
+       * 去(各页代码里都加了,见 *-page.tsx 的注释)。
+       *
+       * background 用主背景色,挡住下层 Table —— 否则 spinner 浮在数据
+       * 上方,看着像「数据正在加载」,跟实际语义(数据还没回来)冲突。
+       * 淡出到 opacity 0 期间会自然露出来,过渡顺。
+       */
       style={{
+        position: 'absolute',
+        inset: 0,
         display: 'flex',
         justifyContent: 'center',
         alignItems: 'center',
-        minHeight: height,
         flexDirection: 'column',
         gap: 12,
         color: 'var(--color-text-tertiary, #999)',
         fontSize: 13,
+        background: 'var(--color-bg-container, #fff)',
         opacity: hiding ? 0 : 1,
         transition: hiding ? `opacity ${fadeDuration}ms ease` : 'none',
-        // 淡出期间不再阻挡下面的 Table,让用户提前看到真表格「露脸」过渡
         pointerEvents: hiding ? 'none' : 'auto',
+        zIndex: 1,
       }}
     >
       <Spin size="large" />

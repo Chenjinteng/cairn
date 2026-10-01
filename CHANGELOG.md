@@ -6,6 +6,47 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.6.23] - 2026-10-01
+
+本轮是第七轮 UAT 反馈 —— v0.6.22 的「拉址感」和同步历史的两大问题：
+
+1. **PageLoading 跟表格是同一层**：用户原以为是覆盖在表格上面的一层，结果是 flow 里的兄弟元素，加载前后表格被「拉址」（被推开/拉回）。
+2. **同步历史展开时很突兀**：用户希望像「过场动画」一样自然衔接。
+4. **同步历史不能实时更新**：展开 task 后，正在跑的 sync 完成时新 run 不显示。
+
+### 变更
+
+- **PageLoading 改成 position: absolute 覆盖层**。`web/src/components/page-loading.tsx`：
+  - 移除 `height` prop（不再需要 flow 高度），改成 `position: absolute; inset: 0`，覆盖在父容器的内容盒之上。
+  - 加 `background: var(--color-bg-container, #fff)` 挡住下层 Table —— 没有 background 的话，spinner 浮在数据上方像「正在更新」而非「正在加载」。
+  - 加 `zIndex: 1` 保证盖在 Table 上面。
+  - 保留 v0.6.22 的状态机（minDuration=250ms + fadeDuration=350ms 淡出），现在 fade 时 spinner 在 Table **上面**淡出 → 用户看到「spinner → spinner 半透明（底下表格露脸）→ 表格」三段过渡，不是硬切也不是被推开。
+- **6 个页面 Table+PageLoading 包 position: relative 容器**。`web/src/pages/{images,pull,proxies,credentials,stats,sync}-page.tsx`：
+  - 每个 Table site 外层加 `<div style={{ position: 'relative', minHeight: 200 }}>`（images-page 和 stats Top 10 复用现有 `.table-scroll` 加 `position: relative`，已有 min-height: 240px）。
+  - PageLoading `inset: 0` 填满这个容器，不再占 flow 高度 → 表格加载前后不再被「拉址」。
+- **同步历史展开过场动画**。`web/src/app.css` 新增 `@keyframes expanded-row-fade-in`（opacity 0→1 + translateY -4px → 0，250ms ease-out），`expanded-row-anim` 类挂到 Task Table 和 Run Table 的 `expandedRowRender` 输出上。
+  - Antd Table expandable 行的高度跳变没法直接 transition（高度由内容决定），但内容「落地」是平滑的 —— 「过场」感来自内容淡入，不是行高动画。
+  - `prefers-reduced-motion` 下关闭，跟 `.page` 类一致。
+- **同步历史实时刷新**。`web/src/pages/sync-page.tsx`：
+  - `loadTaskRuns(taskId, opts?: { force?: boolean })` —— force 模式绕过 `loaded` 短路，给轮询用。
+  - 新增 useEffect：当前 `expandedTaskIds` 里凡 `lastRunStatus === 'running'` 的 task，每 3s 调一次 `loadTaskRuns(taskId, { force: true })`。
+  - task 不再是 running 或用户收起 task 时，interval 自动 cleanup。
+  - 跟父页面对 running task 的 3s 轮询对齐，肉眼可接受的延迟。
+
+### 兼容性
+
+- 严格兼容：纯前端展示层变更，**无后端 / API / 数据库变更**。
+- PageLoading 移除了 `height` prop（原来 6 个调用方传的 height 值），但 height 本来就是「不被使用了」的 prop，所有调用方已清理。
+- 「`lastRunStatus === 'running'`」字段在 v0.6.11 已经存在，前端一直用来显示「正在同步」Tag，本轮复用为轮询条件。
+
+### 用户须知
+
+- spinner 不再跟表格「上下挤」：加载前后表格位置完全不动，spinner 浮在上面淡出。
+- 同步历史展开：Task 行 + 点开 Run 行都有 250ms 淡入动画，看着像「过场」不是「硬切」。
+- 展开正在运行的 task 的历史：每 3s 自动刷新，新完成的 run 会出现；task 跑完或收起 task 后自动停止轮询。
+
+---
+
 ## [0.6.22] - 2026-10-01
 
 本轮是第六轮 UAT 反馈 —— 用户实测 v0.6.21 的 spinner「还是秒突兀」：

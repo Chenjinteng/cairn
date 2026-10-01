@@ -712,11 +712,14 @@ export default function StatsPage({
            * 如果后续 Top 数量上调,这条注释就是「为什么 max-height 不能加回来」
            * 的备忘。
            */}
-          <div className="table-scroll" ref={topWrapRef}>
+          <div className="table-scroll" ref={topWrapRef} style={{ position: 'relative' }}>
             {/*
-             * v0.6.22: 改成同时渲染 spinner + Table。`loading && topItems.length === 0`
-             * 才需要居中 spinner —— 切时间窗时已经显示旧数据,用 antd Table
-             * 自带半透层即可。
+             * v0.6.23: PageLoading 改成 position: absolute 覆盖在 table-scroll 内
+             * (解决 0.6.22 「拉址感」)。table-scroll 已经有 min-height: 240px
+             * (来自 .page--fill .table-scroll),所以 spinner 区域足够大。
+             *
+             * `loading && topItems.length === 0` 才需要居中 spinner —— 切时间窗
+             * 时已经显示旧数据,用 antd Table 自带半透层即可。
              */}
             <div hidden={loading && topItems.length === 0}>
             <Table<StatsTopItem>
@@ -805,10 +808,14 @@ export default function StatsPage({
           </Space>
         </div>
         {/*
-           * v0.6.22: 同时渲染,Table hidden + PageLoading visible 协调。
+           * v0.6.23: PageLoading 改成 position: absolute 覆盖在 panel 内
+           * (解决 0.6.22 「拉址感」)。外层 wrap div 加 position: relative +
+           * minHeight: 240px 给 spinner 区域。
+           *
            * `loading && clients.length === 0` 是首屏场景;后续轮询走
            * antd Table 自带半透层。
            */}
+          <div style={{ position: 'relative', minHeight: 240 }}>
           <div hidden={loading && clients.length === 0}>
           <Table<StatsClientItem>
             rowKey="useragent"
@@ -823,6 +830,7 @@ export default function StatsPage({
             }}
             locale={{ emptyText: <Empty description="这个时间窗内还没收到任何事件" /> }}
           />
+          </div>
           </div>
           <PageLoading
             visible={loading && clients.length === 0}
@@ -896,9 +904,14 @@ export default function StatsPage({
                   （它落盘，重启不丢）。
                 </div>
                 {/*
-                 * v0.6.22: 同时渲染。`loading && events.length === 0` 才需要
-                 * 居中 spinner(后续轮询走 antd Table 自带半透层)。
+                 * v0.6.23: PageLoading 改成 position: absolute 覆盖在 Collapse
+                 * panel 内(解决 0.6.22 「拉址感」)。外层 wrap div 加
+                 * position: relative + minHeight: 200px 给 spinner 区域。
+                 *
+                 * `loading && events.length === 0` 才需要居中 spinner(后续
+                 * 轮询走 antd Table 自带半透层)。
                  */}
+                <div style={{ position: 'relative', minHeight: 200 }}>
                 <div hidden={loading && events.length === 0}>
                 <Table<StatsEventItem>
                   rowKey={(record) => `${record.at}-${record.id}`}
@@ -915,6 +928,7 @@ export default function StatsPage({
                   }}
                   locale={{ emptyText: <Empty description="还没收到任何事件" /> }}
                 />
+                </div>
                 </div>
                 <PageLoading
                   visible={loading && events.length === 0}

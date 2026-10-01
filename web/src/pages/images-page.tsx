@@ -502,7 +502,7 @@ export default function ImagesPage({
 
       <div className="panel">
         {/* 表格自己滚（表头粘住），页面不滚 —— 见 app.css 的 .page--fill。 */}
-        <div className="table-scroll" ref={tableWrapRef}>
+        <div className="table-scroll" ref={tableWrapRef} style={{ position: 'relative' }}>
           {/*
            * v0.6.22: 改成同时渲染 spinner + 表格(spinner 用 `visible` 控制,
            * 表格用 `hidden` 隐藏)。`visible` 从 true → false 时 spinner 不会

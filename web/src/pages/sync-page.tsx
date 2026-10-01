@@ -486,9 +486,17 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
    * 上限 50 条 run —— 跟原 Modal 行为一致。后端默认 limit 50,够大多数场景
    * 用(典型一个 task 一天跑几次,一个月 ~60 条)。要看更早历史再加 limit,先不做。
    */
-  const loadTaskRuns = async (taskId: number) => {
+  const loadTaskRuns = async (taskId: number, opts?: { force?: boolean }) => {
     const existing = runsByTaskId[taskId];
-    if (existing?.loaded || existing?.loading) return;
+    /*
+     * v0.6.23: 加 force 参数 —— 给「实时刷新」轮询用,绕过 already-loaded
+     * 短路。原短路是为了避免用户狂点 + 触发重复 fetch;轮询是有意重复,
+     * 想看到正在跑的 sync 任务的新 run 列表。
+     *
+     * 仍然拦下「正在加载中」(loading)避免并发覆盖;force 只绕过 loaded 拦。
+     */
+    if (existing?.loading) return;
+    if (!opts?.force && existing?.loaded) return;
     setRunsByTaskId((prev) => ({
       ...prev,
       [taskId]: { runs: prev[taskId]?.runs ?? [], loading: true, loaded: false },
@@ -572,6 +580,41 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
       }));
     }
   };
+
+  /**
+   * v0.6.23: 实时刷新正在跑的 task 的 runs 列表。
+   *
+   * 用户反馈:展开 task 看历史时,如果 task 正在跑(running),看到的 runs
+   * 是旧数据(展开时 fetch 一次后不更新),得手动刷新页面或重新折叠/展开
+   * 才能看到新完成的 run。
+   *
+   * 做法:对当前已展开的 task,凡是 lastRunStatus === 'running' 的,
+   * 每 3s 调一次 loadTaskRuns(taskId, { force: true })。task 不再是
+   * running(变成 success / failed)或用户收起 task 时,自动停止轮询。
+   *
+   * 为什么 3s?跟父页面对 running task 的轮询周期一致(见 refresh() 上面的
+   * useEffect),既不过频打接口,也能在 sync run 完成的 ~3s 内反映到 UI。
+   * sync 一次跑几十秒到几分钟,3s 延迟肉眼可接受。
+   *
+   * useEffect deps 用 expandedTaskIds + tasks:
+   *   - 任一 task 展开状态变 → 重新计算待轮询集合
+   *   - 任一 task 的 running 状态变 → 重新计算
+   * 没变的话不会重跑 useEffect,interval 不被清掉。
+   */
+  useEffect(() => {
+    const runningExpanded: SyncTask[] = [];
+    for (const id of expandedTaskIds) {
+      const t = tasks.find((x) => x.id === id);
+      if (t && t.lastRunStatus === 'running') runningExpanded.push(t);
+    }
+    if (runningExpanded.length === 0) return;
+    const interval = window.setInterval(() => {
+      for (const t of runningExpanded) {
+        void loadTaskRuns(t.id, { force: true });
+      }
+    }, 3000);
+    return () => window.clearInterval(interval);
+  }, [expandedTaskIds, tasks]);
 
   // ── 定时（v0.6.11）────────────────────────────────────────────────
 
@@ -1061,6 +1104,7 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
           </Button>
         </Empty>
       ) : (
+        <div style={{ position: 'relative', minHeight: 200 }}>
         <div hidden={loading}>
         <Table<SyncTask>
           rowKey="id"
@@ -1094,19 +1138,24 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
             },
             expandedRowRender: (task) => {
               const runsState = runsByTaskId[task.id];
-              if (!runsState) return <PageLoading visible tip="正在读取运行历史…" height={120} />;
+              if (!runsState) return <div className="expanded-row-anim"><PageLoading visible tip="正在读取运行历史…" /></div>;
               if (runsState.loading && runsState.runs.length === 0) {
-                return <PageLoading visible tip="正在读取运行历史…" height={120} />;
+                return <div className="expanded-row-anim"><PageLoading visible tip="正在读取运行历史…" /></div>;
               }
               if (runsState.runs.length === 0) {
-                return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有运行记录" />;
+                return <div className="expanded-row-anim"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有运行记录" /></div>;
               }
               return (
                 /*
+                 * v0.6.23: 外层 div 加 .expanded-row-anim —— 让 Task 展开区(Run
+                 * Table + 内容)在挂载时走 250ms opacity+translateY(-4px) → 0
+                 * ease-out 动画,跟 PageLoading 淡出节奏对齐,过场更顺。
+                 *
                  * 内层 Run Table 也是 expandable,展开单条 run 触发 loadRunItems。
                  * taskId 从外层闭包传入 —— renderExpandedItems 需要它来调
                  * /api/sync/{taskId}/runs/{runId}/items。
                  */
+                <div className="expanded-row-anim">
                 <Table<SyncRun>
                   rowKey="id"
                   columns={runColumns}
@@ -1127,13 +1176,19 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
                         setExpandedRunIds((prev) => prev.filter((id) => id !== run.id));
                       }
                     },
-                    expandedRowRender: (run) => renderExpandedItems(task.id, run),
+                    expandedRowRender: (run) => (
+                      <div className="expanded-row-anim">
+                        {renderExpandedItems(task.id, run)}
+                      </div>
+                    ),
                   }}
                 />
+                </div>
               );
             },
           }}
         />
+        </div>
         </div>
       )}
       <PageLoading visible={loading} tip="正在读取同步任务…" />
@@ -1630,6 +1685,7 @@ function ScheduleTab({ schedules, loading, onCreate, onUpdate, onDelete }: Sched
       {schedules.length === 0 && !loading ? (
         <Empty description="还没有定时规则，点下方「新建」添加" />
       ) : (
+        <div style={{ position: 'relative', minHeight: 120 }}>
         <div hidden={loading}>
         <Table<SyncSchedule>
           rowKey="id"
@@ -1639,8 +1695,9 @@ function ScheduleTab({ schedules, loading, onCreate, onUpdate, onDelete }: Sched
           size="small"
         />
         </div>
+        </div>
       )}
-      <PageLoading visible={loading} tip="正在读取定时规则…" height={120} />
+      <PageLoading visible={loading} tip="正在读取定时规则…" />
 
       <Divider style={{ margin: '16px 0' }} />
 

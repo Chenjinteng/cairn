@@ -1056,15 +1056,18 @@ export default function PullPage({ config, sidebarFilter, onPublishGroups }: Pro
         />
       ) : null}
 
-      <div className="panel">
+      <div className="panel" style={{ position: 'relative', minHeight: 200 }}>
         {/*
-         * v0.6.22: 改成同时渲染 spinner + Table。`loading && jobs.length === 0`
-         * (首屏场景)才需要 spinner —— 后续轮询场景 jobs.length > 0 时不闪
-         * (antd Table 自带半透层 spinner,见原 0.6.21 注释)。
+         * v0.6.23: PageLoading 改成 position: absolute 覆盖在 panel 内,不再
+         * 占 flow 高度 —— 解决 0.6.22 「拉址感」(spinner 在 flow 里跟 Table
+         * 上下挤)。Table hidden=true 时 panel 内空,spinner 覆盖整个 panel
+         * 200px 区域;Table 露脸后 spinner 在 Table **上面**淡出。
          *
-         * Table 用 hidden 控制:首屏 loading 时隐身,spinner 占位;loading
-         * 翻 false 时 PageLoading 内部状态机走 250ms 停留 + 350ms 淡出,
-         * Table 同步露脸,过渡不是硬切。
+         * 同时保持 0.6.22 的"等元素渲染完再淡出"语义:visible=false 后内部
+         * 状态机走 minDuration=250ms + fadeDuration=350ms。
+         *
+         * `loading && jobs.length === 0` (首屏场景)才需要居中 spinner ——
+         * 后续轮询 jobs.length > 0 时不闪(antd Table 自带半透层)。
          */}
         <div hidden={loading && jobs.length === 0}>
         <Table<PullJob>

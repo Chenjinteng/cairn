@@ -296,6 +296,35 @@
 }
 
 /*
+ * v0.6.23: 同步历史「过场动画」—— 用户反馈 v0.6.20 Task 行 / Run 行展开
+ * 「很突兀,不能实时更新,想要更丝滑的过场动画」。
+ *
+ * Antd Table expandable 行的展开动画是「直接出现 + 高度跳变」,没法
+ * 直接挂 transition(行高由内容决定,不是 CSS 已知值)。本组件层级的
+ * 优雅做法:用 keyframe 动画让 expandedRowRender 输出 opacity 0→1 +
+ * 微微 translateY(-4px) → 0,看起来是「淡入下滑」,不是硬切。
+ *
+ * 高度跳变交给 antd 自己处理;我们只负责「内容落地」是平滑的。
+ *
+ * 选择 4px 位移而不是更大:展开区从上方滑入 4px 看起来「轻」,太大
+ * 会跟实际点击位置(行号左 +)距离产生违和感。
+ *
+ * 命中目标:Task Table 的 expandedRowRender + Run Table 的 expandedRowRender,
+ * 通过 .expanded-row-anim 类名手动挂上(同步页两个 expandable 都加)。
+ * 250ms ease-out 跟 PageLoading 的淡出时长对齐,整站视觉节奏一致。
+ */
+@keyframes expanded-row-fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.expanded-row-anim {
+  animation: expanded-row-fade-in 250ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .expanded-row-anim { animation: none; }
+}
+
+/*
  * v0.6.22: 全局放慢 PageLoading 的 spinner 旋转 —— 默认 1s/圈看着太急,
  * 用户反馈像「一闪一闪」。改 2s/圈,跟"加载中"这种「等接口」的语义更合。
  *
