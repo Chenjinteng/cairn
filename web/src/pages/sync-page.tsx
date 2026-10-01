@@ -53,7 +53,6 @@ import {
   DeleteOutlined,
   EditOutlined,
   ExclamationCircleOutlined,
-  HistoryOutlined,
   PauseCircleOutlined,
   PlayCircleOutlined,
   PlusOutlined,
@@ -187,19 +186,31 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
   const [form] = Form.useForm<FormValues>();
   const [submitting, setSubmitting] = useState(false);
 
-  /** 历史 Modal：按 task.id 懒加载 runs。 */
-  const [historyTask, setHistoryTask] = useState<SyncTask | null>(null);
-  const [historyRuns, setHistoryRuns] = useState<SyncRun[]>([]);
-  const [historyLoading, setHistoryLoading] = useState(false);
-
   /**
-   * v0.6.16: 历史 Modal 的「按 (repo, tag) 展开」状态。
+   * v0.6.20: 历史展示从「点按钮弹 Modal」改为「Task 表行直接展开」。
    *
-   * - expandedRunIds: 当前展开的 run.id 集合,跟 antd Table expandable.expandedRowKeys 直接绑
-   * - itemsByRunId: 缓存已加载过的明细,key 是 run.id,value 是当前已加载的 (items + total) + 当前页 (limit/offset)
-   *   + loading 标志。**缓存到 Modal 关闭**: 关闭时清掉,避免下次打开看到上次的残留(配合 Modal 的 destroyOnClose)。
-   * - 每页 50 (与服务端 default 同步);用户翻页时把新一页 append 到 items 末尾。
+   * 原来两段式:点「运行历史」按钮 → Modal 弹出 → 在 Modal 内展开 run → 看到
+   * (repo, tag) 明细。用户反馈「弹出再下拉,就很突兀」——Modal 本身的存在
+   * 是冗余的(任务列表已经在做主表,历史是它的二级视图,不应该脱离主表语境)。
+   *
+   * 现在两段式:点 Task 行的 + → 内嵌 Run 表展开 → 点 Run 行的 + → (repo, tag)
+   * 明细。所有交互都在主页面里,跟 UI 主体语境一致。
+   *
+   * state 拆分:
+   *   - expandedTaskIds: 展开的 task.id 集合(对应 Task Table 的 expandable)
+   *   - runsByTaskId:    缓存每个 task 的 runs 列表(展开 task 时按需加载)
+   *   - expandedRunIds:  展开的 run.id 集合(对应每个 task 展开区里的 Run Table)
+   *   - itemsByRunId:    缓存每个 run 的 (repo, tag) 明细
+   *   - currentPageByRunId: 用户当前在哪一页。**关键修复**:0.6.18 用
+   *     `Math.floor(loadedCount / PAGE_SIZE) + ...` 算 current,最后一页不满
+   *     50 条时会算出 1(分页高亮错的根因)。现在改成显式 state。
    */
+  const [expandedTaskIds, setExpandedTaskIds] = useState<number[]>([]);
+  const [runsByTaskId, setRunsByTaskId] = useState<Record<number, {
+    runs: SyncRun[];
+    loading: boolean;
+    loaded: boolean; // 区分「没加载过」vs「加载过但是 0 条」
+  }>>({});
   const [expandedRunIds, setExpandedRunIds] = useState<number[]>([]);
   const [itemsByRunId, setItemsByRunId] = useState<Record<number, {
     items: SyncRunItem[];
@@ -208,6 +219,7 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
     offset: number;
     loading: boolean;
   }>>({});
+  const [currentPageByRunId, setCurrentPageByRunId] = useState<Record<number, number>>({});
 
   const ITEMS_PAGE_SIZE = 50;
 
@@ -462,56 +474,66 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
     }
   };
 
-  // ── 历史 ─────────────────────────────────────────────────────────
+  // ── 历史（v0.6.20 重构：Modal → Task Table 行内嵌展开） ────────────────────────
 
-  const openHistory = async (task: SyncTask) => {
-    setHistoryTask(task);
-    setHistoryRuns([]);
-    setHistoryLoading(true);
-    // v0.6.16: 每次打开重置展开态 — 否则切换 task 后展开的还是上一个 task 的 run。
-    setExpandedRunIds([]);
-    setItemsByRunId({});
-    const result = await listSyncRuns(task.id, 50);
+  /**
+   * v0.6.20: 展开 task 行时按需加载 runs。
+   *
+   * - 已加载过(runsByTaskId[taskId].loaded)直接返回,避免重复打接口
+   * - 加载中(loading)直接返回,避免重复刷 spinner
+   * - 错误:toast 失败原因,仍标记 loaded=true (否则 loading 永不清掉)
+   *
+   * 上限 50 条 run —— 跟原 Modal 行为一致。后端默认 limit 50,够大多数场景
+   * 用(典型一个 task 一天跑几次,一个月 ~60 条)。要看更早历史再加 limit,先不做。
+   */
+  const loadTaskRuns = async (taskId: number) => {
+    const existing = runsByTaskId[taskId];
+    if (existing?.loaded || existing?.loading) return;
+    setRunsByTaskId((prev) => ({
+      ...prev,
+      [taskId]: { runs: prev[taskId]?.runs ?? [], loading: true, loaded: false },
+    }));
+    const result = await listSyncRuns(taskId, 50);
     if (result.success && result.data) {
-      setHistoryRuns(result.data);
+      setRunsByTaskId((prev) => ({
+        ...prev,
+        [taskId]: { runs: result.data!, loading: false, loaded: true },
+      }));
     } else {
       message.error(`加载历史失败：${result.message}`);
+      setRunsByTaskId((prev) => ({
+        ...prev,
+        [taskId]: { runs: prev[taskId]?.runs ?? [], loading: false, loaded: true },
+      }));
     }
-    setHistoryLoading(false);
-  };
-
-  const closeHistory = () => {
-    setHistoryTask(null);
-    setHistoryRuns([]);
-    setExpandedRunIds([]);
-    setItemsByRunId({});
   };
 
   /**
-   * v0.6.16: 加载某条 run 的 (repo, tag) 明细。第一页时覆盖,后续翻页时 append。
+   * v0.6.20: 加载某条 run 的 (repo, tag) 明细。每页 50,每次翻页都**替换**
+   * items(不 append) —— Pagination 不需要「加载更多」,直接「下一页/末页」即可。
    *
-   * 失败的 toast 走 message.error: 历史 Modal 内操作失败不应把 Modal 关掉,
+   * 同步写入 `currentPageByRunId[runId]`:这是 Pagination 的高亮真值来源。
+   *
+   * 0.6.18 的 `current` 用 `Math.floor(loadedCount / PAGE_SIZE) + ...` 算出来,
+   * 最后一页不满 PAGE_SIZE 条时会算出 1(把第 5 页算成第 1 页),用户反馈
+   * 「点了第 2 页还是高亮第 1 页」就是这个 bug。本轮改成显式 state 记录,
+   * 不再从 items.length 推算。
+   *
+   * - page === 1           → 从 offset 0 加载,记录 currentPage=1
+   * - page === {jumpTo:N}  → 从 offset (N-1)*PAGE_SIZE 加载,记录 currentPage=N
+   *
+   * 失败的 toast 走 message.error:展开行内操作失败不应让用户惊动扩展页,
    * 跟任务列表里失败重试一样的反馈层级。
    *
    * 注意点: 同一 run 被并发触发时 (用户狂点 / 网络抖动重发) 通过 prev guard
    * 拦掉 —— setItemsByRunId 的 updater 先检查 loading,避免竞争覆盖。
    */
-  /**
-   * v0.6.18: loadRunItems 改为支持「跳页」语义。
-   *
-   * - page === 1               → 重新从 offset 0 加载（覆盖现有缓存）
-   * - page === 'next'          → 在当前 offset 上继续加载（append）
-   * - page === {jumpTo: N}     → 从 offset (N-1)*PAGE_SIZE 加载,丢弃已加载的
-   *
-   * 0.6.18 用户反馈「翻页无效」:0.6.16 写的 Pagination onChange 是
-   *  void p 占位 —— 跳到第 3 页时按钮 highlight 变了但内容不变。本轮把
-   * 「跳页」明确化为一个 union case,UI 调过来直接 work。
-   */
   const loadRunItems = async (
     taskId: number,
     runId: number,
-    page: 1 | 'next' | { jumpTo: number } = 1,
+    page: 1 | { jumpTo: number } = 1,
   ) => {
+    const targetPage = page === 1 ? 1 : page.jumpTo;
     setItemsByRunId((prev) => {
       const existing = prev[runId];
       if (existing?.loading) return prev; // 并发拦截
@@ -527,29 +549,21 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
       };
     });
     const existing = itemsByRunId[runId];
-    let offset: number;
-    if (page === 1) offset = 0;
-    else if (page === 'next') offset = (existing?.offset ?? 0);
-    else offset = (page.jumpTo - 1) * ITEMS_PAGE_SIZE;
+    const offset = (targetPage - 1) * ITEMS_PAGE_SIZE;
     const limit = existing?.limit ?? ITEMS_PAGE_SIZE;
     const result = await listSyncRunItems(taskId, runId, limit, offset);
     if (result.success && result.data) {
-      setItemsByRunId((prev) => {
-        const old = prev[runId] ?? { items: [], total: 0, limit, offset: 0, loading: false };
-        // page=1 / jumpTo 都覆盖;只有 next 追加。
-        const merged =
-          page === 'next' ? [...old.items, ...result.data!.items] : result.data!.items;
-        return {
-          ...prev,
-          [runId]: {
-            items: merged,
-            total: result.data!.total,
-            limit: result.data!.limit,
-            offset: result.data!.offset + result.data!.items.length,
-            loading: false,
-          },
-        };
-      });
+      setCurrentPageByRunId((prev) => ({ ...prev, [runId]: targetPage }));
+      setItemsByRunId((prev) => ({
+        ...prev,
+        [runId]: {
+          items: result.data!.items,
+          total: result.data!.total,
+          limit: result.data!.limit,
+          offset: result.data!.offset + result.data!.items.length,
+          loading: false,
+        },
+      }));
     } else {
       message.error(`加载明细失败：${result.message ?? '未知错误'}`);
       setItemsByRunId((prev) => ({
@@ -748,15 +762,11 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
                 aria-label="定时"
               />
             </Tooltip>
-            <Tooltip title="运行历史">
-              <Button
-                size="small"
-                type="text"
-                icon={<HistoryOutlined />}
-                onClick={() => void openHistory(task)}
-                aria-label="历史"
-              />
-            </Tooltip>
+            {/*
+             * v0.6.20: 「运行历史」按钮删除 —— 历史现在是 Task 行直接展开,
+             * 不再需要单独按钮弹 Modal。「点击行展开」是 Table.expandable 的
+             * 默认行为(行左侧 + 按钮),跟 actions 区的图标按钮不冲突。
+             */}
             <Popconfirm
               title={`删除任务 "${task.name}"？`}
               okText="删 除"
@@ -780,9 +790,9 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
     },
   ];
 
-  // ── 历史列 ───────────────────────────────────────────────────────
+  // ── Run 列（v0.6.20:从 Modal 内列变成 Task 展开区里的内层 Run Table 列） ───
 
-  const historyColumns: ColumnsType<SyncRun> = [
+  const runColumns: ColumnsType<SyncRun> = [
     {
       title: '开始时间',
       dataIndex: 'startedAt',
@@ -937,13 +947,12 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
    *
    * 容器用浅色背景 + 左内边距让「展开区」与外层 run 表视觉区分。
    */
-  const renderExpandedItems = (run: SyncRun) => {
+  const renderExpandedItems = (taskId: number, run: SyncRun) => {
     const state = itemsByRunId[run.id];
     const loaded = state?.items ?? [];
     const total = state?.total ?? 0;
     const loading = state?.loading ?? false;
     const loadedCount = loaded.length;
-    const hasMore = loadedCount < total;
     return (
       <div
         style={{
@@ -971,38 +980,28 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
               pagination={false}
               loading={loading && loadedCount === 0}
             />
+            {/*
+             * v0.6.20: 不再有「加载更多」按钮。0.6.16 那版 「加载更多」 +
+             * Pagination 同时存在 — 翻页就能 append,「加载更多」是冗余动作。
+             * 现在翻页 = 整页替换,简单一致。
+             *
+             * 同步的「分页高亮 bug」修复在这里:0.6.18 用 loadedCount 推算
+             * currentPage,最后一页不满 50 条时会算出 1(把第 5 页算成第 1
+             * 页)。现在 currentPage 直接读 `currentPageByRunId[run.id]`,
+             * loadRunItems 加载完成后由它写回真值。
+             */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
               <span style={{ fontSize: 12, color: '#999' }}>
-                已加载 {loadedCount} / 共 {total} 条
+                共 {total} 条 · 每页 {ITEMS_PAGE_SIZE} 条
               </span>
-              {hasMore && (
-                <Button
-                  size="small"
-                  loading={loading}
-                  onClick={() => historyTask && void loadRunItems(historyTask.id, run.id, 'next')}
-                >
-                  加载更多（剩余 {total - loadedCount} 条）
-                </Button>
-              )}
               {total > ITEMS_PAGE_SIZE && loadedCount > 0 && (
                 <Pagination
                   size="small"
-                  current={Math.floor(loadedCount / ITEMS_PAGE_SIZE) + (loadedCount % ITEMS_PAGE_SIZE === 0 ? 0 : 1)}
+                  current={currentPageByRunId[run.id] ?? 1}
                   pageSize={ITEMS_PAGE_SIZE}
                   total={total}
                   showSizeChanger={false}
-                  /*
-                   * v0.6.18: 跳页实做。0.6.16 这里写成 `void p` 占位 →
-                   * 用户反馈「翻页无效」(0.6.18 用户反馈)。
-                   *
-                   * 语义:用户点第 N 页 → 清掉当前 items,按 N 页 offset 重新加载。
-                   * 简单粗暴但正确:用户大概率不会从第 3 页跳回第 1 页再
-                   * 顺序翻页,丢一些已加载的 items 反而是 feature 不是 bug
-                   * (「跳页」本身就暗含「我不要中间的」)。
-                   */
-                  onChange={(p) => {
-                    if (historyTask) void loadRunItems(historyTask.id, run.id, { jumpTo: p });
-                  }}
+                  onChange={(p) => void loadRunItems(taskId, run.id, { jumpTo: p })}
                 />
               )}
             </div>
@@ -1061,6 +1060,71 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
           dataSource={visibleTasks}
           pagination={{ pageSize: 20, showSizeChanger: false }}
           size="middle"
+          /*
+           * v0.6.20: Task Table 加 expand 列,把"点按钮弹 Modal → 二次展开"
+           * 收口成"主屏一行直接展开",去掉原 0.6.16-0.6.19 的 historyTask/
+           历史Modal。
+           *
+           * expandedTaskIds 控制展开,onExpand 触发懒加载 runs + 把 taskId
+           * 加进 expandedTaskIds (避免重复 fetch)。
+           *
+           * 展开区渲染内层 Run Table,Run Table 自己也 expandable,展开
+           * 单条 run 时触发 loadRunItems。runColumns / renderExpandedItems
+           * 从原 Modal 复用,只把 taskId 改成从外层闭包传入。
+           */
+          expandable={{
+            expandedRowKeys: expandedTaskIds,
+            onExpand: (open, task) => {
+              if (open) {
+                setExpandedTaskIds((prev) =>
+                  prev.includes(task.id) ? prev : [...prev, task.id],
+                );
+                void loadTaskRuns(task.id);
+              } else {
+                setExpandedTaskIds((prev) => prev.filter((id) => id !== task.id));
+              }
+            },
+            expandedRowRender: (task) => {
+              const runsState = runsByTaskId[task.id];
+              if (!runsState) return <div style={{ padding: 16, color: '#999' }}>加载中…</div>;
+              if (runsState.loading && runsState.runs.length === 0) {
+                return <TableSkeleton columns={4} />;
+              }
+              if (runsState.runs.length === 0) {
+                return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有运行记录" />;
+              }
+              return (
+                /*
+                 * 内层 Run Table 也是 expandable,展开单条 run 触发 loadRunItems。
+                 * taskId 从外层闭包传入 —— renderExpandedItems 需要它来调
+                 * /api/sync/{taskId}/runs/{runId}/items。
+                 */
+                <Table<SyncRun>
+                  rowKey="id"
+                  columns={runColumns}
+                  dataSource={runsState.runs}
+                  pagination={false}
+                  size="small"
+                  expandable={{
+                    expandedRowKeys: expandedRunIds,
+                    onExpand: (open, run) => {
+                      if (open) {
+                        setExpandedRunIds((prev) =>
+                          prev.includes(run.id) ? prev : [...prev, run.id],
+                        );
+                        if (!itemsByRunId[run.id]) {
+                          void loadRunItems(task.id, run.id, 1);
+                        }
+                      } else {
+                        setExpandedRunIds((prev) => prev.filter((id) => id !== run.id));
+                      }
+                    },
+                    expandedRowRender: (run) => renderExpandedItems(task.id, run),
+                  }}
+                />
+              );
+            },
+          }}
         />
       )}
 
@@ -1317,55 +1381,17 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
         </Form>
       </Modal>
 
-      {/* 历史 Modal */}
-      <Modal
-        title={historyTask ? `历史：${historyTask.name}` : ''}
-        open={historyTask !== null}
-        onCancel={closeHistory}
-        footer={<Button onClick={closeHistory}>关 闭</Button>}
-        width={800}
-        destroyOnClose
-      >
-        {historyLoading ? (
-          <TableSkeleton columns={4} />
-        ) : historyRuns.length === 0 ? (
-          <Empty description="还没有运行记录" />
-        ) : (
-          <Table<SyncRun>
-            rowKey="id"
-            columns={historyColumns}
-            dataSource={historyRuns}
-            pagination={{ pageSize: 10, showSizeChanger: false }}
-            size="small"
-            /*
-             * v0.6.16: 每条 run 可以 + / - 展开,展开区是 (repo, tag) 明细。
-             * 展开时懒加载第一页 50 条,「加载更多」按 ITEMS_PAGE_SIZE 翻页。
-             * expandedRowKeys / onExpand 双向绑: 用户点 + 后我们触发
-             * loadRunItems 并把 runId 加进 expandedRunIds;点 - 只改
-             * expandedRunIds(明细已经加载完,缓存留到 closeHistory 才清)。
-             *
-             * 展开箭头占一列;histroyColumns 不用给这列留 width。
-             */
-            expandable={{
-              expandedRowKeys: expandedRunIds,
-              onExpand: (open, run) => {
-                if (open) {
-                  setExpandedRunIds((prev) =>
-                    prev.includes(run.id) ? prev : [...prev, run.id],
-                  );
-                  // 已缓存就不重拉,直接吃缓存。
-                  if (!itemsByRunId[run.id]) {
-                    void loadRunItems(historyTask!.id, run.id, 1);
-                  }
-                } else {
-                  setExpandedRunIds((prev) => prev.filter((id) => id !== run.id));
-                }
-              },
-              expandedRowRender: (run) => renderExpandedItems(run),
-            }}
-          />
-        )}
-      </Modal>
+      {/*
+       * v0.6.20: 历史 Modal 删除 —— 见 Task Table 的 expandable。
+       *
+       * 原来:任务列表点「运行历史」按钮 → 弹 Modal → 在 Modal 里再展开 run →
+       * 看到 (repo, tag) 明细。两段式(弹窗 + 下拉)用户反馈「很突兀」。
+       *
+       * 现在:Task 表行直接展开 → 内嵌 Run 表 → Run 表行再展开 → (repo, tag)
+       * 明细。所有交互在主页面,跟任务列表主体语境一致。state 也从
+       * historyTask/historyRuns/historyLoading 三个全局态替换为 runsByTaskId
+       * 按 task 缓存,支持多 task 同时展开对比。
+       */}
 
       {/* 定时 Modal (v0.6.11) */}
       <Modal

@@ -6,6 +6,41 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.6.20] - 2026-10-01
+
+本轮是第四轮 UAT 反馈 —— 用户实测 sync 历史两大问题：
+
+1. 「点运行历史按钮 → 弹 Modal → 在 Modal 里展开 run」这种「弹窗再下拉」的两段式交互「很突兀」，要求直接 Task 表行内嵌展开。
+2. items 表的 Pagination「点了第 2 页还是高亮第 1 页」—— 高亮没跟住。
+
+后端 / API / 数据库**完全不动**，仅前端 sync-page.tsx 重构。
+
+### 变更
+
+- **同步历史 · Task 表行直接展开，去 Modal（UI-11）**。`web/src/pages/sync-page.tsx`：
+  - 砍掉 `historyTask` / `historyRuns` / `historyLoading` / `openHistory` / `closeHistory` / `historyColumns` 六个旧 Modal 配套；新增 `runsByTaskId: Record<taskId, { runs; loading; loaded }>` 按 task 缓存 runs（支持多 task 同时展开对比，不互相覆盖）。
+  - 任务列表表行加 expand 控件，展开区渲染内嵌 Run Table，Run Table 行可二次展开 → (repo, tag) 明细。两段式交互变两段式 UI（任务行 → run 行 → 明细），全部在主页面。
+  - 「运行历史」图标按钮删除（expand 箭头自身就是入口，跟 actions 区图标按钮不冲突）。
+  - 「加载更多」按钮删除 —— Pagination 翻页 = 整页替换，简单一致；之前的 `append` 模式留下「翻页换内容 + 加载更多再 append」两套心智模型，没必要。
+- **同步 · items 分页高亮修复（UI-10 续）**。`web/src/pages/sync-page.tsx` 的 `loadRunItems`：
+  - 新增 `currentPageByRunId: Record<runId, number>` 显式 state；`Pagination.current` 直接读这个值（不再用 `Math.floor(loadedCount / PAGE_SIZE) + ...` 推算）。
+  - 0.6.18 用 `loadedCount` 推算 `currentPage` 的算法在「最后一页不满 PAGE_SIZE 条」时算出错的 current：比如总 51 条、第 2 页只有 1 条，`Math.floor(1/50) + (1%50===0 ? 0 : 1) = 0+1 = 1`，跳到第 2 页时高亮落回第 1 页。改成显式 state 后无此问题。
+  - `loadRunItems` 简化：drop 掉 `'next'` case（append 模式不再用），jumpTo 时清掉旧 items、按目标 offset 重拉、`currentPageByRunId[runId]` 写回新值。
+
+### 兼容性
+
+- 严格兼容：纯前端重构，后端 / API / 数据库**完全不动**。v0.6.16 的 `GET /api/sync/{id}/runs/{rid}/items` 端点签名不变。
+- 用户操作路径变化：原来「点按钮弹 Modal」 → 现在「点 + 展开」。已展开的任务行（`expandedTaskIds`）不持久化，刷新页面回到全部折叠状态（跟原 Modal 的 destroyOnClose 行为一致）。
+- 多任务同时展开对比的能力不变：原 Modal 一次只能看一个 task 的历史（打开第二个会覆盖第一个的 `historyTask`）；现在同时展开多个 task 的行不会互踢。
+
+### 用户须知
+
+- 「同步历史」按钮不再存在 —— 任务行左侧的 `+` 控件就是入口。
+- 单个 task 的 runs 上限 50 条（后端默认 limit 没改）。
+- 翻页高亮：每条 run 的 (repo, tag) 明细独立翻页状态，互相不干扰；切换 task 后独立保留。
+
+---
+
 ## [0.6.19] - 2026-10-01
 
 本轮是 0.6.18 之后的第三轮 UAT 反馈 —— 三项设置页 / 复制按钮文案收口，**无后端 / API / 数据库变更**。一次发版，version +1。
