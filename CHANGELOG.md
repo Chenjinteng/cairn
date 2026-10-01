@@ -6,6 +6,43 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.6.18] - 2026-10-01
+
+本轮是 0.6.15-0.6.17 的 UAT 反馈收尾 —— 四条实测观察全部为「既有 UI 一致性 / 体验」修缮，无后端变更。一次发版，version +1。
+
+### 变更
+
+- **代理管理 · 取消横向滚动 + 状态/延迟合并一列（UI-1 续）**。`web/src/pages/proxies-page.tsx`：
+  - 去掉 `tableLayout="fixed"` 与 `scroll={{ x: 1200 }}`：上一版加这两个是怕窄屏出双滚动条，但实际测下来 UAT 用户的容器宽度足以容纳整表，scroll.x 反而在更窄的窗口里触发第二条横滚条。
+  - 「状态」+「延迟」两列合并成一列，文案 `可用 (0.9 ms)` / `不可用 (—)` / `探测中 (…)` / `未探测 (—)`。不可用时延迟显示 `—` 而非数字（探测失败时 TCP 没建连，延迟无意义；用占位符区分「还没探过」与「探过但失败」）。探测中延迟显示 `…` 让用户看到「还在跑」不是「卡死」。
+  - 列宽重排：「代理地址」250→220、「认证」160→140、「更新时间」150→140，整表总宽从 1180 降到 ~1080，不再溢出容器。
+- **镜像列表 · 复制按钮只用 Dropdown（UI-6a 续）**。`web/src/components/image-detail-drawer.tsx`：
+  - 移除 Button 自带 onClick 的「单击复制当前 runtime」逻辑 —— 0.6.17 这一行 `onClick` 与 Dropdown trigger={['click']} 同时触发，导致「单击既复制 docker 命令又弹出下拉列表」，用户反馈歧义。
+  - trigger 改成 `hover`，单击 Dropdown 按钮 → 鼠标移入即展开菜单（明确的「这是个菜单」语义）。
+  - 复制 / 删除两个按钮的 `<Space size>` 从 2 → 8，避免误点删除（删除是高危操作，必须明显隔离）。
+- **镜像拉取详情 · phase 行 bytes / message cell 占位（UI-9）**。`web/src/pages/pull-page.tsx` 的 `JobPhases`：
+  - bytes cell 之前 manifest phase（无 `totalBytes`）渲染空字符串、blob phase 渲染 `0 B / 973 B` —— 两种宽度从 0 跳到 80px，行的 reflow 触发整面板「反复横跳」。
+  - 现在 bytes cell 始终渲染（有内容显示内容，无内容显示 `—` 占位符），并加 `minWidth: 90 / display: inline-block` 让宽度恒定。
+  - 同样的修复应用到 message cell：空 message 时显示 `—`，加 `minWidth: 180` 占位。两列恒定宽度后行高与行宽都稳定，不再 reflow。
+- **同步历史 · 翻页实做 + 删除文案简化（UI-10）**。`web/src/pages/sync-page.tsx`：
+  - 0.6.16 Pagination 的 `onChange={(p) => void p}` 是占位实现 —— 用户实测反馈「翻页无效」。这版把 `loadRunItems` 改为支持 `{ jumpTo: N }` union case：跳页时清掉当前 items、按目标 offset 重新加载。
+  - 删除任务的 Popconfirm 文案「任务的历史运行记录会一起删除（外键 CASCADE），无法恢复」中的「外键 CASCADE」是数据库术语，非工程背景的用户看不懂。简化为「任务的所有历史运行记录会一并删除，无法恢复」。
+
+### 兼容性
+
+- 严格兼容：四项都是 UI 表现层微调，无后端 / API / 数据库变更。
+- 「代理管理」列从 8 列减到 7 列；列宽和下降 ~100px，列表观感更紧凑。
+- 「同步历史」翻页语义变化：0.6.16 用户在第 2 页后点第 5 页无效；0.6.18 起会清掉当前已加载的 items、按目标 offset 重新加载（这是「跳页」的常识语义）。
+
+### 用户须知
+
+- 代理列表：探测中那一行状态变成 `探测中 …`（`…` 是延迟占位）；可用变成 `可用 0.9 ms`；不可用变成 `不可用 —`。
+- 镜像列表：复制命令按钮改成「hover 展开菜单 → 选 runtime 才复制」。单击不再复制；想一键复制 docker 的用户得 hover → 选 docker（仍然 < 1s）。
+- 镜像拉取详情：phase 行 bytes / message 两列现在恒定宽度，新 phase 加入时面板不再上下抖动。
+- 同步历史：展开 run → 翻页器跳到任意页都生效；删除任务的提示文案不再提「外键 CASCADE」。
+
+---
+
 ## [0.6.17] - 2026-10-01
 
 本轮把「镜像列表 → 仓库抽屉 → tag 行」的复制命令从单一 `docker pull` 升级为按 runtime 切换（docker / podman / nerdctl / ctr）。证据与诉求见 [docs/issues/ui-0.6.14.md#ui-6a](./docs/issues/ui-0.6.14.md)。

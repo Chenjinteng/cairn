@@ -1460,23 +1460,47 @@ function JobPhases({ job }: { job: PullJob }) {
               {phase.digest ? shortDigest(phase.digest) : '—'}
             </span>
           </Tooltip>
-          <span style={{ color: 'var(--color-text-3)', fontSize: 12 }}>
+          {/*
+           * v0.6.18: bytes cell 始终渲染,空值用 `—` 占位。
+           *
+           * 0.6.18 之前:manifest phase 没有 totalBytes,bytes cell 直接
+           * 渲染空字符串("") ;blob phase 有 totalBytes,渲染 "0 B / 973 B"。
+           * 两行的 bytes cell 宽度从 0 跳到 80px → 整行 reflow → 用户
+           * 反馈「详细信息面板反复横跳」。
+           *
+           * 修法:cell 内容无论如何都渲染一个固定宽度的占位符 (单字符 `—`)。
+           * 一行的高度与宽度从此稳定,后续 phase.message 是否为空不影响
+           * reflow。
+           *
+           * 同步把 message cell 也改为始终渲染(空时显示 `—`),不再依赖
+           * {cond ? <span/> : null} 的条件渲染。否则失败 / 跳过 / 成功的
+           * message 长度不同 → 整行宽度再次跳变。
+           */}
+          <span
+            className="mono"
+            style={{
+              color: 'var(--color-text-3)',
+              fontSize: 12,
+              minWidth: 90,
+              display: 'inline-block',
+            }}
+          >
             {phase.totalBytes != null
               ? `${formatBytes(phase.bytes)} / ${formatBytes(phase.totalBytes)}`
               : phase.bytes
               ? formatBytes(phase.bytes)
-              : ''}
+              : '—'}
           </span>
-          {phase.message ? (
-            <span
-              style={{
-                fontSize: 12,
-                color: phase.status === 'failed' ? 'var(--color-fail)' : 'var(--color-text-3)',
-              }}
-            >
-              {phase.message}
-            </span>
-          ) : null}
+          <span
+            style={{
+              fontSize: 12,
+              color: phase.status === 'failed' ? 'var(--color-fail)' : 'var(--color-text-3)',
+              minWidth: 180,
+              display: 'inline-block',
+            }}
+          >
+            {phase.message || '—'}
+          </span>
         </div>
       ))}
       {job.errorMessage ? (

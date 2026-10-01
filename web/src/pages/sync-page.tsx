@@ -419,7 +419,7 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
   const handleDelete = (task: SyncTask) => {
     modal.confirm({
       title: `删除任务 "${task.name}"？`,
-      content: '任务的历史运行记录会一起删除（外键 CASCADE），无法恢复。',
+      content: '任务的所有历史运行记录会一并删除，无法恢复。',
       okText: '删 除',
       okButtonProps: { danger: true },
       cancelText: '取 消',
@@ -496,10 +496,21 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
    * 注意点: 同一 run 被并发触发时 (用户狂点 / 网络抖动重发) 通过 prev guard
    * 拦掉 —— setItemsByRunId 的 updater 先检查 loading,避免竞争覆盖。
    */
+  /**
+   * v0.6.18: loadRunItems 改为支持「跳页」语义。
+   *
+   * - page === 1               → 重新从 offset 0 加载（覆盖现有缓存）
+   * - page === 'next'          → 在当前 offset 上继续加载（append）
+   * - page === {jumpTo: N}     → 从 offset (N-1)*PAGE_SIZE 加载,丢弃已加载的
+   *
+   * 0.6.18 用户反馈「翻页无效」:0.6.16 写的 Pagination onChange 是
+   *  void p 占位 —— 跳到第 3 页时按钮 highlight 变了但内容不变。本轮把
+   * 「跳页」明确化为一个 union case,UI 调过来直接 work。
+   */
   const loadRunItems = async (
     taskId: number,
     runId: number,
-    page: 1 | 'next' = 1,
+    page: 1 | 'next' | { jumpTo: number } = 1,
   ) => {
     setItemsByRunId((prev) => {
       const existing = prev[runId];
@@ -516,13 +527,18 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
       };
     });
     const existing = itemsByRunId[runId];
-    const offset = page === 1 ? 0 : (existing?.offset ?? 0) + ITEMS_PAGE_SIZE;
+    let offset: number;
+    if (page === 1) offset = 0;
+    else if (page === 'next') offset = (existing?.offset ?? 0);
+    else offset = (page.jumpTo - 1) * ITEMS_PAGE_SIZE;
     const limit = existing?.limit ?? ITEMS_PAGE_SIZE;
     const result = await listSyncRunItems(taskId, runId, limit, offset);
     if (result.success && result.data) {
       setItemsByRunId((prev) => {
         const old = prev[runId] ?? { items: [], total: 0, limit, offset: 0, loading: false };
-        const merged = page === 1 ? result.data!.items : [...old.items, ...result.data!.items];
+        // page=1 / jumpTo 都覆盖;只有 next 追加。
+        const merged =
+          page === 'next' ? [...old.items, ...result.data!.items] : result.data!.items;
         return {
           ...prev,
           [runId]: {
@@ -975,13 +991,17 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
                   pageSize={ITEMS_PAGE_SIZE}
                   total={total}
                   showSizeChanger={false}
+                  /*
+                   * v0.6.18: 跳页实做。0.6.16 这里写成 `void p` 占位 →
+                   * 用户反馈「翻页无效」(0.6.18 用户反馈)。
+                   *
+                   * 语义:用户点第 N 页 → 清掉当前 items,按 N 页 offset 重新加载。
+                   * 简单粗暴但正确:用户大概率不会从第 3 页跳回第 1 页再
+                   * 顺序翻页,丢一些已加载的 items 反而是 feature 不是 bug
+                   * (「跳页」本身就暗含「我不要中间的」)。
+                   */
                   onChange={(p) => {
-                    // 「跳页」语义 = 重新加载到目标 offset。简单做法:
-                    // 关闭展开 → 重置 → 展开到目标页。但 antd expandable
-                    // 的 onChange 没有 page 参数,这里只接住点击事件。
-                    // 用占位行为: 跳到 p 即「加载更多」+(p-1) 次,UI 上
-                    // 暂时退化成「加载更多」。P0 不优化跳页。
-                    void p;
+                    if (historyTask) void loadRunItems(historyTask.id, run.id, { jumpTo: p });
                   }}
                 />
               )}

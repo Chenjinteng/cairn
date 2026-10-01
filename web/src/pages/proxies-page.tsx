@@ -619,13 +619,13 @@ export default function ProxiesPage({ config, sidebarFilter, onPublishGroups }: 
       // 随数据变化,其他列也因此稳定。250px 容纳中等长度的 `http://host:port`,
       // 极长 URL 由 ellipsis 自然截断(下文 `mono` span 不需要 `overflow:hidden`—
       // antd Cell 默认会处理)。
-      width: 250,
+      width: 220,
       render: (_, p) => <span className="mono">{p.url}</span>,
     },
     {
       title: '认证',
       key: 'hasAuth',
-      width: 160,
+      width: 140,
       render: (_, p) =>
         p.hasAuth ? (
           <Tag color="blue" icon={<CheckCircleOutlined />}>
@@ -642,48 +642,59 @@ export default function ProxiesPage({ config, sidebarFilter, onPublishGroups }: 
       render: (_, p) => <Tooltip title={p.updatedAt}>{formatDateTime(p.updatedAt)}</Tooltip>,
     },
     {
+      /**
+       * v0.6.18: 「状态」与「延迟」合并成一列,文案 `可用 (0.9 ms)` /
+       * `不可用 (—)` / `探测中 (…)` / `未探测 (—)`。
+       *
+       * 用户诉求:两列内容天然相关(都来自同一探测动作),分两列看反而要
+       * 视觉跳一行找;合并后整表少一列 = 列宽和变小,横滚风险也跟着下降。
+       *
+       * 「不可用」时延迟显示 `—` 而不是 lastProbeLatencyMs: 探测失败时
+       * TCP 都没建连成功,延迟没有意义;用一个明确的占位符让用户区分
+       * 「还没探过」与「探过但失败」。
+       *
+       * 探测中的延迟显示 `…`,让用户看到「还在跑」不是「卡死」;
+       * 实际不暴露未完成的数字,因为 probing 时 latency 还没回。
+       */
       title: '状态',
-      key: 'lastProbeStatus',
-      width: 110,
+      key: 'statusLatency',
+      width: 180,
       render: (_, p) => {
-        // v0.5.12: 探测进行中优先于落库状态 —— 否则刚点完按钮行上还是旧结果，
-        // 看不出"已经在测了"。
-        //
-        // v0.6.15 (UI-1): 四个状态标签统一挂 STATUS_TAG_STYLE。「探测中」(3 字)
-        // 与「可用」(2 字) 文字宽度不同，antd <Table> 的 auto layout 会按内容
-        // 重算列宽 —— 探测完成那一帧整表重排，把右侧「操作」列的首按钮文字挤到
-        // 截断（「探测中…」只看得见前半截）。定宽后四种状态同宽，不再抖。
         if (probingIds[p.id]) {
           return (
-            <Tag color="processing" icon={<LoadingOutlined />} style={STATUS_TAG_STYLE}>
-              探测中
-            </Tag>
+            <Space size={4}>
+              <Tag color="processing" icon={<LoadingOutlined />} style={STATUS_TAG_STYLE}>
+                探测中
+              </Tag>
+              <span className="mono" style={{ color: 'var(--color-text-3)' }}>…</span>
+            </Space>
           );
         }
         const s = p.lastProbeStatus || '';
-        if (s === 'ok')
-          return (
-            <Tag color="success" icon={<CheckCircleOutlined />} style={STATUS_TAG_STYLE}>
-              可用
-            </Tag>
-          );
-        if (s === 'failed')
+        if (s === 'failed') {
           return (
             <Tooltip title={p.lastProbeError || '探测失败'}>
-              <Tag color="error" icon={<CloseCircleOutlined />} style={STATUS_TAG_STYLE}>
-                不可用
-              </Tag>
+              <Space size={4}>
+                <Tag color="error" icon={<CloseCircleOutlined />} style={STATUS_TAG_STYLE}>
+                  不可用
+                </Tag>
+                <span className="mono" style={{ color: 'var(--color-text-3)' }}>—</span>
+              </Space>
             </Tooltip>
           );
-        return <Tag style={STATUS_TAG_STYLE}>未探测</Tag>;
+        }
+        const label = s === 'ok' ? '可用' : '未探测';
+        const color = s === 'ok' ? 'success' : 'default';
+        const icon = s === 'ok' ? <CheckCircleOutlined /> : null;
+        return (
+          <Space size={4}>
+            <Tag color={color} icon={icon} style={STATUS_TAG_STYLE}>
+              {label}
+            </Tag>
+            <span className="mono">{formatLatency(p.lastProbeLatencyMs)}</span>
+          </Space>
+        );
       },
-    },
-    {
-      // v0.5.15: 上一次探测的 TCP 建连延迟。
-      title: '延迟',
-      key: 'lastProbeLatencyMs',
-      width: 100,
-      render: (_, p) => <span className="mono">{formatLatency(p.lastProbeLatencyMs)}</span>,
     },
     {
       title: '最后探测',
@@ -837,22 +848,23 @@ export default function ProxiesPage({ config, sidebarFilter, onPublishGroups }: 
                 dataSource={visibleProxies}
                 pagination={false}
                 /*
-                 * v0.6.15 (UI-1): tableLayout="fixed" + scroll.x 锁列宽。
+                 * v0.6.18: 不再设 tableLayout="fixed" 也不给 scroll.x。
                  *
-                 * 0.6.15 上一版给「状态」Tag 加 minWidth 后,在 URL 短、列宽余量
-                 * 大时确实不抖,但 URL 较长时还是会触发整表重排——antd 默认 auto
-                 * layout 下,「代理地址」列没设 width(URL 长度千差万别),它会按内容
-                 * 涨缩,挤压右侧固定列。修法:
-                 *   1. 给所有列显式 width(上一版已做「状态」Tag,这版补「代理地址」)
-                 *   2. tableLayout="fixed" — 表头与单元格严格按 column.width 分配,
-                 *      内容溢出靠单元格 ellipsis,不触发重排
-                 *   3. scroll.x 给一个 ≥ 总列宽的下限,容器比它窄时整表横向滚
-                 *      (单层滚动,不是「双滚动条」)
+                 * 0.6.15 一开始用 scroll.x=1200 是为了"容器宽度 < 1200 时整表
+                 * 横滚一次,避免纵向溢出后的双滚动条"。但实测里 UAT 用户的
+                 * 容器宽度 ≥ 1200(scroll.x 不触发);而在更窄的窗口里反而
+                 * 出现了第二条横向滚动条,跟 0.6.15 想消除的"双滚动条"形态
+                 * 不一样,但视觉上仍然让用户困扰。
                  *
-                 * 探测中(3 字) ↔ 可用(2 字) 切换时,Tag 现在同宽、列宽定死,不再抖。
+                 * 这版重新算列宽让总和 ≈ 1100px,删 scroll.x:
+                 *   - 容器够宽 → 整表自然铺开,无横向滚动
+                 *   - 容器窄 → 列宽固定 (Width 都已显式)+ 内容 ellipsis,
+                 *     文字自然被裁,不会有滚动条 —— 这才是"无滚动"的本意
+                 *   - 真要看完整 URL 字段,鼠标 hover Tooltip 看完整值
+                 *
+                 * 状态+延迟合并成一列(状态 latency column)是减少列宽和的
+                 * 主要手段 —— 之前 8 列合计 1180,合并后 7 列约 1080。
                  */
-                tableLayout="fixed"
-                scroll={{ x: 1200 }}
                 locale={{
                   emptyText:
                     proxies.length > 0

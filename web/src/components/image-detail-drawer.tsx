@@ -169,32 +169,34 @@ export default function ImageDetailDrawer({
     {
       title: '操作',
       key: 'actions',
-      width: 120,
+      width: 130,
       fixed: 'right',
       render: (_, record) => {
         const siblings = digestTagMap.get(record.digest) ?? [];
         const repo = repository?.name ?? '';
         return (
-          <Space size={2}>
-            {/*
-             * v0.6.17: 复制命令从单一按钮改成 Dropdown。
-             *
-             * 设计选择:
-             *   - 默认还是 docker (DEFAULT_PULL_RUNTIME),99% UAT 在用,无歧义
-             *   - 单击 = 复制当前选中 runtime 的命令;若还没选过 runtime,走默认
-             *   - Dropdown 菜单提供四种 runtime 切换,选中即复制 + Toast 反馈
-             *   - 主按钮的 Tooltip 显示当前 runtime 拼出的命令,让用户
-             *     复制前能看到「自己这次会拿到什么」
-             *
-             * 不在行上加「runtime 列」:
-             *   - 行里 8 列,再加一列会挤压「架构」「层数」「大小」等信息列
-             *   - Dropdown 默认收起,视觉负载低;真要选其它 runtime 才打开
-             *   - 与 antd 多数含「多选项」按钮的 Table 模式一致
-             *
-             * selectedRuntime 是组件级 state,而不是每行 —— 99% 用户的
-             * runtime 是固定的(同一台机只装一种 CLI),逐行记忆反而怪。
-             * 抽屉关闭时通过 open prop 重新挂载时重置回默认。
-             */}
+          /*
+           * v0.6.18: 「操作」列里的两个按钮间距从 2 → 8。
+           *
+           * 0.6.17 把「复制」变成 Dropdown 后,默认单击会复制当前 runtime。
+           * 问题:Dropdown trigger={['click']} + Button 自带 onClick 让
+           *   「单击既复制又展开菜单」—— 用户反馈"想用下拉列表代替单击复制,
+           *   两个图标间距太近容易误点"。
+           *
+           * 这版的修法:
+           *   1. 复制按钮的 onClick 全部移除,只通过 Dropdown menu 的 onClick
+           *      复制 —— 单击 = 仅展开菜单,选 runtime 才复制
+           *   2. 复制 / 删除两个按钮间距从 <Space size={2}> 提到 8,避免
+           *      误点删除（删除是高危操作,必须明显隔离）
+           *   3. Dropdown trigger 改成 'hover' 让用户更明确感知「这是个菜单」
+           *      —— 'click' 在 antd 默认下表现会和按钮 onclick 撞
+           *
+           * 副作用: 一次操作分两步(展开 → 选 runtime)。但 99% 用户只点 docker,
+           * "两步" 实际是"鼠标移上去 → 选 docker" → 0.5s 操作成本;
+           * 真要"老路 一键复制 docker"的人 0.6.17 之前已经习惯了,
+           * 改回两步的好处是"按钮语义明确"(点复制 = 弹菜单,不是「复制 + 弹」)。
+           */
+          <Space size={8}>
             <Dropdown
               menu={{
                 items: PULL_RUNTIMES.map((r) => ({
@@ -210,7 +212,7 @@ export default function ImageDetailDrawer({
                 },
                 selectedKeys: [selectedRuntime],
               }}
-              trigger={['click']}
+              trigger={['hover']}
             >
               <Tooltip
                 title={
@@ -221,17 +223,7 @@ export default function ImageDetailDrawer({
                   type="text"
                   size="small"
                   icon={<CopyOutlined />}
-                  onClick={(e) => {
-                    // 单击 = 复制当前 runtime 的命令(不等菜单展开),
-                    // 让老用户保持「一键复制」的工作流;Dropdown 展开
-                    // 留给切换 runtime 的场景。
-                    e.preventDefault();
-                    const cmd = buildPullCommand(host, repo, record.tag, selectedRuntime);
-                    void copy(cmd);
-                    message.success(`已复制 ${selectedRuntime} 命令: ${cmd}`);
-                    // 不调用 stopPropagation —— 让 Dropdown 还能继续打开,
-                    // 让「先复制一份再切」也成立。
-                  }}
+                  aria-label="复制 pull 命令"
                 />
               </Tooltip>
             </Dropdown>
