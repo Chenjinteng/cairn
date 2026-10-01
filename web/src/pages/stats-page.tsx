@@ -686,15 +686,33 @@ export default function StatsPage({
       {!empty ? (
         <div className="panel" style={{ padding: 16 }}>
           <div className="stats-panel-head">
-            <h3 className="stats-panel-title">Top 榜单</h3>
+            {/* v0.6.15 (UI-5): 标题从「Top 榜单」改成「Top 10 榜单」。
+             *  硬上限 10 条 → 表头文案也要直接说清,不再让用户去「猜是不是漏看了」。 */}
+            <h3 className="stats-panel-title">Top 10 榜单</h3>
             <Segmented
               options={BY_OPTIONS}
               value={topBy}
               onChange={(value) => setTopBy(value as StatsTopBy)}
             />
           </div>
-          {/* 榜单自己滚、表头粘住，避免翻页/翻列表时把上面的时间窗与 KPI 顶走。 */}
-          <div className="table-scroll table-scroll--bounded" ref={topWrapRef}>
+          {/*
+           * v0.6.15 (UI-5): 去掉 .table-scroll--bounded (max-height 460px)。
+           *
+           * 上一版用 bounded 容器是为了「榜单自己滚,表头粘住」,但 max-height
+           * 460px 在 10 行(antd size=middle 单行 ~54px × 10 + 表头 ~56 ≈ 596px)
+           * 之下仍然超过,出第二条竖向滚动条——用户已实测反馈「还有滚动条」。
+           *
+           * 改成 .table-scroll(无 max-height)+ 移走 sticky:
+           *   - 10 行自然撑到 ~600px,页面外层竖向滚动代替容器内滚动
+           *   - 表头不再 sticky —— 切维度「按仓库 ↔ 按 tag」不需要保留表头
+           *     在屏不动(切的动作会重渲染,表头本来就会被覆盖)
+           *   - 这是用户明确诉求「不要用滚」——榜单内部不能有第二条滚动条,
+           *     页面外层可以(那是页面级别的常规滚动)
+           *
+           * 如果后续 Top 数量上调,这条注释就是「为什么 max-height 不能加回来」
+           * 的备忘。
+           */}
+          <div className="table-scroll" ref={topWrapRef}>
             {/* v0.5.41: top 榜单 loading 走骨架 —— 切时间窗时直接给骨架占位,
                 避免「spinner → 空表 → 数据回来」三段闪。首屏也用同一路径。 */}
             {loading && topItems.length === 0 ? (
@@ -715,7 +733,12 @@ export default function StatsPage({
                 columns={topColumns}
                 dataSource={topItems.slice(0, TOP_LIMIT)}
                 scroll={{ x: 800 }}
-                sticky={{ getContainer: () => topWrapRef.current ?? window }}
+                /*
+                 * v0.6.15 (UI-5): 移除 sticky。原来 `topWrapRef` 是为了
+                 * 「榜单自己滚、表头粘住」,现在榜单改用页面外层滚动,容器不再
+                 * 滚动,sticky 也就不需要 —— 留着只会调 topWrapRef.current
+                 * 报错(切维度时 ref 临时为 null)。
+                 */
                 /*
                  * v0.6.15 (UI-5): 榜单只显示 Top 10。两条原因：
                  *   1. 用户诉求 —— Top 10 足够看清热点，再多也是 1~2 次活动,

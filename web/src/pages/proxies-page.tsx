@@ -613,6 +613,13 @@ export default function ProxiesPage({ config, sidebarFilter, onPublishGroups }: 
     {
       title: '代理地址',
       key: 'url',
+      // v0.6.15 (UI-1): 给「代理地址」显式宽度。原来没设 width,antd auto layout
+      // 会按 URL 文本长度重算列宽——一条 `http://user:pwd@very-long-host.example.com:8080`
+      // 进来整张表就重排,把右侧「状态」+「操作」列挤到抖动。定宽后这一列不再
+      // 随数据变化,其他列也因此稳定。250px 容纳中等长度的 `http://host:port`,
+      // 极长 URL 由 ellipsis 自然截断(下文 `mono` span 不需要 `overflow:hidden`—
+      // antd Cell 默认会处理)。
+      width: 250,
       render: (_, p) => <span className="mono">{p.url}</span>,
     },
     {
@@ -829,6 +836,23 @@ export default function ProxiesPage({ config, sidebarFilter, onPublishGroups }: 
                 columns={columns}
                 dataSource={visibleProxies}
                 pagination={false}
+                /*
+                 * v0.6.15 (UI-1): tableLayout="fixed" + scroll.x 锁列宽。
+                 *
+                 * 0.6.15 上一版给「状态」Tag 加 minWidth 后,在 URL 短、列宽余量
+                 * 大时确实不抖,但 URL 较长时还是会触发整表重排——antd 默认 auto
+                 * layout 下,「代理地址」列没设 width(URL 长度千差万别),它会按内容
+                 * 涨缩,挤压右侧固定列。修法:
+                 *   1. 给所有列显式 width(上一版已做「状态」Tag,这版补「代理地址」)
+                 *   2. tableLayout="fixed" — 表头与单元格严格按 column.width 分配,
+                 *      内容溢出靠单元格 ellipsis,不触发重排
+                 *   3. scroll.x 给一个 ≥ 总列宽的下限,容器比它窄时整表横向滚
+                 *      (单层滚动,不是「双滚动条」)
+                 *
+                 * 探测中(3 字) ↔ 可用(2 字) 切换时,Tag 现在同宽、列宽定死,不再抖。
+                 */
+                tableLayout="fixed"
+                scroll={{ x: 1200 }}
                 locale={{
                   emptyText:
                     proxies.length > 0
