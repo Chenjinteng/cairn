@@ -503,38 +503,46 @@ export default function ImagesPage({
       <div className="panel">
         {/* 表格自己滚（表头粘住），页面不滚 —— 见 app.css 的 .page--fill。 */}
         <div className="table-scroll" ref={tableWrapRef}>
-          {/* v0.6.21: loading 时改用居中 spinner 占位(原来的 TableSkeleton 灰块
-              shimmer 反馈「一闪一闪」,换成 spinner 更明确「在等接口」)。 */}
-          {loading ? (
-            <PageLoading tip="正在读取镜像列表…" />
-          ) : (
-            <Table<RegistryRepository>
-              rowKey="name"
-              size="middle"
-              columns={columns}
-              dataSource={rows}
-              scroll={{ x: statsEnabled ? 1100 : 900 }}
-              sticky={{ getContainer: () => tableWrapRef.current ?? window }}
-              locale={{
-                emptyText: (
-                  <Empty
-                    description={
-                      inventory
-                        ? '该 registry 没有匹配的镜像'
-                        : '还没有清单，点击「刷新」从本地 storage 加载'
-                    }
-                  />
-                ),
-              }}
-              pagination={{
-                size: 'small',
-                showSizeChanger: true,
-                defaultPageSize: 20,
-                pageSizeOptions: [10, 20, 50, 100],
-                showTotal: (total) => `共 ${total} 个仓库`,
-              }}
-            />
-          )}
+          {/*
+           * v0.6.22: 改成同时渲染 spinner + 表格(spinner 用 `visible` 控制,
+           * 表格用 `hidden` 隐藏)。`visible` 从 true → false 时 spinner 不会
+           * 立刻消失,而是先等 250ms(等 React 把 Table 提交到 DOM 完成首帧渲染
+           * ——「页面元素都渲染完」),再 opacity 1→0 淡出 350ms,用户看到的是
+           * 「spinner → spinner 半透明(底下表格露脸) → 表格」三段过渡,不是
+           * 硬切。
+           *
+           * Table 必须放前面、PageLoading 放后面:DOM 顺序上后者画在上面,
+           * 才能盖住前者的「spinner 半透明 → 表格露脸」过渡。
+           */}
+          <div hidden={loading}>
+          <Table<RegistryRepository>
+            rowKey="name"
+            size="middle"
+            columns={columns}
+            dataSource={rows}
+            scroll={{ x: statsEnabled ? 1100 : 900 }}
+            sticky={{ getContainer: () => tableWrapRef.current ?? window }}
+            locale={{
+              emptyText: (
+                <Empty
+                  description={
+                    inventory
+                      ? '该 registry 没有匹配的镜像'
+                      : '还没有清单，点击「刷新」从本地 storage 加载'
+                  }
+                />
+              ),
+            }}
+            pagination={{
+              size: 'small',
+              showSizeChanger: true,
+              defaultPageSize: 20,
+              pageSizeOptions: [10, 20, 50, 100],
+              showTotal: (total) => `共 ${total} 个仓库`,
+            }}
+          />
+          </div>
+          <PageLoading visible={loading} tip="正在读取镜像列表…" />
         </div>
       </div>
 

@@ -1036,9 +1036,16 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
         />
       )}
 
-      {loading ? (
-        <PageLoading tip="正在读取同步任务…" />
-      ) : tasks.length === 0 ? (
+      {/*
+       * v0.6.22: 三态渲染从 ternary 改成「同时渲染 + 受控 visible」。
+       *   - loading=true 时 Table 用 hidden=true 隐身(spinner 占据位置)
+       *   - loading=false 时 Table 露脸;若 tasks 为空,Empty 接管(也是
+       *     隐身状态下渲染,这里 `!loading` 决定 Empty 何时出现)
+       *   - PageLoading 永远在末尾:DOM 顺序上画在 Table/Empty 上面,
+       *     内部状态机 visible→hiding→unmount 走 250ms+350ms 淡出。
+       * 视觉上:spinner → spinner 半透明(底下表格露脸) → 表格,不是硬切。
+       */}
+      {tasks.length === 0 && !loading ? (
         <Empty
           description={
             <div>
@@ -1054,6 +1061,7 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
           </Button>
         </Empty>
       ) : (
+        <div hidden={loading}>
         <Table<SyncTask>
           rowKey="id"
           columns={columns}
@@ -1086,9 +1094,9 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
             },
             expandedRowRender: (task) => {
               const runsState = runsByTaskId[task.id];
-              if (!runsState) return <PageLoading tip="正在读取运行历史…" height={120} />;
+              if (!runsState) return <PageLoading visible tip="正在读取运行历史…" height={120} />;
               if (runsState.loading && runsState.runs.length === 0) {
-                return <PageLoading tip="正在读取运行历史…" height={120} />;
+                return <PageLoading visible tip="正在读取运行历史…" height={120} />;
               }
               if (runsState.runs.length === 0) {
                 return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有运行记录" />;
@@ -1126,7 +1134,9 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
             },
           }}
         />
+        </div>
       )}
+      <PageLoading visible={loading} tip="正在读取同步任务…" />
 
       {/* 编辑 / 新建 Modal */}
       <Modal
@@ -1617,11 +1627,10 @@ function ScheduleTab({ schedules, loading, onCreate, onUpdate, onDelete }: Sched
 
   return (
     <div>
-      {loading ? (
-        <PageLoading tip="正在读取定时规则…" height={120} />
-      ) : schedules.length === 0 ? (
+      {schedules.length === 0 && !loading ? (
         <Empty description="还没有定时规则，点下方「新建」添加" />
       ) : (
+        <div hidden={loading}>
         <Table<SyncSchedule>
           rowKey="id"
           columns={columns}
@@ -1629,7 +1638,9 @@ function ScheduleTab({ schedules, loading, onCreate, onUpdate, onDelete }: Sched
           pagination={false}
           size="small"
         />
+        </div>
       )}
+      <PageLoading visible={loading} tip="正在读取定时规则…" height={120} />
 
       <Divider style={{ margin: '16px 0' }} />
 

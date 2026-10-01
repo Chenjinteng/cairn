@@ -296,6 +296,21 @@
 }
 
 /*
+ * v0.6.22: 全局放慢 PageLoading 的 spinner 旋转 —— 默认 1s/圈看着太急,
+ * 用户反馈像「一闪一闪」。改 2s/圈,跟"加载中"这种「等接口」的语义更合。
+ *
+ * 只针对 PageLoading 里的 Spin(不加 loading 属性的 Button 等不命中),
+ * 通过 [role="status"] + aria-live="polite" 缩小命中范围。Spin 内部
+ * 用 SVG + transform-origin: 50% 50% 的旋转动画,挂到 svg 上覆盖 duration。
+ *
+ * 不动 button / tag 的 spinner —— 它们是「按钮正在点」语义,快一点更合手感。
+ */
+[role="status"][aria-live="polite"] .ant-spin .ant-spin-dot-spin,
+[role="status"][aria-live="polite"] .ant-spin svg {
+  animation-duration: 2s !important;
+}
+
+/*
  * 让页面撑满可视区，**只让表格区域内部滚动**。
  *
  * 不这么做的话整页一起滚：往下翻表格会把搜索框、时间窗、KPI 一起顶走，

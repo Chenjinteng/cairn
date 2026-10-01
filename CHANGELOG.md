@@ -6,6 +6,44 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.6.22] - 2026-10-01
+
+本轮是第六轮 UAT 反馈 —— 用户实测 v0.6.21 的 spinner「还是秒突兀」：
+
+1. 转圈太快，看着「一闪一闪」。
+2. 数据回来 → spinner 立刻消失 → 真表格出现，「等页面元素都渲染完后再淡出」。
+
+### 变更
+
+- **PageLoading 重写为受控 + 内部状态机**。`web/src/components/page-loading.tsx`：
+  - API 改为必须传 `visible: boolean`(原来是「直接渲染就显示」,现在是受控)。
+  - 内部状态机:`shown`(DOM 是否挂载)/ `hiding`(是否在淡出)。`visible` 从 true → false 时:
+    1. 等 `minDuration`(默认 250ms) —— 让 React 把真表格 commit 到 DOM 完成首帧
+    2. `hiding=true`,opacity 1→0 走 `fadeDuration`(默认 350ms) ease 过渡
+    3. `shown=false`,DOM 卸载
+  - 淡出期间 `pointer-events: none` —— 用户可以提前看到下面的真表格「露脸」,过渡不挡视线。
+- **CSS: 全局放慢 spinner 旋转**。`web/src/app.css`:
+  - antd Spin 默认 `animation-duration: 1s`,看着像在闪。改成 2s(只命中 PageLoading 里的 Spin,通过 `[role="status"][aria-live="polite"]` 缩小范围)。
+  - 不动 Button 的 loading spinner(那是「按钮正在点」语义,快一点更合手感)。
+- **6 个页面从 ternary 改成同时渲染**。`web/src/pages/{images,pull,proxies,credentials,stats,sync}-page.tsx`:
+  - 旧模式 `{loading ? <PageLoading /> : <Table />}` —— React 立即卸载 spinner,没有过渡可言。
+  - 新模式:Table 用 `<div hidden={loading}>` 包裹(antd Table 不接 `hidden` 属性),PageLoading 用 `visible={loading}` 受控,两个元素始终共存。
+  - `loading=true` 时:Table 隐身,spinner 占据位置;`loading` 翻 false:Table 立刻露脸,spinner 走 250+350ms 淡出,视觉上「spinner → spinner 半透明(底下表格露脸) → 表格」三段过渡。
+
+### 兼容性
+
+- 严格兼容:纯前端展示层变更,**无后端 / API / 数据库变更**。
+- PageLoading API 改了 (`visible` 从可选变必传),但调用方 6 个页面都同步改了。
+- 「后续轮询走 antd Table 自带半透层」的语义不变 —— 仍是只在 `dataSource 为空 + loading` 的首屏场景走居中 spinner,后续轮询 (dataSource 非空) 走 Table 自己的 loading prop。
+
+### 用户须知
+
+- 转圈速度从 1s/圈降到 2s/圈,看着「不那么急」。
+- 数据回来不再硬切:先等 250ms(让表格「落地」),再 spinner 淡出 350ms。
+- 切页/刷新时整段观感更柔。
+
+---
+
 ## [0.6.21] - 2026-10-01
 
 本轮是第五轮 UAT 反馈 —— 用户实测全站加载占位「一闪一闪的」，要求加一个明确的加载图标。

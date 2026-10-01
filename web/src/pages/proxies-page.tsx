@@ -836,43 +836,48 @@ export default function ProxiesPage({ config, sidebarFilter, onPublishGroups }: 
           ) : null}
 
           <div className="panel">
-            {/* v0.6.21: loading 走 PageLoading 居中 spinner —— 之前的灰块骨架
-                shimmer「一闪一闪」,换成 spinner 更明确「在等接口」。 */}
-            {loading && proxies.length === 0 ? (
-              <PageLoading tip="正在读取代理列表…" />
-            ) : (
-              <Table<ProxyEntry>
-                rowKey="id"
-                size="middle"
-                columns={columns}
-                dataSource={visibleProxies}
-                pagination={false}
-                /*
-                 * v0.6.18: 不再设 tableLayout="fixed" 也不给 scroll.x。
-                 *
-                 * 0.6.15 一开始用 scroll.x=1200 是为了"容器宽度 < 1200 时整表
-                 * 横滚一次,避免纵向溢出后的双滚动条"。但实测里 UAT 用户的
-                 * 容器宽度 ≥ 1200(scroll.x 不触发);而在更窄的窗口里反而
-                 * 出现了第二条横向滚动条,跟 0.6.15 想消除的"双滚动条"形态
-                 * 不一样,但视觉上仍然让用户困扰。
-                 *
-                 * 这版重新算列宽让总和 ≈ 1100px,删 scroll.x:
-                 *   - 容器够宽 → 整表自然铺开,无横向滚动
-                 *   - 容器窄 → 列宽固定 (Width 都已显式)+ 内容 ellipsis,
-                 *     文字自然被裁,不会有滚动条 —— 这才是"无滚动"的本意
-                 *   - 真要看完整 URL 字段,鼠标 hover Tooltip 看完整值
-                 *
-                 * 状态+延迟合并成一列(状态 latency column)是减少列宽和的
-                 * 主要手段 —— 之前 8 列合计 1180,合并后 7 列约 1080。
-                 */
-                locale={{
-                  emptyText:
-                    proxies.length > 0
-                      ? '当前筛选下没有代理，换个筛选条件试试'
-                      : '还没有代理，点击右上「新增代理」',
-                }}
-              />
-            )}
+            {/*
+             * v0.6.22: 改成同时渲染 spinner + Table。`loading && proxies.length === 0`
+             * 才需要 spinner(后续轮询走 antd Table 自带半透层)。
+             * Table hidden 控制显示,PageLoading visible 控制淡出。
+             */}
+            <div hidden={loading && proxies.length === 0}>
+            <Table<ProxyEntry>
+              rowKey="id"
+              size="middle"
+              columns={columns}
+              dataSource={visibleProxies}
+              pagination={false}
+              /*
+               * v0.6.18: 不再设 tableLayout="fixed" 也不给 scroll.x。
+               *
+               * 0.6.15 一开始用 scroll.x=1200 是为了"容器宽度 < 1200 时整表
+               * 横滚一次,避免纵向溢出后的双滚动条"。但实测里 UAT 用户的
+               * 容器宽度 ≥ 1200(scroll.x 不触发);而在更窄的窗口里反而
+               * 出现了第二条横向滚动条,跟 0.6.15 想消除的"双滚动条"形态
+               * 不一样,但视觉上仍然让用户困扰。
+               *
+               * 这版重新算列宽让总和 ≈ 1100px,删 scroll.x:
+               *   - 容器够宽 → 整表自然铺开,无横向滚动
+               *   - 容器窄 → 列宽固定 (Width 都已显式)+ 内容 ellipsis,
+               *     文字自然被裁,不会有滚动条 —— 这才是"无滚动"的本意
+               *   - 真要看完整 URL 字段,鼠标 hover Tooltip 看完整值
+               *
+               * 状态+延迟合并成一列(状态 latency column)是减少列宽和的
+               * 主要手段 —— 之前 8 列合计 1180,合并后 7 列约 1080。
+               */
+              locale={{
+                emptyText:
+                  proxies.length > 0
+                    ? '当前筛选下没有代理，换个筛选条件试试'
+                    : '还没有代理，点击右上「新增代理」',
+              }}
+            />
+            </div>
+            <PageLoading
+              visible={loading && proxies.length === 0}
+              tip="正在读取代理列表…"
+            />
           </div>
         </>
       )}

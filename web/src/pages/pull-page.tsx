@@ -1057,19 +1057,23 @@ export default function PullPage({ config, sidebarFilter, onPublishGroups }: Pro
       ) : null}
 
       <div className="panel">
-        {/* v0.6.21: 首屏 loading 走 PageLoading 居中 spinner —— 之前的
-            灰块骨架 shimmer「一闪一闪」,换成 spinner 更明确「在等接口」。
-            后续轮询不闪(spinner 不出,antd Table loading 自带)。 */}
-        {loading && jobs.length === 0 ? (
-          <PageLoading tip="正在读取拉取任务…" />
-        ) : (
-          <Table<PullJob>
-            rowKey="id"
-            size="middle"
-            columns={columns}
-            dataSource={visibleJobs}
-            scroll={{ x: 1000 }}
-            pagination={false}
+        {/*
+         * v0.6.22: 改成同时渲染 spinner + Table。`loading && jobs.length === 0`
+         * (首屏场景)才需要 spinner —— 后续轮询场景 jobs.length > 0 时不闪
+         * (antd Table 自带半透层 spinner,见原 0.6.21 注释)。
+         *
+         * Table 用 hidden 控制:首屏 loading 时隐身,spinner 占位;loading
+         * 翻 false 时 PageLoading 内部状态机走 250ms 停留 + 350ms 淡出,
+         * Table 同步露脸,过渡不是硬切。
+         */}
+        <div hidden={loading && jobs.length === 0}>
+        <Table<PullJob>
+          rowKey="id"
+          size="middle"
+          columns={columns}
+          dataSource={visibleJobs}
+          scroll={{ x: 1000 }}
+          pagination={false}
             expandable={{
               expandedRowRender: (job) => <JobPhases job={job} />,
               // 每一行都可展开：成功 / 进行中的任务也常有"看看到底走到哪一层"的需求，
@@ -1090,7 +1094,11 @@ export default function PullPage({ config, sidebarFilter, onPublishGroups }: Pro
               ),
             }}
           />
-        )}
+        </div>
+        <PageLoading
+          visible={loading && jobs.length === 0}
+          tip="正在读取拉取任务…"
+        />
       </div>
 
       <PullPreviewModal

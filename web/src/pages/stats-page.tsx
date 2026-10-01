@@ -713,51 +713,54 @@ export default function StatsPage({
            * 的备忘。
            */}
           <div className="table-scroll" ref={topWrapRef}>
-            {/* v0.6.21: top 榜单 loading 走 PageLoading 居中 spinner —— 灰块
-                骨架 shimmer「一闪一闪」,换成 spinner 更明确「在等接口」。
-                切时间窗时同样走 spinner(loading=true + 数据已存在 → 仍走
-                spinner,放在原表的位置上)。 */}
-            {loading && topItems.length === 0 ? (
-              <PageLoading tip="正在读取 Top 10 榜单…" />
-            ) : (
-              <Table<StatsTopItem>
-                /*
-                 * rowKey 必须**与 topBy 无关**。
-                 *
-                 * 早先写成 `topBy === 'tag' ? repo:tag : repo`：切换维度时同一个 record 的 key
-                 * 会变，React 无法正确协调，表现为**旧行留在 DOM 里** ——
-                 * 分页器显示"共 8 项"而 DOM 里有 16 行、`data-row-key` 重复，
-                 * 界面看到的就是"Tag 列错位/空白"，而且每切换一次就多留一批。
-                 * 用 \u0000 拼接：两种维度下都唯一，且切换维度时不变。
-                 */
-                rowKey={(record) => `${record.repository}\u0000${record.tag ?? ''}`}
-                size="middle"
-                columns={topColumns}
-                dataSource={topItems.slice(0, TOP_LIMIT)}
-                scroll={{ x: 800 }}
-                /*
-                 * v0.6.15 (UI-5): 移除 sticky。原来 `topWrapRef` 是为了
-                 * 「榜单自己滚、表头粘住」,现在榜单改用页面外层滚动,容器不再
-                 * 滚动,sticky 也就不需要 —— 留着只会调 topWrapRef.current
-                 * 报错(切维度时 ref 临时为 null)。
-                 */
-                /*
-                 * v0.6.15 (UI-5): 榜单只显示 Top 10。两条原因：
-                 *   1. 用户诉求 —— Top 10 足够看清热点，再多也是 1~2 次活动,
-                 *      看不出相对热度。
-                 *   2. `.table-scroll--bounded`（max-height 460px）下,15 项时表格
-                 *      内部出第二条竖向滚动条（页面外层还有一条）,嵌套滚动条
-                 *      操作别扭 —— Top 10 全部放得下,不再触发内层滚动。
-                 * 服务端依旧按 by 分组返回前若干条(目前接口不限),
-                 * 这里客户端切片 .slice(0, TOP_LIMIT) 是双保险:就算后端某天调大
-                 * 上限也不会突破本页"只看 Top 10"的约定。
-                 * 关闭分页器 —— Top 10 是硬上限,不存在「分页到第二页」,留着
-                 * 分页 UI 反而误导。
-                 */
-                pagination={false}
-                locale={{ emptyText: <Empty description="该时间窗内没有可排行的数据" /> }}
-              />
-            )}
+            {/*
+             * v0.6.22: 改成同时渲染 spinner + Table。`loading && topItems.length === 0`
+             * 才需要居中 spinner —— 切时间窗时已经显示旧数据,用 antd Table
+             * 自带半透层即可。
+             */}
+            <div hidden={loading && topItems.length === 0}>
+            <Table<StatsTopItem>
+              /*
+               * rowKey 必须**与 topBy 无关**。
+               *
+               * 早先写成 `topBy === 'tag' ? repo:tag : repo`：切换维度时同一个 record 的 key
+               * 会变，React 无法正确协调，表现为**旧行留在 DOM 里** ——
+               * 分页器显示"共 8 项"而 DOM 里有 16 行、`data-row-key` 重复,
+               * 界面看到的就是"Tag 列错位/空白"，而且每切换一次就多留一批。
+               * 用 \u0000 拼接：两种维度下都唯一，且切换维度时不变。
+               */
+              rowKey={(record) => `${record.repository}\u0000${record.tag ?? ''}`}
+              size="middle"
+              columns={topColumns}
+              dataSource={topItems.slice(0, TOP_LIMIT)}
+              scroll={{ x: 800 }}
+              /*
+               * v0.6.15 (UI-5): 移除 sticky。原来 `topWrapRef` 是为了
+               * 「榜单自己滚、表头粘住」,现在榜单改用页面外层滚动,容器不再
+               * 滚动,sticky 也就不需要 —— 留着只会调 topWrapRef.current
+               * 报错(切维度时 ref 临时为 null)。
+               */
+              /*
+               * v0.6.15 (UI-5): 榜单只显示 Top 10。两条原因：
+               *   1. 用户诉求 —— Top 10 足够看清热点，再多也是 1~2 次活动,
+               *      看不出相对热度。
+               *   2. `.table-scroll--bounded`（max-height 460px）下,15 项时表格
+               *      内部出第二条竖向滚动条（页面外层还有一条）,嵌套滚动条
+               *      操作别扭 —— Top 10 全部放得下,不再触发内层滚动。
+               * 服务端依旧按 by 分组返回前若干条(目前接口不限),
+               * 这里客户端切片 .slice(0, TOP_LIMIT) 是双保险:就算后端某天调大
+               * 上限也不会突破本页"只看 Top 10"的约定。
+               * 关闭分页器 —— Top 10 是硬上限,不存在「分页到第二页」,留着
+               * 分页 UI 反而误导。
+               */
+              pagination={false}
+              locale={{ emptyText: <Empty description="该时间窗内没有可排行的数据" /> }}
+            />
+            </div>
+            <PageLoading
+              visible={loading && topItems.length === 0}
+              tip="正在读取 Top 10 榜单…"
+            />
           </div>
         </div>
       ) : null}
@@ -801,9 +804,12 @@ export default function StatsPage({
             </span>
           </Space>
         </div>
-        {loading && clients.length === 0 ? (
-          <PageLoading tip="正在读取客户端列表…" />
-        ) : (
+        {/*
+           * v0.6.22: 同时渲染,Table hidden + PageLoading visible 协调。
+           * `loading && clients.length === 0` 是首屏场景;后续轮询走
+           * antd Table 自带半透层。
+           */}
+          <div hidden={loading && clients.length === 0}>
           <Table<StatsClientItem>
             rowKey="useragent"
             size="small"
@@ -817,7 +823,11 @@ export default function StatsPage({
             }}
             locale={{ emptyText: <Empty description="这个时间窗内还没收到任何事件" /> }}
           />
-        )}
+          </div>
+          <PageLoading
+            visible={loading && clients.length === 0}
+            tip="正在读取客户端列表…"
+          />
       </div>
 
       <Collapse
@@ -885,25 +895,31 @@ export default function StatsPage({
                   {' '}—— 服务重启就清空，也没有更早的历史。想看更早的请用上面的「见过的客户端」
                   （它落盘，重启不丢）。
                 </div>
-                {loading && events.length === 0 ? (
-                  <PageLoading tip="正在读取最近事件…" />
-                ) : (
-                  <Table<StatsEventItem>
-                    rowKey={(record) => `${record.at}-${record.id}`}
-                    size="small"
-                    columns={eventColumns}
-                    dataSource={events}
-                    scroll={{ x: 1000 }}
-                    pagination={{
-                      size: 'small',
-                      defaultPageSize: 10,
-                      pageSizeOptions: [10, 20, 50],
-                      showSizeChanger: true,
-                      showTotal: (total) => `共 ${total} 条`,
-                    }}
-                    locale={{ emptyText: <Empty description="还没收到任何事件" /> }}
-                  />
-                )}
+                {/*
+                 * v0.6.22: 同时渲染。`loading && events.length === 0` 才需要
+                 * 居中 spinner(后续轮询走 antd Table 自带半透层)。
+                 */}
+                <div hidden={loading && events.length === 0}>
+                <Table<StatsEventItem>
+                  rowKey={(record) => `${record.at}-${record.id}`}
+                  size="small"
+                  columns={eventColumns}
+                  dataSource={events}
+                  scroll={{ x: 1000 }}
+                  pagination={{
+                    size: 'small',
+                    defaultPageSize: 10,
+                    pageSizeOptions: [10, 20, 50],
+                    showSizeChanger: true,
+                    showTotal: (total) => `共 ${total} 条`,
+                  }}
+                  locale={{ emptyText: <Empty description="还没收到任何事件" /> }}
+                />
+                </div>
+                <PageLoading
+                  visible={loading && events.length === 0}
+                  tip="正在读取最近事件…"
+                />
               </>
             ),
           },

@@ -457,25 +457,30 @@ export default function CredentialsPage({ config, sidebarFilter, onPublishGroups
           ) : null}
 
           <div className="panel">
-            {/* v0.6.21: loading 走 PageLoading 居中 spinner —— 之前的灰块
-                骨架 shimmer「一闪一闪」,换成 spinner 更明确「在等接口」。 */}
-            {loading && credentials.length === 0 ? (
-              <PageLoading tip="正在读取凭据…" />
-            ) : (
-              <Table<Credential>
-                rowKey="id"
-                size="middle"
-                columns={columns}
-                dataSource={visibleCredentials}
-                pagination={false}
-                locale={{
-                  emptyText:
-                    credentials.length > 0
-                      ? '当前筛选下没有凭据，换个筛选条件试试'
-                      : '还没有凭据，点击右上「新增凭据」',
-                }}
-              />
-            )}
+            {/*
+             * v0.6.22: 同时渲染。`loading && credentials.length === 0` 才需要
+             * 居中 spinner(后续轮询走 antd Table 自带半透层)。
+             * Table hidden + PageLoading visible 协调,加载消失时淡出。
+             */}
+            <div hidden={loading && credentials.length === 0}>
+            <Table<Credential>
+              rowKey="id"
+              size="middle"
+              columns={columns}
+              dataSource={visibleCredentials}
+              pagination={false}
+              locale={{
+                emptyText:
+                  credentials.length > 0
+                    ? '当前筛选下没有凭据，换个筛选条件试试'
+                    : '还没有凭据，点击右上「新增凭据」',
+              }}
+            />
+            </div>
+            <PageLoading
+              visible={loading && credentials.length === 0}
+              tip="正在读取凭据…"
+            />
           </div>
         </>
       )}
