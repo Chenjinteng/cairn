@@ -9,6 +9,10 @@
   v0.5.38: 移除 fonts.googleapis.com / gstatic.com 外部链接,与 web/index.html 同步。
   原 preload + onload 兜底方案在受限网络里 Chromium 仍会同步等 woff2 超时(30s+),
   对离线部署是负优化,直接走 `font-family` 顶部声明的系统栈即可。
+
+  v0.6.13: 同步版本号到 0.6.13 + 「能力地图」加 sync 卡 + 「单二进制架构」
+  加 internal/sync(镜像同步与定时调度, 0.6.0 加 sync tasks, 0.6.11 加 cron
+  调度, 0.6.13 协议修复不影响 UI); 控制台 6 页面 → 7 页面。
 -->
 <style>
   :root {
@@ -426,7 +430,7 @@
       <h1 class="wordmark">Cairn<span class="dot">.</span></h1>
       <div class="tagline">Lightweight Container Image Infrastructure</div>
       <div class="tagline-cn">轻量级容器镜像基础设施平台</div>
-      <div class="version-badge">v<span data-cairn-version>0.6.11</span> · 单进程单二进制</div>
+      <div class="version-badge">v<span data-cairn-version>0.6.13</span> · 单进程单二进制</div>
       <div class="chips">
         <span class="chip">单进程单二进制</span>
         <span class="chip">scratch 镜像 ~15 MB</span>
@@ -453,8 +457,8 @@
     </p>
     <p class="body">
       Cairn 用 Go 从零实现 —— 单二进制、自带控制台、零外部依赖（数据库 / 消息队列 / Redis 全不要）。
-      覆盖 <code>docker push / pull / skopeo copy</code> 的全 roundtrip,日常运维走 6 个内置页面
-      （镜像列表 / 拉取 / 热度 / 凭据 / 代理 / 设置）即可。
+      覆盖 <code>docker push / pull / skopeo copy</code> 的全 roundtrip,日常运维走 7 个内置页面
+      （镜像列表 / 拉取 / 热度 / 凭据 / 代理 / 设置 / 镜像同步）即可。
     </p>
   </section>
 
@@ -512,6 +516,11 @@
         <div class="card-detail">从上游 registry 拉取镜像:FIFO 队列、单并发执行、可协作式取消;进度用 ring buffer 限制内存占用。</div>
       </div>
       <div class="card">
+        <div class="card-tag">sync</div>
+        <div class="card-title">镜像同步</div>
+        <div class="card-detail">cairn↔cairn 或 cairn→其他 V2 registry 的镜像复制:glob include 过滤(每行一个,空匹配全部)、单次执行 + 每任务挂多条 cron 调度;引擎复用 v0.6.0 拉取队列,UI「同步」页直接看正在拉哪个 (repo:tag)。</div>
+      </div>
+      <div class="card">
         <div class="card-tag">AES-256-GCM</div>
         <div class="card-title">凭据与代理</div>
         <div class="card-detail">凭据加密落盘(密钥来自 <code>REGISTRY_CREDENTIAL_KEY</code>),支持 Docker Hub / ghcr.io / quay.io 等的 Bearer 令牌流程(含无 scope token);代理库独立成表。</div>
@@ -529,7 +538,7 @@
       <div class="card">
         <div class="card-tag">React · AntD</div>
         <div class="card-title">控制台</div>
-        <div class="card-detail">镜像列表 / 镜像拉取 / 镜像热度 / 凭据管理 / 代理管理 / 设置 —— 6 个页面覆盖日常运维。</div>
+        <div class="card-detail">镜像列表 / 镜像拉取 / 镜像热度 / 凭据管理 / 代理管理 / 设置 / 镜像同步 —— 7 个页面覆盖日常运维。</div>
       </div>
     </div>
   </section>
@@ -549,7 +558,7 @@
       </div>
       <div class="arch-row">
         <div class="arch-key">internal/</div>
-        <div class="arch-val">registry(协议与存储) · pull(拉取队列) · stats(热度) · credentials · proxies · webhook</div>
+        <div class="arch-val">registry(协议与存储) · pull(拉取队列) · stats(热度) · credentials · proxies · webhook · sync(镜像同步与定时调度)</div>
       </div>
       <div class="arch-row">
         <div class="arch-key">/app/data</div>
@@ -624,7 +633,7 @@ curl -fsS http://localhost:8787/healthz</pre>
       <a class="link-card" href="/">
         <div class="link-title">管理控制台</div>
         <div class="link-path">/</div>
-        <div class="link-desc">镜像列表 / 镜像拉取 / 镜像热度 / 凭据管理 / 代理管理 / 设置 —— 六个页面覆盖日常运维。</div>
+        <div class="link-desc">镜像列表 / 镜像拉取 / 镜像热度 / 凭据管理 / 代理管理 / 设置 / 镜像同步 —— 七个页面覆盖日常运维。</div>
       </a>
     </div>
     <div class="foot-note">设计资产(<code>docs/design/*.html</code>)、路线图(<code>docs/ROADMAP.md</code>)、韧性轮问题清单(<code>docs/resilience.md</code>)、变更日志(<code>CHANGELOG.md</code>)、贡献指南(<code>CONTRIBUTING.md</code>)、行为准则(<code>CODE_OF_CONDUCT.md</code>)与许可证(<code>LICENSE</code>)随源码仓库分发,不在本运行实例内。</div>
@@ -635,7 +644,7 @@ curl -fsS http://localhost:8787/healthz</pre>
     <span>
       <a href="https://github.com/Chenjinteng/cairn" target="_blank" rel="noopener">⭐ GitHub · github.com/Chenjinteng/cairn</a>
     </span>
-    <span>v<span data-cairn-version>0.6.11</span> · <a href="/">管理控制台 →</a></span>
+    <span>v<span data-cairn-version>0.6.13</span> · <a href="/">管理控制台 →</a></span>
   </footer>
 
 </div>
