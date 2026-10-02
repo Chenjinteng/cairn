@@ -23,6 +23,7 @@ package api
 
 import (
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -158,12 +159,26 @@ func splitLastSegment(rest, marker string) (repo, tail string, ok bool) {
 //
 // Copy of registryd.injectRouteParams kept local to avoid widening that
 // package's exported surface for one consumer.
+//
+// v0.7.1 fix: each value is run through url.PathUnescape before being added
+// to the route context. chi preserves %2F in r.URL.RawPath when the request
+// had any escape that the decoder couldn't fold, and that literal %2F was
+// flowing straight into filesystem paths — so a request for
+// /api/repositories/mcr.microsoft.com%2Fplaywright/.../export would try to
+// read "repos/mcr.microsoft.com%2Fplaywright/...", which does not exist
+// (the real dir is "repos/mcr.microsoft.com/playwright/..."). PathUnescape
+// is a no-op when there is no %XX sequence, so single-segment values like
+// tags / digests are unaffected.
 func injectRouteParams(r *http.Request, kv ...string) {
 	rctx := chi.RouteContext(r.Context())
 	if rctx == nil {
 		return
 	}
 	for i := 0; i+1 < len(kv); i += 2 {
-		rctx.URLParams.Add(kv[i], kv[i+1])
+		v := kv[i+1]
+		if u, err := url.PathUnescape(v); err == nil {
+			v = u
+		}
+		rctx.URLParams.Add(kv[i], v)
 	}
 }

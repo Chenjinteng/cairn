@@ -6,6 +6,34 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.1] - 2026-10-02
+
+本轮是 v0.7.0 release-blocker 的 hotfix —— 用户在 UAT 158 上验证 tar 导出时,
+含 `/` 的仓库名(如 `mcr.microsoft.com/playwright`)大文件下载 0 字节,小文件
+(`alpine`、`openssl` 等单段)正常。属缺陷修复 → 小版本进位 0.7.1。
+
+### 修复
+
+- **后端 · `/api/repositories/{repo}/...` 大文件下载返 0 字节**。`internal/api/dispatch.go` 的
+  `injectRouteParams` 加 `url.PathUnescape` 兜底:chi 在 `r.URL.RawPath` 非空时保留 `%2F` 字面值,
+  之前的 `dispatch → splitGetExport → injectRouteParams(repo 字面值)` 链路把 `%2F` 字面推进
+  chi RouteContext,handler 拼路径(`/app/data/registry/repos/mcr.microsoft.com%2Fplaywright/...`)
+  在磁盘上不存在(`os.ErrNotExist` → `ErrNotFound`),`ExportTar` 立刻 return err,而
+  handler 已经先 `WriteHeader(200)` 写过头了,只能 slog + 截断,浏览器拿到 0 字节。
+  `url.PathUnescape` 对没有 `%XX` 序列的 value 是 noop,单段 tag / digest 不受影响。
+  Registry 协议侧(`/v2/*`)用同名模式但 client 不会把 `/` 编码成 `%2F`,没暴露过这问题,
+  本轮先不动。
+
+### 新增
+
+- **单测 · dispatch %2F 解码**(v0.7.1)。`internal/api/dispatch_test.go`(新文件):
+  - `TestSplitGetExport` —— 7 个子用例覆盖单段 / 双段 / `%2F` 编码 / 三段编码 / 缺尾 / 多段 tag / 空 tag。
+  - `TestInjectRouteParams_DecodesPercentEncodedValues` —— `%2F` repo 经 injectRouteParams 后 chi.URLParam 拿到解码值。
+  - `TestInjectRouteParams_LeavesPlainValuesUnchanged` —— `library/alpine` 等已解码值原样穿透。
+  - `TestInjectRouteParams_ToleratesInvalidEscape` —— `x%ZZ` 这类畸形 escape 静默保留,dispatcher 不 panic。
+
+---
+
 ## [0.7.0] - 2026-10-02
 
 本轮是 UI-6b 议题(从页面直接把镜像下载为 tar)的落地 —— UI-6b 当时(2026-10-01)用户拍板暂缓,等触发条件再说;今天用户拍板「做」并明确了 chip 默认 amd64 的口径,就开始干。属新增能力 → 中版本进位 0.7.0(主版本 / 中版本由人指定)。
