@@ -6,6 +6,22 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.9] - 2026-10-03
+
+本轮在「即将创建拉取任务」弹窗加「拉取架构」预览项,让用户入队前就能看明白
+这次任务会下哪些架构,免得任务跑起来才发现 arm64 没拉到。属既有 UI 增强 →
+小版本进位 0.7.9。
+
+### 新增
+
+- **前端 · 拉取预览 Modal 加「拉取架构」Descriptions 项**(v0.7.9)。`web/src/pages/pull-page.tsx`:
+  - `PullPreviewModal` 内调 `useAppConfig()`,读 `config.mutable.pullPlatforms`
+  - CSV 解析 → `["linux/amd64", "linux/arm64"]`,显示 `linux/amd64, linux/arm64`
+  - 空设置显示「未限制」+ Tooltip「等于拉所有架构」
+  - 边角加「跟设置页「拉取镜像的架构」同步」提示文字,引导用户去设置页改
+
+---
+
 ## [0.7.8] - 2026-10-03
 
 本轮把 v0.7.4「每分钟」和 v0.7.5「每 N 分钟」两档合成单一「每()分钟」档——

@@ -1179,6 +1179,18 @@ function PullPreviewModal({
   onCancel: () => void;
   submitting: boolean;
 }) {
+  // v0.7.8: 跟设置页 pullPlatforms 共享同一份 Mutable —— 弹窗预览
+  // 「这次拉取实际要哪些架构」让用户入队前就能看明白,免得跑起来才发现
+  // arm64 child 没下(arm/v6 / arm/v7 同理 — chip 没勾就没拉到)。
+  const { config } = useAppConfig();
+  const pullPlatformsText = (() => {
+    const csv = config?.mutable?.pullPlatforms ?? '';
+    return csv
+      .split(',')
+      .map((s: string) => s.trim())
+      .filter(Boolean);
+  })();
+
   const [probeResult, setProbeResult] = useState<
     | { state: 'idle' }
     | { state: 'loading' }
@@ -1322,6 +1334,24 @@ function PullPreviewModal({
                   未配置（匿名访问本仓库）
                 </span>
               )}
+            </Descriptions.Item>
+            {/* v0.7.8: 拉取架构预览 —— 与设置页「拉取镜像的架构」chip 同源
+                 (config.mutable.pullPlatforms)。空 = 「未限制」(拉所有架构);
+                 非空 = 列出实际要下的 child manifest 集合。要改得去设置页,
+                 这边只展示,不入队前用户就看得明白。 */}
+            <Descriptions.Item label="拉取架构">
+              {pullPlatformsText.length === 0 ? (
+                <Tooltip title="未限制(等于拉所有架构 —— 上游 image index 列出的每个 child 都会下)">
+                  <span style={{ color: 'var(--color-text-3)' }}>未限制</span>
+                </Tooltip>
+              ) : (
+                <Tooltip placement="topLeft" title={pullPlatformsText.join(', ')}>
+                  <span className="mono">{pullPlatformsText.join(', ')}</span>
+                </Tooltip>
+              )}
+              <span style={{ marginLeft: 8, color: 'var(--color-text-3)' }}>
+                跟设置页「拉取镜像的架构」同步
+              </span>
             </Descriptions.Item>
           </Descriptions>
 
