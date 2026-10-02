@@ -59,3 +59,7 @@ go.work.sum
 /.scrub-mailmap
 /.tmp_*.sh
 /.git.bak-pre-filter-repo
+
+# v0.6.27 cleanup: 旧命名残留 + 一次性编辑日志
+/.go-hub-smoke-*
+/.cairn-edit.log
