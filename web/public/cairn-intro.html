@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Cairn — 产品介绍 / Product Overview</title>
-<meta name="description" content="Cairn(cairn)产品介绍 —— 轻量级容器镜像基础设施平台:单进程单二进制,完整实现 Docker Registry HTTP API V2,自带管理控制台。">
+<meta name="description" content="Cairn(cairn)产品介绍 —— 轻量级容器镜像基础设施平台:单进程单二进制,完整实现 Docker Registry HTTP API V2,自带管理控制台,支持镜像拉取 / 同步 / docker-save 兼容 tar 导出。">
 <!--
   v0.5.38: 移除 fonts.googleapis.com / gstatic.com 外部链接,与 web/index.html 同步。
   原 preload + onload 兜底方案在受限网络里 Chromium 仍会同步等 woff2 超时(30s+),
@@ -13,6 +13,10 @@
   v0.6.13: 同步版本号到 0.6.13 + 「能力地图」加 sync 卡 + 「单二进制架构」
   加 internal/sync(镜像同步与定时调度, 0.6.0 加 sync tasks, 0.6.11 加 cron
   调度, 0.6.13 协议修复不影响 UI); 控制台 6 页面 → 7 页面。
+
+  v0.7.0: 「能力地图」加 export 卡(镜像 tar 导出,镜像列表抽屉下载图标 → 流式
+  docker-save 兼容 tar,等价于 docker pull + docker save 但不依赖 docker daemon);
+  footer fallback 版本号 0.6.14 → 0.7.0; meta description 加「tar 导出」描述。
 -->
 <style>
   :root {
@@ -511,6 +515,11 @@
         <div class="card-detail">按仓库 / tag 浏览 digest、架构、层数、体积与构建时间;删除按 digest 执行,执行前先列出同一 digest 的全部 tag 影响面。</div>
       </div>
       <div class="card">
+        <div class="card-tag">export</div>
+        <div class="card-title">镜像 tar 导出</div>
+        <div class="card-detail">抽屉里点下载图标 → 流式吐 <code>docker save</code> 兼容的 tar(<code>manifest.json</code> + <code>repositories</code> + <code><config>.json</code> + <code><layer>.tar</code>),等价于「<code>docker pull</code> + <code>docker save</code>」两步但全程在 cairn 进程内完成,不依赖 docker daemon、不落中间镜像层。整条链路流式 64 KiB chunk 复制,cairn 不把整层装进内存,大镜像(几 GB)也能下;客户端中途断开走 ctx 取消干净退出。多平台 image index 默认按 amd64 选子 manifest,arm64 加 <code>?platform=linux/arm64</code>。</div>
+      </div>
+      <div class="card">
         <div class="card-tag">queue</div>
         <div class="card-title">拉取队列</div>
         <div class="card-detail">从上游 registry 拉取镜像:FIFO 队列、单并发执行、可协作式取消;进度用 ring buffer 限制内存占用。</div>
@@ -644,7 +653,7 @@ curl -fsS http://localhost:8787/healthz</pre>
     <span>
       <a href="https://github.com/Chenjinteng/cairn" target="_blank" rel="noopener">⭐ GitHub · github.com/Chenjinteng/cairn</a>
     </span>
-    <span>v<span data-cairn-version>0.6.14</span> · <a href="/">管理控制台 →</a></span>
+    <span>v<span data-cairn-version>0.7.0</span> · <a href="/">管理控制台 →</a></span>
   </footer>
 
 </div>
