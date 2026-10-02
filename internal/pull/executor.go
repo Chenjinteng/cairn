@@ -536,22 +536,58 @@ func (p *sourcePlatformRef) key() string {
 
 // matchAny reports whether this platform's key appears in the allow-list.
 // An empty allow-list means "all platforms" (no filter).
+//
+// v0.7.1: comparison is on (os, architecture) only — variant is ignored.
+// The upstream registry always populates variant="v8" on arm64 and "v7"
+// on arm/v7, but the settings chip writes bare "linux/arm64" / "linux/arm".
+// Strict "os/arch/variant" equality would silently filter arm64 out, which
+// is exactly what happened before this fix (cairn only pulled amd64 even
+// when both were selected). arm64v8 / armv7 are conceptually the same
+// architecture as arm64 / arm from the operator's perspective, so we
+// match by (os, arch) and trust the registry's variant annotation as a
+// diagnostic only.
 func (p *sourcePlatformRef) matchAny(allow []string) bool {
 	if len(allow) == 0 {
 		return true
 	}
-	k := p.key()
-	if k == "" {
+	if p == nil {
 		// No platform info at all: keep it. Better to pull an "unknown"
 		// child than to silently drop the only manifest the registry gave.
 		return true
 	}
+	os := strings.ToLower(strings.TrimSpace(p.OS))
+	arch := strings.ToLower(strings.TrimSpace(p.Architecture))
+	if os == "" || arch == "" {
+		// Partial platform info: keep rather than drop. Symmetric with
+		// the all-empty case above.
+		return true
+	}
 	for _, a := range allow {
-		if a == k {
+		aOs, aArch := splitAllowToken(a)
+		if aOs == "" || aArch == "" {
+			continue
+		}
+		if aOs == os && aArch == arch {
 			return true
 		}
 	}
 	return false
+}
+
+// splitAllowToken parses one allow-list entry into its (os, arch) halves,
+// ignoring a trailing variant segment. "linux/arm64/v8" and "linux/arm64"
+// both produce ("linux", "arm64"). Empty or malformed tokens produce
+// ("", "") and the caller skips them.
+func splitAllowToken(s string) (os, arch string) {
+	parts := strings.Split(strings.ToLower(strings.TrimSpace(s)), "/")
+	switch len(parts) {
+	case 2:
+		return parts[0], parts[1]
+	case 3:
+		return parts[0], parts[1]
+	default:
+		return "", ""
+	}
 }
 
 func decodeSourceDoc(raw []byte) (sourceManifestDoc, error) {

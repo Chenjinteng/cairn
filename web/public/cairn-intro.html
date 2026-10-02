@@ -22,6 +22,11 @@
   走 `/api/repositories/{repo}/tags/{tag}/export` 时,浏览器发请求 URL 含 `%2F`,
   chi 保留 `%2F` 字面值,dispatch 注入 RouteContext 后续拼路径找不到,导致大文件
   download 0 字节。injectRouteParams 加 url.PathUnescape 兜底。
+
+  v0.7.2: hotfix 修 multi-arch pull 漏 arm64 —— 设置页勾选 amd64 + arm64 但实际只拉到 amd64。
+  Docker Hub 上 arm64 child 的 platform 字段是 `{architecture:"arm64", variant:"v8"}`,
+  而 chip 写的是 `linux/arm64`(无 variant),原 matchAny 严格按 `os/arch/variant` 精确比较,
+  arm64 永远被过滤。改成 `(os, arch)` 二元比较,variant 忽略。
 -->
 <style>
   :root {

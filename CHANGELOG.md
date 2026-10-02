@@ -6,6 +6,39 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.2] - 2026-10-02
+
+本轮是 v0.7.0 multi-arch pull 路径上的 release-blocker hotfix —— 用户在 158 UAT 上勾选
+`linux/amd64 + linux/arm64` 后实际只拉到 amd64。属缺陷修复 → 小版本进位 0.7.2。
+
+### 修复
+
+- **后端 · `internal/pull/executor.go` `matchAny` 严格按 `os/arch/variant` 精确比较,arm64 child
+  永远被过滤**。Docker Hub / OCI registry 推上来的 image index 里:
+  - `arm64` child 的 platform 字段是 `{architecture:"arm64", os:"linux", variant:"v8"}`
+  - `arm/v7` 是 `{architecture:"arm", os:"linux", variant:"v7"}`
+  - 只有 `amd64` 是 `{architecture:"amd64", os:"linux"}`(variant 空)
+  而设置页 chip 只填 `linux/arm64` / `linux/arm`,原 `matchAny` 严格用 `key()` 生成
+  `linux/arm64/v8` 再做 string equality,**永远 ≠ `linux/arm64`** → 走 matchAny 的 continue 跳过,
+  plan.children 只剩 amd64 child,直接挂 tag 成单平台。修法:把匹配改成 `(os, architecture)`
+  二元比较,variant 完全忽略。语义上 `linux/arm64` 就是「架构是 arm64,不管 v8 不 v8」;
+  旧测试 `TestPlatformMatchAny` 假设 `linux/arm` ≠ `linux/arm/v7` 的语义被替换,新测试断言
+  忽略 variant 是设计意图。
+- **导出兼容**(顺带):`splitAllowToken` 解析允许列表 token 时同样忽略 trailing variant 段,
+  `linux/arm64` 和 `linux/arm64/v8` 视为同一条目,docker save 出来的 tar 是单平台(plan.children
+  只有 1 个时直接挂 child manifest,不走合成 index 的路径)。
+
+### 新增
+
+- **单测**(v0.7.2)。`internal/pull/executor_test.go`:
+  - `TestPlatformMatchAny`(替换) —— 12 个断言覆盖 arm64v8/armv7/amd64/ppc64le 跟
+    `[linux/amd64, linux/arm64]` 的匹配矩阵;特别包含 `[amd64, arm64]` 必须同时选中
+    amd64 + arm64/v8 这条**回归断言**。
+  - `TestSplitAllowToken`(新) —— 8 个 case 覆盖 `linux/amd64` / `linux/arm64/v8` / 大小写 /
+    多余段 / 空字符串的归一化行为。
+
+---
+
 ## [0.7.1] - 2026-10-02
 
 本轮是 v0.7.0 release-blocker 的 hotfix —— 用户在 UAT 158 上验证 tar 导出时,

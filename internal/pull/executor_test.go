@@ -116,24 +116,87 @@ func TestPlatformKey(t *testing.T) {
 	}
 }
 
+// TestPlatformMatchAny covers the (os, arch)-only matching that
+// matchAny uses after v0.7.1. Variant is intentionally ignored: the
+// upstream always populates variant="v8" on arm64 and "v7" on armv7,
+// but the settings chip writes bare "linux/arm64" / "linux/arm". A
+// strict os/arch/variant comparison would silently filter arm64 out.
 func TestPlatformMatchAny(t *testing.T) {
-	p := &sourcePlatformRef{OS: "linux", Architecture: "arm", Variant: "v7"}
-	if !p.matchAny(nil) {
+	// arm64v8 is the registry's normal arm64 — variant "v8" must NOT
+	// disqualify it from matching the chip's "linux/arm64" token.
+	arm64 := &sourcePlatformRef{OS: "linux", Architecture: "arm64", Variant: "v8"}
+	if !arm64.matchAny(nil) {
 		t.Fatal("empty allow-list should match everything")
 	}
-	if !p.matchAny([]string{"linux/arm/v7"}) {
-		t.Fatal("exact key should match")
+	if !arm64.matchAny([]string{"linux/arm64"}) {
+		t.Fatal("linux/arm64 must match arm64/v8 — variant is ignored by design")
 	}
-	if p.matchAny([]string{"linux/amd64"}) {
+	if !arm64.matchAny([]string{"linux/arm64/v8"}) {
+		t.Fatal("explicit-variant allow token still matches arm64/v8")
+	}
+	if arm64.matchAny([]string{"linux/amd64"}) {
 		t.Fatal("non-matching arch must not match")
 	}
-	if p.matchAny([]string{"linux/arm"}) {
-		t.Fatal("variant is part of the key; linux/arm must not match linux/arm/v7")
+
+	// arm/v7 must match the bare "linux/arm" chip token (the operator
+	// probably doesn't care about v7 vs v6, just arch).
+	armv7 := &sourcePlatformRef{OS: "linux", Architecture: "arm", Variant: "v7"}
+	if !armv7.matchAny([]string{"linux/arm"}) {
+		t.Fatal("linux/arm must match arm/v7 — variant is ignored by design")
 	}
-	// No platform info at all: keep it (better to pull an unknown than drop
-	// the only manifest the upstream gave us).
+	if armv7.matchAny([]string{"linux/arm64"}) {
+		t.Fatal("arm/v7 must NOT match arm64 — different arch")
+	}
+
+	// amd64 has no variant; the old and new semantics both match.
+	amd64 := &sourcePlatformRef{OS: "linux", Architecture: "amd64"}
+	if !amd64.matchAny([]string{"linux/amd64"}) {
+		t.Fatal("linux/amd64 must match amd64 (no variant)")
+	}
+
+	// Multiple tokens in the allow-list: amd64 + arm64 must select both.
+	both := []string{"linux/amd64", "linux/arm64"}
+	if !amd64.matchAny(both) {
+		t.Fatal("amd64 must be selected by [amd64, arm64]")
+	}
+	if !arm64.matchAny(both) {
+		t.Fatal("arm64/v8 must be selected by [amd64, arm64] — this is the v0.7.0 regression")
+	}
+	ppc64le := &sourcePlatformRef{OS: "linux", Architecture: "ppc64le"}
+	if ppc64le.matchAny(both) {
+		t.Fatal("ppc64le must NOT be selected by [amd64, arm64]")
+	}
+
+	// No platform info at all: keep it (better to pull an unknown than
+	// drop the only manifest the upstream gave us).
 	if !((&sourcePlatformRef{}).matchAny([]string{"linux/amd64"})) {
 		t.Fatal("no-platform ref should be kept even when allow-list is non-empty")
+	}
+}
+
+// TestSplitAllowToken covers the small parser that matchAny uses to
+// normalise a chip entry into its (os, arch) halves.
+func TestSplitAllowToken(t *testing.T) {
+	cases := []struct {
+		in         string
+		wantOS     string
+		wantArch   string
+	}{
+		{"linux/amd64", "linux", "amd64"},
+		{"linux/arm64", "linux", "arm64"},
+		{"linux/arm64/v8", "linux", "arm64"}, // variant stripped
+		{"linux/arm/v7", "linux", "arm"},
+		{"  LINUX/ARM64  ", "linux", "arm64"},
+		{"", "", ""},
+		{"linux", "", ""},
+		{"linux/amd64/extra/junk", "", ""},
+	}
+	for _, c := range cases {
+		os, arch := splitAllowToken(c.in)
+		if os != c.wantOS || arch != c.wantArch {
+			t.Errorf("splitAllowToken(%q) = (%q, %q), want (%q, %q)",
+				c.in, os, arch, c.wantOS, c.wantArch)
+		}
 	}
 }
 
