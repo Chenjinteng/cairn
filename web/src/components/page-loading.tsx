@@ -25,6 +25,17 @@
  * 用户期望:蒙板是**完全覆盖**在 panel 上的不透明背景层,跟 panel
  * 背景色一致,中间是 spinner + tip。fade 时是 opacity 1→0 的整体
  * 透明(不是「缩小消失」)。
+ *
+ * v0.6.28: 加 `delay` prop —— visible=true 后等 `delay` 毫秒才真的渲染蒙板。
+ * delay 窗口内 visible 又变回 false(数据来得比 delay 快),延迟定时器被
+ * 取消,蒙板根本不弹。这是 NProgress / React Query 的标准做法:
+ * 快接口(<200ms)不闪 spinner,慢接口(>200ms)才弹,真卡住的页面永弹。
+ * 主要解决 v0.6.27 prefetch 仍未生效的边界场景(用户比 prefetch 完成得
+ * 还快 → initialTasks=null → loading=true → PageLoading 闪)。
+ *
+ * 默认 200ms:本地 cairn 后端的 stats 5 路并发 + sync 列表接口
+ * 单次都在 200ms 内能回来,这个阈值能盖住本地常见场景;公网部署
+ * 仍可在调用方显式 `delay={0}` 退回旧行为。
  */
 
 import { Spin } from 'antd';
@@ -35,6 +46,13 @@ export interface PageLoadingProps {
   visible: boolean;
   /** 加载文案;默认「加载中…」 */
   tip?: string;
+  /**
+   * 延迟显示时长(毫秒)。`visible` 从 false 变 true 后,等这么久才真正
+   * 渲染蒙板;delay 窗口内若 visible 又变回 false,延迟定时器被取消,
+   * 蒙板根本不弹出来 —— 避免「闪一下」。默认 200ms。设 0 = 旧行为
+   * (visible=true 立刻弹,跟 v0.6.27 一样)。
+   */
+  delay?: number;
   /**
    * 最短展示时间(毫秒)。`visible` 从 true 变 false 时,至少再展示这么久才开始淡出。
    * 默认 250ms。设 0 = 接口一回来立刻开始淡出。
@@ -47,43 +65,100 @@ export interface PageLoadingProps {
 export default function PageLoading({
   visible,
   tip = '加载中…',
+  delay = 200,
   minDuration = 250,
   fadeDuration = 350,
 }: PageLoadingProps) {
   /**
    * 状态机:
-   *   shown=true,  hiding=false  → 正常展示(opacity 1,覆盖在内容之上)
-   *   shown=true,  hiding=true   → 淡出中(opacity 1→0,持续 fadeDuration ms)
-   *   shown=false                → 已卸载(返回 null)
+   *   shown=false                       → 不渲染(返回 null)
+   *   shown=true,  hiding=false         → 正常展示(opacity 1,覆盖在内容之上)
+   *   shown=true,  hiding=true          → 淡出中(opacity 1→0,持续 fadeDuration ms)
+   *
+   * v0.6.28: shown 初值由 `useState<boolean>(visible)` 改成 `false`,因为加了
+   * delay —— 哪怕 visible 一上来就是 true,也要等 delay 才渲染,否则跟没加
+   * delay 没区别。
+   *
+   * shownRef 用来在闭包内追踪当前是否已「真出现」(v0.6.28):visible=true →
+   * 进入 effect 时如果已经 shown,就不要再走一次「等 delay 再起」的逻辑(避免
+   * visible=true→false→true 短时间内反复切时把已经在展示的 spinner 又藏一次)。
    */
-  const [shown, setShown] = useState<boolean>(visible);
+  const [shown, setShown] = useState<boolean>(false);
   const [hiding, setHiding] = useState<boolean>(false);
+  const shownRef = useRef<boolean>(false);
+  /**
+   * v0.6.28: 单独的 delay 定时器 ref —— 不放进 timersRef,因为它在 visible=false
+   * 切换时(数据回来太快)需要单独取消来取消,防止「延迟完了之后才弹」。分离之后
+   * 语义更清晰。
+   */
+  const delayTimerRef = useRef<number | null>(null);
   const timersRef = useRef<number[]>([]);
 
   useEffect(() => {
+    /*
+     * 进入 effect 第一件事:清掉所有挂起的定时器。
+     * - delayTimerRef:上一次 visible=true 触发的「等 delay 才弹」定时器。
+     *   这次 visible 翻成 false 就取消它,避免「延迟窗口内刚弹出来」。
+     * - timersRef:minDuration + fadeDuration 的隐藏链定时器。
+     *   同理,visible 再翻回 true 时取消隐藏链,避免「蒙板已经要消失了又被拽回来」。
+     */
+    if (delayTimerRef.current !== null) {
+      window.clearTimeout(delayTimerRef.current);
+      delayTimerRef.current = null;
+    }
     timersRef.current.forEach((t) => window.clearTimeout(t));
     timersRef.current = [];
 
     if (visible) {
-      setShown(true);
       setHiding(false);
+      if (shownRef.current) {
+        // 已经在展示中(visible=true 期间 deps 变了,例如 delay 调整),什么都不做。
+        return;
+      }
+      if (delay > 0) {
+        delayTimerRef.current = window.setTimeout(() => {
+          delayTimerRef.current = null;
+          shownRef.current = true;
+          setShown(true);
+        }, delay);
+      } else {
+        shownRef.current = true;
+        setShown(true);
+      }
       return;
     }
 
-    const minTimer = window.setTimeout(() => {
-      setHiding(true);
-      const fadeTimer = window.setTimeout(() => {
-        setShown(false);
-      }, fadeDuration);
-      timersRef.current.push(fadeTimer);
-    }, minDuration);
-    timersRef.current.push(minTimer);
+    // visible=false:决定要不要走「已经在展示 → 走 minDuration 淡出」流程。
+    // delay 窗口内 visible 又翻 false(数据 < delay ms 就回):shownRef 仍是 false,
+    // 蒙板根本没渲染,直接跳过整个 hide 链。
+    if (shownRef.current) {
+      shownRef.current = false;
+      const minTimer = window.setTimeout(() => {
+        setHiding(true);
+        const fadeTimer = window.setTimeout(() => {
+          setShown(false);
+        }, fadeDuration);
+        timersRef.current.push(fadeTimer);
+      }, minDuration);
+      timersRef.current.push(minTimer);
+    }
+  }, [visible, delay, minDuration, fadeDuration]);
 
+  /*
+   * 卸载时清掉所有挂起定时器。effect 主体的 cleanup 函数只在 deps 变化时
+   * 跑,卸载时跑不到(那个分支 visible=false 时才返回 cleanup,而 visible=true
+   时没返回),所以这里单独跑一个 mount → return cleanup 的 effect 兜底。
+   */
+  useEffect(() => {
     return () => {
+      if (delayTimerRef.current !== null) {
+        window.clearTimeout(delayTimerRef.current);
+        delayTimerRef.current = null;
+      }
       timersRef.current.forEach((t) => window.clearTimeout(t));
       timersRef.current = [];
     };
-  }, [visible, minDuration, fadeDuration]);
+  }, []);
 
   if (!shown) return null;
 

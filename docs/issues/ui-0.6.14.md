@@ -250,6 +250,7 @@
 - 第八轮 UAT 反馈（深色模式 spinner 撞色 + fixed-right 列漏出蒙板）→ **0.6.24**
 - 第九轮 UAT 反馈（切到 sync/stats 整页刷新一次）→ **0.6.26**
 - 第十轮 UAT 反馈（首次进入 sync/stats 仍闪蒙板 → App mount 后台预取）→ **0.6.27**
+- 第十一轮 UAT 反馈（清缓存刷新 sync/stats 仍闪 → PageLoading 加 delay prop，延迟窗口内数据回来则不弹蒙板）→ **0.6.28**
 - UI-6b → **暂缓**（详见下文）
 
 > **不进位的原因**：用户认为这两项是「既有 UI 一致性收尾」的延续，不构成 AGENTS.md 所说的"新增模块"或"破坏性变化"——后者才必须进中版本。AI 尊重用户拍板，但本拍板记录在文档里留作 context，下次类似口径分歧时翻这段作为判例。
@@ -265,3 +266,33 @@
 **重启条件**（任一）：
 - 用户明确给出"为什么必须 cairn 端流式生成 tar"的场景；
 - 至少出现 1 次真实 UAT 用户用 `docker pull` + `docker save` 流程碰到障碍。
+
+### 拍板记录（2026-10-02 · 第十一轮 UAT 反馈）
+
+**症状**：清缓存刷新后访问「镜像热度 / 镜像同步」页面，仍能看到一闪而过的 PageLoading 蒙板。其他页面（凭据 / 代理 / 拉取 / 镜像列表）单 fetch 路径，刷不出来蒙板的现象不明显。
+
+**结构差异分析**（AI 给出的两条根因）：
+
+1. **同步页有 3s 轮询**（`refresh()` 每 3s 跑一次把 running 追成 success/failed）—— 但 `refresh()` 内部只 `setLoading(false)` 不 `setLoading(true)`，所以轮询本身不会让 `visible` 翻转蒙板。**不是根因**。
+2. **热度页有 5 路并发 fetch**（summary/top/series/events/clients）—— 比单 fetch 路径重，比 prefetch 同步路径 `cachedStatsData` 触发的更新慢一拍。但 5 路并发在同一后端上也只多花一倍带宽开销，<200ms 能完。
+
+**真正根因**：v0.6.27 把 sync/stats 的数据提升到 App 层缓存并加了 `useEffect(..., [])` 后台预取，但用户刷新后点页面的速度**比 6 路 prefetch 完成还要快**（点击的瞬间 prefetch 仍在飞），于是：
+
+- page mount 时 `initialTasks=[]` / `initialData=null`
+- `loading=true` → PageLoading `visible=true` → 立刻弹蒙板
+- 页面 useEffect 跑自己的 fetch（如果 prefetch 没抢到，回来时间会偏慢）
+- 即便 prefetch 抢先填了 App 缓存，page 已经 mount 完，props 不会再更新
+
+**拍板修法**（用户 2026-10-02「好」）：v0.6.28 给 PageLoading 加 `delay` prop（默认 200ms），`visible` 翻 true 后等 delay 才渲染蒙板；delay 窗口内 visible 又翻回 false（数据 < 200ms 就回），延迟定时器被取消，蒙板根本不弹。**NProgress / React Query 的标准做法**：
+
+- 快接口（<200ms，本地 cairn 后端常态）→ 不弹蒙板
+- 慢接口（>200ms，公网 / 慢存储）→ 弹蒙板
+- 真卡住 → 永远弹
+
+**为什么不动 prefetch / 不动 page fetch**：prefetch 已经覆盖了「正常点击节奏」（用户点开页面比 prefetch 完成稍晚一拍），sync/stats 多数情况已经走 initialTasks/initialData=非空分支不走蒙板。delay 是给「用户比 prefetch 还快」的极端场景兜底，两者互补不是替代。
+
+**为什么默认 200ms**：实测本地 cairn 后端 stats 5 路并发 + sync 列表 fetch 都在 100-200ms 内能回来。公网部署若 >200ms，蒙板照样弹只是延后 200ms，比 v0.6.27「立刻弹」严格更好。
+
+**API 兼容性**：默认 200ms 行为变化，所有调用方不用改。若需退回旧行为，传 `delay={0}`。
+
+**进一步可能**：将来某页业务真的「永远快」（比如 SSG 缓存命中），可传 `delay={500}`。本轮不动，按需扩展。
