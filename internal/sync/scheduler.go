@@ -171,7 +171,7 @@ func (s *Scheduler) fireOne(ctx context.Context, sched *Schedule) {
 // "skip" paths (task missing / disabled / busy) so the loop doesn't
 // re-attempt the same minute every tick.
 func (s *Scheduler) advanceSchedule(sched *Schedule) {
-	next, err := NextAfter(sched.CronExpr, sched.Timezone, time.Now().UTC())
+	next, err := NextAfter(sched.CronExpr, time.Now().UTC())
 	if err != nil {
 		s.log.Warn("scheduler: advance failed",
 			"schedule_id", sched.ID, "task_id", sched.TaskID, "err", err)

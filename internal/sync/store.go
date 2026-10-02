@@ -331,13 +331,25 @@ var ErrScheduleNotFound = errors.New("sync: schedule not found")
 
 // --- schedule CRUD (v0.6.11) ---------------------------------------------
 
+// DefaultScheduleTimezone is the only timezone cairn evaluates cron
+// expressions against. v0.6.31: the field used to be user-configurable,
+// but UAT feedback asked to remove the timezone picker (it caused
+// row-width jitter when toggling between daily/weekly/monthly in the
+// UI). All schedules evaluate in this zone regardless of what the DB
+// column says (old rows may carry UTC / "" / whatever — the value is
+// ignored at evaluation time, but kept on disk for schema stability).
+const DefaultScheduleTimezone = "Asia/Shanghai"
+
 // rowToSchedule converts a SyncScheduleRow to the domain Schedule.
+// The Timezone field is normalized to DefaultScheduleTimezone — old
+// rows may carry other values but callers should treat Timezone as
+// opaque (json:"-" hides it from the wire).
 func rowToSchedule(r db.SyncScheduleRow) Schedule {
 	return Schedule{
 		ID:        r.ID,
 		TaskID:    r.TaskID,
 		CronExpr:  r.CronExpr,
-		Timezone:  r.Timezone,
+		Timezone:  DefaultScheduleTimezone,
 		Enabled:   r.Enabled,
 		NextRunAt: r.NextRunAt,
 		LastRunAt: r.LastRunAt,
@@ -348,12 +360,15 @@ func rowToSchedule(r db.SyncScheduleRow) Schedule {
 }
 
 // scheduleToRow converts a domain Schedule to a SyncScheduleRow.
+// The Timezone column is forced to DefaultScheduleTimezone on every
+// write so old schedules get normalized to Asia/Shanghai the next time
+// they're updated (or created).
 func scheduleToRow(s Schedule) db.SyncScheduleRow {
 	return db.SyncScheduleRow{
 		ID:        s.ID,
 		TaskID:    s.TaskID,
 		CronExpr:  s.CronExpr,
-		Timezone:  s.Timezone,
+		Timezone:  DefaultScheduleTimezone,
 		Enabled:   s.Enabled,
 		NextRunAt: s.NextRunAt,
 		LastRunAt: s.LastRunAt,
@@ -365,14 +380,19 @@ func scheduleToRow(s Schedule) db.SyncScheduleRow {
 
 // ScheduleCreate validates the schedule and inserts a new row. Caller
 // must have set TaskID; ID / CreatedAt / UpdatedAt are filled in place.
-// Validation errors (bad cron / bad timezone / empty cron) return the
-// same sentinel errors as Schedule.Validate so handlers can errors.Is
-// without unwrapping.
+// Validation errors (bad cron / empty cron) return the same sentinel
+// errors as Schedule.Validate so handlers can errors.Is without
+// unwrapping.
+//
+// v0.6.31: Timezone is forced to DefaultScheduleTimezone on every
+// write; old rows with arbitrary Timezone values get normalized the
+// next time they're updated (or via ScheduleUpdate calls from the UI).
 func (s *Store) ScheduleCreate(ctx context.Context, sched *Schedule) error {
 	now := time.Now().UTC()
 	if err := sched.Validate(now); err != nil {
 		return err
 	}
+	sched.Timezone = DefaultScheduleTimezone
 	sched.CreatedAt = now
 	sched.UpdatedAt = now
 	id, err := s.db.SyncScheduleCreate(ctx, scheduleToRow(*sched))
@@ -384,13 +404,15 @@ func (s *Store) ScheduleCreate(ctx context.Context, sched *Schedule) error {
 }
 
 // ScheduleUpdate re-validates the schedule (caller may have changed
-// CronExpr / Timezone / Enabled), refreshes NextRunAt, and updates the
-// row. updated_at is bumped to now.
+// CronExpr / Enabled), refreshes NextRunAt, and updates the row.
+// updated_at is bumped to now. Timezone is reset to
+// DefaultScheduleTimezone on every write — see scheduleToRow.
 func (s *Store) ScheduleUpdate(ctx context.Context, sched *Schedule) error {
 	now := time.Now().UTC()
 	if err := sched.Validate(now); err != nil {
 		return err
 	}
+	sched.Timezone = DefaultScheduleTimezone
 	sched.UpdatedAt = now
 	err := s.db.SyncScheduleUpdate(ctx, scheduleToRow(*sched))
 	if err != nil {
@@ -454,7 +476,7 @@ func (s *Store) ScheduleUpdateAfterFire(ctx context.Context, sched *Schedule, la
 	sched.LastRunAt = &now
 	sched.LastRunID = &lastRunID
 	sched.UpdatedAt = now
-	next, err := NextAfter(sched.CronExpr, sched.Timezone, now)
+	next, err := NextAfter(sched.CronExpr, now)
 	if err != nil {
 		// Should not happen — we validated on create / update. If it does,
 		// leave the old NextRunAt in place and let the operator fix the
@@ -462,6 +484,7 @@ func (s *Store) ScheduleUpdateAfterFire(ctx context.Context, sched *Schedule, la
 		return fmt.Errorf("recompute next_run_at: %w", err)
 	}
 	sched.NextRunAt = next.UTC()
+	sched.Timezone = DefaultScheduleTimezone // v0.6.31: normalize on every write
 	return s.db.SyncScheduleUpdate(ctx, scheduleToRow(*sched))
 }
 // --- run items (v0.6.16) ----------------------------------------------------

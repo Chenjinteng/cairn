@@ -308,13 +308,19 @@ var ErrTaskRunning = errors.New("sync: task is already running")
 //
 // CronExpr is a 5-field standard expression (minute hour dom month dow)
 // with vanilla *, -, /, , syntax — no Quartz extensions (?, L, W, #).
-// Timezone is an IANA name; empty string means "local time at fire
-// site" (the same rule Engine runs under).
+//
+// v0.6.31: Timezone field is kept on the wire + DB for backward compat
+// but is no longer used by the cron evaluator. NextAfter (cron.go)
+// evaluates in Asia/Shanghai unconditionally. Handlers + store force
+// this field to "Asia/Shanghai" on every write; the UI no longer asks
+// the user for it. The schema column stays TEXT NOT NULL DEFAULT '' —
+// no migration needed; old rows may carry other values but they're
+// ignored at evaluation time.
 type Schedule struct {
 	ID         int64      `json:"id"`
 	TaskID     int64      `json:"taskId"`
 	CronExpr   string     `json:"cronExpr"`
-	Timezone   string     `json:"timezone,omitempty"` // "" = local
+	Timezone   string     `json:"-"` // v0.6.31: deprecated; always Asia/Shanghai. Hidden from API.
 	Enabled    bool       `json:"enabled"`
 	NextRunAt  time.Time  `json:"nextRunAt"`
 	LastRunAt  *time.Time `json:"lastRunAt,omitempty"`
@@ -323,10 +329,15 @@ type Schedule struct {
 	UpdatedAt  time.Time  `json:"updatedAt"`
 }
 
-// Validate parses CronExpr, checks the Timezone loads, and populates
-// NextRunAt so the caller can persist a sane future timestamp in one
-// transaction. Empty CronExpr returns ErrInvalidCron; invalid syntax
-// bubbles up the same error wrapped with field-level context.
+// Validate parses CronExpr and populates NextRunAt so the caller can
+// persist a sane future timestamp in one transaction. Empty CronExpr
+// returns ErrInvalidCron; invalid syntax bubbles up the same error
+// wrapped with field-level context.
+//
+// v0.6.31: Timezone validation removed — the field is no longer
+// consulted at evaluation time (NextAfter is hardcoded Asia/Shanghai).
+// Old rows carrying other timezone values still pass Validate; their
+// stored value is ignored when the scheduler fires them.
 //
 // "now" is injected so tests can pin time. Pass time.Now().UTC() in
 // production. NextRunAt is returned in UTC regardless of Timezone —
@@ -335,12 +346,7 @@ func (s *Schedule) Validate(now time.Time) error {
 	if _, err := ParseCron(s.CronExpr); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidCron, err)
 	}
-	if s.Timezone != "" {
-		if _, err := time.LoadLocation(s.Timezone); err != nil {
-			return fmt.Errorf("%w: %v", ErrInvalidTimezone, err)
-		}
-	}
-	next, err := NextAfter(s.CronExpr, s.Timezone, now)
+	next, err := NextAfter(s.CronExpr, now)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidCron, err)
 	}

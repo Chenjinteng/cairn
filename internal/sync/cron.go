@@ -145,8 +145,17 @@ func parseCronPart(p string, lo, hi int, into map[int]bool) error {
 func (f cronField) match(v int) bool { return f.values[v] }
 
 // NextAfter returns the next time >= now (exclusive) when the cron
-// expression fires, in the given timezone ("" = local). The returned
-// time is in UTC so the scheduler's DB-clock compare stays consistent.
+// expression fires. The expression is evaluated in Asia/Shanghai (the
+// cairn deployment's home zone); the returned time is in UTC so the
+// scheduler's DB-clock compare stays consistent.
+//
+// v0.6.31: timezone parameter removed — cairn is China-deployed and
+// users wanted a single predictable wall-clock semantics. Removing the
+// parameter also kills the "what does 0 0 * * * fire at" ambiguity
+// (was UTC before; would silently shift 8h if the container's TZ env
+// was anything else). The DB column `sync_schedules.timezone` is kept
+// for backward compat but is forced to "Asia/Shanghai" on every write;
+// see ScheduleValidate docs.
 //
 // Implements Vixie cron semantics for dom vs dow: if both fields are
 // restricted (i.e. neither is "*"), a match fires when EITHER field
@@ -159,23 +168,19 @@ func (f cronField) match(v int) bool { return f.values[v] }
 // (impossible to satisfy in 4 years of minutes — basically never).
 // In practice ParseCron already rejects many bad expressions; this is
 // a defensive floor.
-func NextAfter(cronExprStr, tz string, now time.Time) (time.Time, error) {
+func NextAfter(cronExprStr string, now time.Time) (time.Time, error) {
 	expr, err := ParseCron(cronExprStr)
 	if err != nil {
 		return time.Time{}, err
 	}
-	// Empty timezone string = UTC, NOT time.Local. Time.Local on the
-	// server can be anything (Asia/Shanghai in CN deployments, UTC in
-	// container default) and would surprise users who wrote "0 0 * * *"
-	// expecting "midnight UTC". A scheduler running in CST would
-	// silently shift fire times by 8h. Empty == UTC is the predictable,
-	// explicit choice; users in other zones set the IANA name.
-	loc := time.UTC
-	if tz != "" {
-		loc, err = time.LoadLocation(tz)
-		if err != nil {
-			return time.Time{}, err
-		}
+	// v0.6.31: hardcoded Asia/Shanghai — single predictable wall-clock
+	// semantics for all cairn deployments (China-targeted product).
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		// tzdata missing is catastrophic and would only happen on a
+		// stripped-down base image; surface it loudly rather than
+		// silently falling back to UTC.
+		return time.Time{}, fmt.Errorf("load Asia/Shanghai: %w", err)
 	}
 	// Anchor in target timezone. Iterate minute-by-minute; this is fast
 	// enough for human-scale cadences (rarely more than a few thousand

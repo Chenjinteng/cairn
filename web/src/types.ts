@@ -778,7 +778,12 @@ export interface SyncSchedule {
   id: number;
   taskId: number;
   cronExpr: string;
-  timezone: string;
+  /**
+   * v0.6.31: deprecated. Backend forces Asia/Shanghai on every write;
+   * the value here is what the DB had stored. UI no longer surfaces it.
+   * Kept on the type for backward compat with older persisted rows.
+   */
+  timezone?: string;
   enabled: boolean;
   nextRunAt: string;
   lastRunAt?: string;
@@ -788,11 +793,15 @@ export interface SyncSchedule {
 }
 
 /**
- * POST/PATCH /api/sync/{id}/schedules 的请求体。Timezone 空 = UTC;
- * CronExpr 必须填。Enabled 可省略,默认 true。
+ * POST/PATCH /api/sync/{id}/schedules 的请求体。
+ *
+ * v0.6.31: Timezone 字段 deprecated —— 后端永远用 Asia/Shanghai 评估 cron,
+ * 客户端传 timezone 会被后端丢弃。UI 不再让用户填这个值。CronExpr 必须填。
+ * Enabled 可省略,默认 true。
  */
 export interface SyncScheduleInput {
   cronExpr: string;
+  /** v0.6.31: deprecated; backend ignores the value. */
   timezone?: string;
   enabled?: boolean;
 }

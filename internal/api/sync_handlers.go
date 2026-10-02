@@ -438,10 +438,16 @@ func (s *SyncHandlers) TestConnection(w http.ResponseWriter, r *http.Request) {
 // TaskID, NextRunAt, LastRunAt, LastRunID, CreatedAt, UpdatedAt) — the
 // server fills those based on the request + cron evaluation.
 //
-// Timezone is optional and defaults to UTC when omitted (empty
-// string). CronExpr is required; Validate rejects empty.
+// v0.6.31: Timezone removed from the input contract — cairn evaluates
+// all schedules in Asia/Shanghai unconditionally. Old clients sending
+// timezone are accepted but the value is ignored (the store forces
+// Asia/Shanghai on every write). CronExpr is required; Validate
+// rejects empty.
 type SyncScheduleInput struct {
 	CronExpr string `json:"cronExpr"`
+	// Timezone is kept as an optional field for backward compat with
+	// older clients (e.g. cairn < 0.6.31 sending timezone="" or
+	// timezone="UTC"); the value is ignored. v0.6.31+.
 	Timezone string `json:"timezone,omitempty"`
 	Enabled  *bool  `json:"enabled,omitempty"` // pointer so PATCH can omit
 }
@@ -473,9 +479,10 @@ func (s *SyncHandlers) ListSchedules(w http.ResponseWriter, r *http.Request) {
 
 // CreateSchedule — POST /api/sync/{id}/schedules
 //
-// Validates the cron expression and timezone via sync.Schedule.Validate
-// and persists. Returns 400 for invalid cron / timezone; 404 for
-// unknown task; 201 + the created schedule.
+// Validates the cron expression via sync.Schedule.Validate and persists.
+// The schedule's Timezone field is forced to Asia/Shanghai by the
+// store regardless of input — v0.6.31. Returns 400 for invalid cron;
+// 404 for unknown task; 201 + the created schedule.
 func (s *SyncHandlers) CreateSchedule(w http.ResponseWriter, r *http.Request) {
 	taskID, ok := parseID(w, r)
 	if !ok {
@@ -497,7 +504,10 @@ func (s *SyncHandlers) CreateSchedule(w http.ResponseWriter, r *http.Request) {
 	sched := &sync.Schedule{
 		TaskID:   taskID,
 		CronExpr: input.CronExpr,
-		Timezone: input.Timezone,
+		// v0.6.31: Timezone intentionally left empty here. The store
+		// forces DefaultScheduleTimezone on every write — input.Timezone
+		// is read but discarded.
+		Timezone: "",
 		Enabled:  enabled,
 	}
 	if err := s.Store.ScheduleCreate(r.Context(), sched); err != nil {
@@ -515,6 +525,9 @@ func (s *SyncHandlers) CreateSchedule(w http.ResponseWriter, r *http.Request) {
 //
 // Merges the partial input onto the existing schedule, re-validates,
 // and updates NextRunAt. Same error mapping as create.
+//
+// v0.6.31: input.Timezone is accepted (backward compat) but the store
+// resets to Asia/Shanghai on every write — the value is irrelevant.
 func (s *SyncHandlers) UpdateSchedule(w http.ResponseWriter, r *http.Request) {
 	taskID, ok := parseID(w, r)
 	if !ok {
@@ -550,13 +563,9 @@ func (s *SyncHandlers) UpdateSchedule(w http.ResponseWriter, r *http.Request) {
 	if input.CronExpr != "" {
 		current.CronExpr = input.CronExpr
 	}
-	if input.Timezone != "" || (input.CronExpr != "" && current.Timezone != "") {
-		// explicit timezone wins; if cron changed but timezone omitted,
-		// keep what was there
-		if input.Timezone != "" {
-			current.Timezone = input.Timezone
-		}
-	}
+	// v0.6.31: input.Timezone intentionally ignored. The store normalizes
+	// the field on every write. Old behavior (merge / preserve) would
+	// let stale "UTC" values slip through; we don't want that.
 	if input.Enabled != nil {
 		current.Enabled = *input.Enabled
 	}

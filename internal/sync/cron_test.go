@@ -84,53 +84,70 @@ func TestCronField_ListAndLiteral(t *testing.T) {
 }
 
 func TestNextAfter_StarEvery15Minutes(t *testing.T) {
-	loc := time.UTC
-	// 10:29 → next 0/15/30/45 is 10:30
-	now := time.Date(2026, 9, 30, 10, 29, 0, 0, loc)
-	got, err := NextAfter("*/15 * * * *", "UTC", now)
+	// v0.6.31: NextAfter is hardcoded Asia/Shanghai. Pick `now` so the
+	// Asia/Shanghai wall clock is what we want to reason about, then
+	// assert the returned UTC value.
+	cst, err := time.LoadLocation("Asia/Shanghai")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := time.Date(2026, 9, 30, 10, 30, 0, 0, loc)
+	// 10:29 CST → next 0/15/30/45 is 10:30 CST.
+	now := time.Date(2026, 9, 30, 10, 29, 0, 0, cst)
+	got, err := NextAfter("*/15 * * * *", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2026, 9, 30, 10, 30, 0, 0, cst).UTC()
 	if !got.Equal(want) {
-		t.Errorf("NextAfter(*/15 from 10:29) = %v, want %v", got, want)
+		t.Errorf("NextAfter(*/15 from 10:29 CST) = %v, want %v", got, want)
 	}
 
-	// 10:31 → 10:30 已过,next is 10:45
-	now2 := time.Date(2026, 9, 30, 10, 31, 0, 0, loc)
-	got2, err := NextAfter("*/15 * * * *", "UTC", now2)
+	// 10:31 CST → 10:30 已过,next is 10:45 CST.
+	now2 := time.Date(2026, 9, 30, 10, 31, 0, 0, cst)
+	got2, err := NextAfter("*/15 * * * *", now2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want2 := time.Date(2026, 9, 30, 10, 45, 0, 0, loc)
+	want2 := time.Date(2026, 9, 30, 10, 45, 0, 0, cst).UTC()
 	if !got2.Equal(want2) {
-		t.Errorf("NextAfter(*/15 from 10:31) = %v, want %v", got2, want2)
+		t.Errorf("NextAfter(*/15 from 10:31 CST) = %v, want %v", got2, want2)
 	}
 }
 
 func TestNextAfter_MidnightDaily(t *testing.T) {
-	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
-	got, err := NextAfter("0 0 * * *", "UTC", now)
+	cst, err := time.LoadLocation("Asia/Shanghai")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	// 12:00 CST on Sep 30 — next "00:00 CST" is Oct 1 00:00 CST.
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, cst)
+	got, err := NextAfter("0 0 * * *", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2026, 10, 1, 0, 0, 0, 0, cst).UTC()
 	if !got.Equal(want) {
-		t.Errorf("NextAfter(0 0 * * * from noon) = %v, want %v", got, want)
+		t.Errorf("NextAfter(0 0 * * * from noon CST) = %v, want %v", got, want)
 	}
 }
 
 func TestNextAfter_WeekdaysOnly(t *testing.T) {
-	// 2026-09-30 is a Wednesday. "0 0 * * 1-5" means midnight Mon-Fri.
-	// Next midnight after noon Wednesday = next Thursday midnight.
-	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
-	got, err := NextAfter("0 0 * * 1-5", "UTC", now)
+	cst, err := time.LoadLocation("Asia/Shanghai")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC) // Thursday
-	if got.Weekday() != time.Thursday {
-		t.Errorf("NextAfter weekday-only: got weekday=%v, want Thursday", got.Weekday())
+	// 2026-09-30 is a Wednesday. "0 0 * * 1-5" means 00:00 CST Mon-Fri.
+	// From noon Wed CST, next is Thu (Oct 1) 00:00 CST.
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, cst)
+	got, err := NextAfter("0 0 * * 1-5", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2026, 10, 1, 0, 0, 0, 0, cst).UTC() // Thursday 00:00 CST
+	// Check weekday in CST — got is stored in UTC and may have a
+	// different weekday than the CST wall-clock date.
+	if got.In(cst).Weekday() != time.Thursday {
+		t.Errorf("NextAfter weekday-only: got weekday (CST)=%v, want Thursday", got.In(cst).Weekday())
 	}
 	if !got.Equal(want) {
 		t.Errorf("NextAfter weekday-only = %v, want %v", got, want)
@@ -138,77 +155,87 @@ func TestNextAfter_WeekdaysOnly(t *testing.T) {
 }
 
 func TestNextAfter_DOM_OR_DOW_Vixie(t *testing.T) {
-	// 0 0 1 * 1 — midnight on day-1 OR Monday. Should fire on both.
-	// Pick a Friday (2026-10-02) — day 1 of month is Monday so we
-	// expect the immediate Monday (2026-10-05? no, day 1 is Thursday
-	// in October 2026, let me just check both fire correctly).
-	now := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC) // Sunday
-	got, err := NextAfter("0 0 1 * 1", "UTC", now)
+	cst, err := time.LoadLocation("Asia/Shanghai")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Sunday Oct 4 — next Monday midnight is Oct 5 00:00 UTC.
-	want := time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC)
+	// 0 0 1 * 1 — 00:00 CST on day-1 OR Monday. Should fire on both.
+	// Sunday Oct 4 noon CST → next is Mon Oct 5 00:00 CST.
+	now := time.Date(2026, 10, 4, 12, 0, 0, 0, cst)
+	got, err := NextAfter("0 0 1 * 1", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2026, 10, 5, 0, 0, 0, 0, cst).UTC()
 	if !got.Equal(want) {
-		t.Errorf("NextAfter(0 0 1 * 1 from Sun) = %v, want %v (Monday midnight)", got, want)
+		t.Errorf("NextAfter(0 0 1 * 1 from Sun) = %v, want %v (Monday 00:00 CST)", got, want)
 	}
 
-	// From after that Monday (Tuesday Oct 6 noon), next = day-1 of Nov.
-	now2 := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
-	got2, err := NextAfter("0 0 1 * 1", "UTC", now2)
+	// From after that Monday (Tue Oct 6 noon CST), next = Mon Oct 12 00:00 CST.
+	now2 := time.Date(2026, 10, 6, 12, 0, 0, 0, cst)
+	got2, err := NextAfter("0 0 1 * 1", now2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// From Tue Oct 6 noon, next midnight is Wed Oct 7 — but Wed is dow=3,
-	// not Monday. Next Monday midnight is Oct 12. (OR-logic: dom=1 OR dow=Mon.)
-	want2 := time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC)
+	want2 := time.Date(2026, 10, 12, 0, 0, 0, 0, cst).UTC()
 	if !got2.Equal(want2) {
-		t.Errorf("NextAfter(0 0 1 * 1 from Tue Oct 6) = %v, want %v (Mon Oct 12)", got2, want2)
+		t.Errorf("NextAfter(0 0 1 * 1 from Tue Oct 6) = %v, want %v (Mon Oct 12 CST)", got2, want2)
 	}
 }
 
-func TestNextAfter_Timezone(t *testing.T) {
-	// Schedule "30 4 * * *" in Asia/Shanghai (UTC+8) means 04:30 SGT.
-	// now = Sep 30 00:00 UTC. Sep 30 04:30 SGT = Sep 29 20:30 UTC is
-	// in the past, so next fire is Oct 1 04:30 SGT = Sep 30 20:30 UTC.
-	now := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
-	got, err := NextAfter("30 4 * * *", "Asia/Shanghai", now)
+func TestNextAfter_AsiaShanghaiHardcoded(t *testing.T) {
+	// v0.6.31: the tz parameter is gone — NextAfter is always evaluated
+	// in Asia/Shanghai. Confirm "30 4 * * *" still maps to 04:30 CST.
+	cst, err := time.LoadLocation("Asia/Shanghai")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := time.Date(2026, 9, 30, 20, 30, 0, 0, time.UTC) // == Oct 1 04:30 SGT
+	// Sep 30 00:00 CST. Today's 04:30 CST is still ahead → expect today.
+	now := time.Date(2026, 9, 30, 0, 0, 0, 0, cst)
+	got, err := NextAfter("30 4 * * *", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2026, 9, 30, 4, 30, 0, 0, cst).UTC()
 	if !got.Equal(want) {
-		t.Errorf("NextAfter tz = %v, want %v (Oct 1 04:30 SGT = Sep 30 20:30 UTC)", got, want)
+		t.Errorf("NextAfter from Sep 30 00:00 CST = %v, want %v (today 04:30 CST)", got, want)
 	}
 
-	// From a time BEFORE today's 04:30 SGT, expect today's.
-	now2 := time.Date(2026, 9, 29, 18, 0, 0, 0, time.UTC) // Sep 30 02:00 SGT
-	got2, err := NextAfter("30 4 * * *", "Asia/Shanghai", now2)
+	// From 06:00 CST (after today's 04:30 fired), expect tomorrow.
+	now2 := time.Date(2026, 9, 30, 6, 0, 0, 0, cst)
+	got2, err := NextAfter("30 4 * * *", now2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want2 := time.Date(2026, 9, 29, 20, 30, 0, 0, time.UTC) // == Sep 30 04:30 SGT
+	want2 := time.Date(2026, 10, 1, 4, 30, 0, 0, cst).UTC()
 	if !got2.Equal(want2) {
-		t.Errorf("NextAfter tz from Sep 30 02:00 SGT = %v, want %v", got2, want2)
+		t.Errorf("NextAfter from Sep 30 06:00 CST = %v, want %v (Oct 1 04:30 CST)", got2, want2)
 	}
 }
 
 func TestSchedule_Validate(t *testing.T) {
+	// v0.6.31: Timezone field is ignored — Validate no longer checks it.
+	// The cron expression "0 0 * * *" evaluated in Asia/Shanghai gives
+	// Oct 1 00:00 CST as the next fire after Sep 30 12:00 CST.
+	cst, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatal(err)
+	}
 	s := &Schedule{
 		CronExpr: "0 0 * * *",
-		Timezone: "",
+		Timezone: "", // v0.6.31: ignored
 		Enabled:  true,
 	}
-	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, cst)
 	if err := s.Validate(now); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
 	if s.NextRunAt.IsZero() {
 		t.Error("NextRunAt not populated")
 	}
-	want := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	want := time.Date(2026, 10, 1, 0, 0, 0, 0, cst).UTC()
 	if !s.NextRunAt.Equal(want) {
-		t.Errorf("NextRunAt = %v, want %v", s.NextRunAt, want)
+		t.Errorf("NextRunAt = %v, want %v (Oct 1 00:00 CST)", s.NextRunAt, want)
 	}
 }
 
@@ -220,7 +247,9 @@ func TestSchedule_Validate_Errors(t *testing.T) {
 	if err := (&Schedule{CronExpr: "bad cron"}).Validate(now); err == nil {
 		t.Error("malformed cron should error")
 	}
-	if err := (&Schedule{CronExpr: "0 0 * * *", Timezone: "Not/A/Zone"}).Validate(now); err == nil {
-		t.Error("bad timezone should error")
+	// v0.6.31: Timezone field is no longer validated; an arbitrary
+	// value (including "Not/A/Zone") is accepted and silently ignored.
+	if err := (&Schedule{CronExpr: "0 0 * * *", Timezone: "Not/A/Zone"}).Validate(now); err != nil {
+		t.Errorf("bad timezone should NOT error (field is ignored): %v", err)
 	}
 }

@@ -1830,18 +1830,19 @@ function ScheduleTab({ schedules, loading, onCreate, onUpdate, onDelete }: Sched
         );
       },
     },
+    // v0.6.31: 时区列删除 —— cairn 永远用 Asia/Shanghai 评估 cron,
+    // UI 上展示「时区」会让切换日月(每日/每周/每月)时整行长度跳变、
+    // 触发换行,UX 体验差。删除后,整行宽度由「启用 / 频率 / 下次触发 /
+    // 上次 / 操作」5 列构成,row-level 宽度稳定。
+    // 列表里没有时区列,运维如果想知道,看 DB sync_schedules.timezone 列
+    // (永远是 Asia/Shanghai)。
     {
-      title: '时区',
-      dataIndex: 'timezone',
-      key: 'timezone',
-      width: 120,
-      render: (tz: string) => (tz ? <code style={{ fontSize: 12 }}>{tz}</code> : <span style={{ color: '#999' }}>UTC</span>),
-    },
-    {
+      // v0.6.31: 时区列删除后,「下次触发」从原来 160 减到 140(去掉「UTC」/ 时区字符串所占宽度),
+      // 让整行总宽不变。详细原因见 ScheduleTab columns 上方注释。
       title: '下次触发',
       dataIndex: 'nextRunAt',
       key: 'nextRunAt',
-      width: 160,
+      width: 140,
       render: (iso: string) => <span style={{ fontSize: 12 }}>{formatRelative(iso)}</span>,
     },
     {
@@ -1869,7 +1870,8 @@ function ScheduleTab({ schedules, loading, onCreate, onUpdate, onDelete }: Sched
             onClick={() =>
               setEditing({
                 id: s.id,
-                input: { cronExpr: s.cronExpr, timezone: s.timezone, enabled: s.enabled },
+                // v0.6.31: 不再带 timezone 字段 —— 后端永远 Asia/Shanghai,前端不必传。
+              input: { cronExpr: s.cronExpr, enabled: s.enabled },
               })
             }
           >
@@ -1974,7 +1976,9 @@ function ScheduleRowEditor({ mode, initial, onCancel, onSubmit }: ScheduleRowEdi
   const [minute, setMinute] = useState<number>(initialParsed?.minute ?? 0);
   const [dayOfWeek, setDayOfWeek] = useState<number>(initialParsed?.dayOfWeek ?? 1);
   const [dayOfMonth, setDayOfMonth] = useState<number>(initialParsed?.dayOfMonth ?? 1);
-  const [timezone, setTimezone] = useState(initial?.timezone ?? '');
+  // v0.6.31: 时区输入框删除 —— cairn 永远用 Asia/Shanghai 评估 cron,
+  // 让用户在 UI 上选时区会让切换日月(每日/每周/每月)时整行长度跳变、
+  // 触发换行。运维要看时区,看 DB sync_schedules.timezone 列(永远是 Asia/Shanghai)。
   const [enabled, setEnabled] = useState(initial?.enabled ?? true);
   const [submitting, setSubmitting] = useState(false);
 
@@ -2062,12 +2066,6 @@ function ScheduleRowEditor({ mode, initial, onCancel, onSubmit }: ScheduleRowEdi
             placeholder="几号"
           />
         ) : null}
-        <Input
-          placeholder="时区 (可选,默认 UTC)"
-          value={timezone}
-          onChange={(e) => setTimezone(e.target.value)}
-          style={{ width: 200 }}
-        />
         <Switch
           checkedChildren="启用"
           unCheckedChildren="停用"
@@ -2082,9 +2080,9 @@ function ScheduleRowEditor({ mode, initial, onCancel, onSubmit }: ScheduleRowEdi
           onClick={async () => {
             setSubmitting(true);
             try {
+              // v0.6.31: 不再传 timezone —— 后端永远 Asia/Shanghai。
               await onSubmit({
                 cronExpr: previewCron,
-                timezone: timezone.trim(),
                 enabled,
               });
             } finally {

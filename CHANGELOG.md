@@ -6,6 +6,49 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.6.31] - 2026-10-02
+
+本轮是 v0.6.30 的补丁 —— 用户在测 0.6.30 时反馈「时区可以不用设置,默认就是上海时区,不然加个时区的话在切换日月的时候整个长度会不一样,会有换行,直接就去掉时区就行」。
+
+### 修复
+
+- **完全去掉时区设置,后端硬编码 Asia/Shanghai**。`internal/sync/cron.go`:
+  - `NextAfter` 签名去掉 `tz` 参数,内部硬编码 `time.LoadLocation("Asia/Shanghai")`。
+  - 「空 timezone = UTC」的旧语义取消 —— 之前行为是「空 = UTC(显式,避免容器默认时区漂移)」,现在统一为「永远 Asia/Shanghai」,不需要再让用户做选择题。
+- **`internal/sync/types.go`**:
+  - `Schedule.Timezone` 字段保留(DB 列兼容,旧数据不丢),但加 `json:"-"` 不再上 wire。
+  - `Validate` 删掉 Timezone 校验 —— 任意字符串(包括 `"Not/A/Zone"`)都被接受并忽略。
+  - `ErrInvalidTimezone` 保留(可能未来用),但本轮不再触发。
+- **`internal/sync/store.go`**:
+  - 新增 `DefaultScheduleTimezone = "Asia/Shanghai"` 常量。
+  - `rowToSchedule` / `scheduleToRow` 把 Timezone 字段强制写 `DefaultScheduleTimezone` —— 老行会被下次写入时自动 normalize 成 Asia/Shanghai。
+  - `ScheduleCreate` / `ScheduleUpdate` / `ScheduleUpdateAfterFire` 三处写库都强制设置 Timezone = Asia/Shanghai。
+- **`internal/sync/scheduler.go`**: `advanceSchedule` 调用 `NextAfter` 不再传 `sched.Timezone`(参数被删了)。
+- **`internal/api/sync_handlers.go`**:
+  - `SyncScheduleInput.Timezone` 字段保留(`json:"timezone,omitempty"`),但 handler 写库前强制设为空(让 store 写 Asia/Shanghai)。旧客户端仍可带 `timezone="UTC"` 等任意值,被后端静默忽略。
+  - `UpdateSchedule` 删掉 Timezone merge 分支 —— 现在 input.Timezone 完全无效。
+- **`web/src/pages/sync-page.tsx`**:
+  - `ScheduleRowEditor` 删除「时区」Input,提交时不再带 timezone 字段。
+  - `ScheduleTab` 表格删除「时区」列;「下次触发」列宽从 160 调到 140(腾出时区列的宽度)。
+  - 编辑某条 schedule 时,初始 input 也不再带 timezone。
+- **`web/src/types.ts`**: `SyncSchedule.timezone` 改为可选 (`?`) + 注释 deprecated;`SyncScheduleInput.timezone` 同样注释 deprecated。
+
+### 兼容性
+
+- **API 行为变化**:`POST /api/sync/{id}/schedules` 和 `PATCH .../{sid}` 仍接受 `timezone` 字段(老客户端不破坏),但**写入时强制 Asia/Shanghai**;`ScheduleValidate` 不再校验 timezone 字符串。
+- **存量 cron 触发时间会变化**:旧 task 的 schedule.timezone = ""(老默认 = UTC)或老用户手填的 "America/New_York" 等,升级后**统一按 Asia/Shanghai 评估**。这是有意行为 —— 用户要求「默认上海时区」。如果之前有 schedule 故意配了非 Asia/Shanghai 时区,需要手动重新评估触发时间。
+- **DB 列保留**:`sync_schedules.timezone` 列不删(无迁移);`rowToSchedule` 把任意 DB 值 normal 成 Asia/Shanghai,`scheduleToRow` 写回 Asia/Shanghai,存量行下次更新时被规范化。
+- **JSON wire**:`Schedule.Timezone` 加了 `json:"-"` 不再序列化;前端永远看不到这个字段(老客户端兼容 OK,新客户端也不依赖)。
+
+### 用户须知
+
+- UI 「定时规则」编辑器:不再有时区输入框,所有 cron 都按 Asia/Shanghai 评估。
+- UI 「定时规则」表格:不再显示「时区」列。
+- 升级后存量 cron schedule 的「下次触发」字段会基于 Asia/Shanghai 重新计算并写入(下次 scheduler tick 触发后更新)。
+- 老客户端发来的 timezone 字段被后端静默丢弃,不会 4xx。
+
+---
+
 ## [0.6.30] - 2026-10-02
 
 本轮是 UAT 反馈 —— 两件事打包一起发：
