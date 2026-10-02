@@ -6,6 +6,27 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.5] - 2026-10-03
+
+本轮修一个 UI 体验问题 —— 镜像详情抽屉的 TAG 表格列宽总和 1060px,撑出
+drawer 1020px 宽度,底部出横向滚动条,看着别扭。属既有 UI 优化 → 小版本进位 0.7.5。
+
+### 变更
+
+- **前端 · `web/src/components/image-detail-drawer.tsx` TAG 表格列宽缩到总和 770px**(v0.7.5)。
+  原列宽:`Tag 200 + Digest 190 + 架构 180 + 层数 80 + 大小 110 + 构建时间 170 + 操作 130 = 1060`
+  新列宽:`Tag 160 + Digest 140 + 架构 130 + 层数 60 + 大小 80 + 构建时间 110 + 操作 90 ≈ 770`
+  全部短于 drawer 1020 宽,横滚条消失。
+- **前端 · 多架构架构列加 ellipsis**(v0.7.5)。`record.platforms.join(', ')`
+  在 arm/v7 + arm64 + ppc64le 等多平台时会很长(>30 字符),加 `display:block` +
+  `ellipsis` class,超 130 列宽自动截断,Tooltip 永远展示完整列表。
+- **前端 · 构建时间格式从 `YYYY-MM-DD HH:mm` 改 `YYYY-MM-DD`**(v0.7.5)。
+  新增 `web/src/utils.ts` `formatDate` helper(不动原 `formatDateTime`,
+  其他地方仍用)。抽屉列宽从 170 → 110;要看时分走 /api/repositories/{repo}/tags/{tag}
+  详情接口或 hover Tooltip。
+
+---
+
 ## [0.7.4] - 2026-10-03
 
 本轮修一个**阻塞所有定时任务创建**的 release-blocker bug,顺手加一个 UI 预置。

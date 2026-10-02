@@ -39,6 +39,23 @@ export function formatDateTime(value?: string | null, fallback = '--'): string {
 }
 
 /**
+ * v0.7.5: 日期(不含时分)格式化。镜像列表抽屉用这个压缩列宽,
+ * 精确到天就够排序 / 过滤;时分要看进 /api/repositories/{repo}/tags/{tag}
+ * 详情接口或鼠标 hover Tooltip。
+ */
+export function formatDate(value?: string | null, fallback = '--'): string {
+  if (!value) {
+    return fallback;
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  const pad = (input: number) => String(input).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+/**
  * v0.6.17: 拉取命令支持的 runtime 类型。
  *
  * 四种覆盖常见 OCI runtime 工具:

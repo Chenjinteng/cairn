@@ -10,7 +10,7 @@ import {
   copyText,
   DEFAULT_PULL_RUNTIME,
   formatBytes,
-  formatDateTime,
+  formatDate,
   PULL_RUNTIMES,
   shortDigest,
   type PullRuntime,
@@ -118,7 +118,9 @@ export default function ImageDetailDrawer({
       title: 'Tag',
       dataIndex: 'tag',
       key: 'tag',
-      width: 200,
+      // v0.7.5: 列宽从 200 → 160,配合 ellipsis 让长 tag 自动截断,
+      // 整个表格不再撑出抽屉右边(总和原来 1060 > drawer 1020)。
+      width: 160,
       render: (value: string) => (
         <Tooltip title={value}>
           <span className="ellipsis" style={{ display: 'block', fontWeight: 500 }}>
@@ -131,7 +133,9 @@ export default function ImageDetailDrawer({
       title: 'Digest',
       dataIndex: 'digest',
       key: 'digest',
-      width: 190,
+      // shortDigest 已经裁到 sha256:abcdef1234567 形式(20 字符),
+      // 140 + Tooltip 提示完整 digest 够用。
+      width: 140,
       render: (value: string) => (
         <Tooltip title={value}>
           <span className="mono" style={{ color: 'var(--color-text-3)' }}>
@@ -144,7 +148,9 @@ export default function ImageDetailDrawer({
       title: '架构',
       dataIndex: 'architecture',
       key: 'architecture',
-      width: 180,
+      // v0.7.5: 180 → 130。multi-arch 列出全平台时(`linux/amd64, linux/arm64/v8, ...`)
+      // 超过 130 字符级截断,Tooltip 提示完整列表。
+      width: 130,
       // v0.7.3: render the full platform list so multi-arch tags show
       // "linux/amd64, linux/arm64" instead of "linux/amd64 +1". Older
       // inventory responses won't carry `platforms`; fall back to the
@@ -158,33 +164,39 @@ export default function ImageDetailDrawer({
         if (list.length === 0) {
           return '--';
         }
-        if (list.length === 1) {
-          return <span className="mono">{list[0]}</span>;
-        }
+        const text = list.join(', ');
         return (
           <Tooltip
             placement="topLeft"
-            title={list.join(', ')}
+            title={text}
+            // v0.7.5: 长平台列表横向 ellipsis,跟「Docker Hub 实际有 8 个平台」
+            // 这种情况不撑出列宽。Tooltip 永远展示全名。
           >
-            <span className="mono">{list.join(', ')}</span>
+            <span className="mono ellipsis" style={{ display: 'block' }}>{text}</span>
           </Tooltip>
         );
       },
     },
-    { title: '层数', dataIndex: 'layerCount', key: 'layerCount', width: 80 },
+    // v0.7.5: 80 → 60。单数字居中够用。
+    { title: '层数', dataIndex: 'layerCount', key: 'layerCount', width: 60, align: 'right' },
     {
       title: '大小',
       dataIndex: 'size',
       key: 'size',
-      width: 110,
+      // v0.7.5: 110 → 80。formatBytes 出来的最长格式约 7 字符(`12.4 MiB`),
+      // 80 够。
+      width: 80,
       render: (value: number) => formatBytes(value),
     },
     {
       title: '构建时间',
       dataIndex: 'createdAt',
       key: 'createdAt',
-      width: 170,
-      render: (value: string | null) => formatDateTime(value),
+      // v0.7.5: 改 formatDate → YYYY-MM-DD(10 字符),不带时分。
+      // 表格里时分不重要,精确到天就够排序 / 过滤;要时分看 /api/.../tags/<tag>
+      // 详情接口。列宽从 170 → 110。
+      width: 110,
+      render: (value: string | null) => formatDate(value),
     },
     {
       title: '操作',

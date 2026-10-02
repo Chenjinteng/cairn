@@ -37,6 +37,9 @@
   scratch 基础镜像没 tzdata,任何 cron 保存都报「unknown time zone」,同步任务一条都建不了。
   改成 time.FixedZone("Asia/Shanghai", 8h) 固定 offset,Asia/Shanghai 无 DST 完全等价。
   顺手在「同步任务」下拉第一档加「每分钟」(`* * * * *`)。
+
+  v0.7.5: 镜像详情抽屉 TAG 表列宽缩到 770px 消除横滚条 —— 列总和从 1060 减到 770(缩 Tag/Digest/架构/大小/构建时间宽度),
+  多平台架构列加 ellipsis 截断,构建时间从「YYYY-MM-DD HH:mm」改「YYYY-MM-DD」(看时分走详情接口或 hover Tooltip)。
 -->
 <style>
   :root {
