@@ -5,34 +5,26 @@
  *
  * v0.6.23: 改成"绝对定位覆盖在内容之上",而不是放在 flow 里。
  *
- * v0.6.22 的实现 (现在 controlled) 会:
- *   - 不再让调用方用 ternary `{loading ? <PageLoading /> : <Table />}` —
- *     那样 spinner 元素会被 React 立即卸载,CSS transition 没用。
- *   - 改成受控: `<PageLoading visible={loading} />` + `<Table hidden={loading} />`
- *     让两个元素**始终共存**。当 loading 从 true → false:
- *       a. Table 的 `hidden` 解除,立刻渲染(React 同步提交,首帧就在 DOM 里)
- *       b. PageLoading 走内部状态机:再展示 minDuration(默认 250ms) →
- *          opacity 1→0 淡出 fadeDuration(默认 350ms) → 卸载
+ * v0.6.24: 修两个 v0.6.23 现场 bug(深色模式 UAT 实测):
+ *   1. **spinner 背景在深色模式下仍是纯白** —— 原背景用
+ *      `var(--color-bg-container, #fff)`,但 theme.css 里没定义
+ *      `--color-bg-container`(只有 `--color-bg`,深浅都有)。
+ *      CSS 变量 fallback 命中 `#fff`,深色主题下 spinner 蒙板变成
+ *      纯白色,跟深色面板「撞色」很突兀。改成 `var(--color-bg)` ——
+ *      深色 `#171b24`,浅色 `#ffffff`,跟 `.panel { background: var(--color-bg) }`
+ *      完全对齐,蒙板就跟面板融为一体。
+ *   2. **spinner 没有完全覆盖 antd Table** —— 0.6.23 用 `inset: 0` 在
+ *      `position: absolute` 下填充,实测 proxies-page 的「操作」列
+ *      (`fixed: 'right'`,antd v5 内部用 sticky + 内部 z-index)会漏到
+ *      蒙板外面。原因 antd Table 内部的 fixed-column 容器有自己的
+ *      z-index 栈,z-index: 1 压不过。0.6.24 改成:
+ *      - 显式 `width: 100%; height: 100%` 兜底 `inset: 0`(防万一)
+ *      - z-index 提到 100,确保盖过 antd Table 内部层级
+ *      - left: 0; top: 0 显式写出,跟 inset: 0 等价但更显式
  *
- * v0.6.22 的 bug(用户反馈):
- *   - 「spinner 跟表格是同一层」—— 等等,我把 PageLoading 写在 Table 后面,
- *     在 normal flow 里 PageLoading 应该堆在 Table **下面**,不重叠。Table
- *     hidden 时 PageLoading 占位 200px 高,Table 露脸时 PageLoading 又
- *     占 200px 高度 —— 整页内容区在切换瞬间被「推」了一下,就是用户说的
- *     「拉址感」(页面被拽了一下)。
- *   - 真正想要的语义是:**spinner 是覆盖在表格上面的一层**,而不是 flow 里
- *     的一行。Table 在底层正常渲染,spinner 浮在上面,淡出时不挤占空间。
- *
- * v0.6.23 的实现:
- *   - PageLoading 改成 `position: absolute; inset: 0`,需要父容器是
- *     `position: relative`(6 个页面已经把容器包好,详见各页注释)。
- *   - 加 `background: var(--color-bg-container, #fff)`,否则透下去能看到
- *     表格数据 → spinner 像「浮在数据上」,跟设计意图不符。
- *   - 保留 v0.6.22 的状态机(minDuration + fadeDuration 淡出),
- *     现在 fade 时 spinner 在 Table **上面**淡出 → 用户看到「spinner
- *     半透明 → 表格透出来」,而不是「spinner 拉走 → 表格弹进」。
- *   - 保留 v0.6.22 的 [role=status][aria-live=polite] 让 app.css 的
- *     慢速转圈 CSS 还能命中(2s/圈)。
+ * 用户期望:蒙板是**完全覆盖**在 panel 上的不透明背景层,跟 panel
+ * 背景色一致,中间是 spinner + tip。fade 时是 opacity 1→0 的整体
+ * 透明(不是「缩小消失」)。
  */
 
 import { Spin } from 'antd';
@@ -112,19 +104,38 @@ export default function PageLoading({
        */
       style={{
         position: 'absolute',
-        inset: 0,
+        /*
+         * inset: 0 + 显式 left/top/width/height 兜底 —— 0.6.23 实测在
+         * antd Table 的 fixed-column(操作列 fixed:'right')场景下蒙板
+         * 没盖住右侧 fixed 区域。显式写出来更稳,跟 inset: 0 等价。
+         */
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        width: '100%',
+        height: '100%',
         display: 'flex',
         justifyContent: 'center',
         alignItems: 'center',
         flexDirection: 'column',
         gap: 12,
+        /*
+         * 背景跟 panel 一致(.panel { background: var(--color-bg) }),
+         * 深浅主题都不会撞色;`--color-bg` 在 theme.css 深色段定义为
+         * `#171b24`,浅色 `#ffffff`,都跟 .panel 完全一致。
+         */
+        background: 'var(--color-bg)',
         color: 'var(--color-text-tertiary, #999)',
         fontSize: 13,
-        background: 'var(--color-bg-container, #fff)',
         opacity: hiding ? 0 : 1,
         transition: hiding ? `opacity ${fadeDuration}ms ease` : 'none',
         pointerEvents: hiding ? 'none' : 'auto',
-        zIndex: 1,
+        /*
+         * z-index: 100 压过 antd Table 内部层级 —— antd v5 的 fixed-column
+         * 容器自己有 z-index(实际值约 2-10),原 0.6.23 的 1 不够。
+         */
+        zIndex: 100,
       }}
     >
       <Spin size="large" />

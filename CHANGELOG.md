@@ -6,6 +6,37 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.6.24] - 2026-10-02
+
+本轮是第八轮 UAT 反馈 —— v0.6.23 深色模式下 PageLoading 现场问题：
+   - 1. **spinner 背景在深色模式下仍是纯白** —— 跟深色面板「撞色」很突兀。
+   - 2. **spinner 没有完全覆盖 antd Table** —— proxies-page 的「操作」列(`fixed: 'right'`)漏到蒙板外面。
+
+### 变更
+
+- **PageLoading 背景改用 `--color-bg`**。`web/src/components/page-loading.tsx`：
+   - 原 `background: var(--color-bg-container, #fff)` —— theme.css 里没定义
+     `--color-bg-container`,fallback 命中 `#fff`,深色主题下变成白色蒙板。
+   - 改 `background: var(--color-bg)` —— theme.css 深浅都定义了:
+     浅色 `#ffffff`,深色 `#171b24`,跟 `.panel { background: var(--color-bg) }`
+     完全一致,蒙板跟面板融为一体。
+- **PageLoading 强化覆盖**。`web/src/components/page-loading.tsx`：
+   - `inset: 0` 之外显式写 `top: 0; left: 0; right: 0; bottom: 0; width: 100%; height: 100%` —— 兜底覆盖,跟 `inset: 0` 等价但更显式。
+   - `z-index: 1` 提到 `z-index: 100` —— 0.6.23 现场实测 antd v5 Table 的 fixed-column 容器(「操作」列 `fixed: 'right'`)有自己的 z-index 栈(约 2-10),1 压不过,操作列漏出蒙板外面。100 足够压过 antd 内部层级。
+
+### 兼容性
+
+- 严格兼容：纯前端 CSS 微调,**无后端 / API / 数据库变更**。
+- 浅色主题下 `--color-bg` 是 `#ffffff`,视觉跟 0.6.23 一致(本来就是白的,只是深色下撞色)。
+
+### 用户须知
+
+- 深色模式下 spinner 蒙板跟 panel 背景同色(`#171b24`),不再「撞色」。
+- antd Table 的 fixed 列(`fixed: 'right'`)现在被蒙板正确覆盖,加载时看不到半截表格。
+- 浅色主题观感不变。
+
+---
+
 ## [0.6.23] - 2026-10-01
 
 本轮是第七轮 UAT 反馈 —— v0.6.22 的「拉址感」和同步历史的两大问题：
