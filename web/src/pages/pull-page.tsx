@@ -587,15 +587,16 @@ export default function PullPage({ config, sidebarFilter, onPublishGroups }: Pro
     {
       title: '来源',
       key: 'source',
-      width: 280,
+      // v0.7.11: 280 → 220,主区域 ~1100px 时避免表格横滚;URL 走 ellipsis。
+      width: 220,
       render: (_, job) => (
         <Space direction="vertical" size={2} style={{ lineHeight: 1.4 }}>
           <Tooltip title={job.sourceUrl}>
-            <span className="mono ellipsis" style={{ maxWidth: 260, display: 'inline-block' }}>
+            <span className="mono ellipsis" style={{ maxWidth: 200, display: 'inline-block' }}>
               {job.sourceUrl.replace(/^https?:\/\//i, '')}
             </span>
           </Tooltip>
-          <span className="mono ellipsis" style={{ color: 'var(--color-text-3)' }}>
+          <span className="mono ellipsis" style={{ color: 'var(--color-text-3)', maxWidth: 200, display: 'inline-block' }}>
             {job.sourceRepo}:{job.sourceTag}
           </span>
         </Space>
@@ -604,10 +605,11 @@ export default function PullPage({ config, sidebarFilter, onPublishGroups }: Pro
     {
       title: '目标',
       key: 'dest',
-      width: 200,
+      // v0.7.11: 200 → 140,`library/alpine:3.19` 之类 21 字符 + padding 足够。
+      width: 140,
       render: (_, job) => (
         <Tooltip title={`${job.destRepo}:${job.destTag}`}>
-          <span className="mono ellipsis" style={{ maxWidth: 180, display: 'inline-block' }}>
+          <span className="mono ellipsis" style={{ maxWidth: 120, display: 'inline-block' }}>
             {job.destRepo}:{job.destTag}
           </span>
         </Tooltip>
@@ -616,7 +618,9 @@ export default function PullPage({ config, sidebarFilter, onPublishGroups }: Pro
     {
       title: '状态',
       key: 'status',
-      width: 200,
+      // v0.7.11: 用户反馈「状态列可以窄一点」—— 200 → 140。Tag + 单行
+      // 错误描述靠 ellipsis 截断。
+      width: 140,
       render: (_, job) => {
         const meta = STATUS_META[job.status];
         const failureReason = job.errorMessage ? failureHint(job) : null;
@@ -642,9 +646,10 @@ export default function PullPage({ config, sidebarFilter, onPublishGroups }: Pro
       // 任务提交时刻的 allow-list 已经被存储引擎 snapshot,展示当前设置值
       // 是「下次拉取会用」的指示,不一定是这次任务用的 —— 任务已经在跑
       // 时改设置不影响当前 job。
+      // v0.7.11: 200 → 140,跟上面对齐列宽,避免横滚。
       title: '拉取架构',
       key: 'platforms',
-      width: 200,
+      width: 140,
       render: () => {
         // 共享 pullPlatforms —— 每次 render 重读 config,响应最新设置。
         const csv = config?.mutable?.pullPlatforms ?? '';
@@ -662,7 +667,7 @@ export default function PullPage({ config, sidebarFilter, onPublishGroups }: Pro
         const text = list.join(', ');
         return (
           <Tooltip placement="topLeft" title={text}>
-            <span className="mono ellipsis" style={{ display: 'block', maxWidth: 180 }}>
+            <span className="mono ellipsis" style={{ display: 'block', maxWidth: 120 }}>
               {text}
             </span>
           </Tooltip>
@@ -672,7 +677,8 @@ export default function PullPage({ config, sidebarFilter, onPublishGroups }: Pro
     {
       title: '进度',
       key: 'progress',
-      width: 220,
+      // v0.7.11: 220 → 180,JobProgress 进度条 + 字节文本够了。
+      width: 180,
       render: (_, job) => <JobProgress job={job} />,
     },
     {

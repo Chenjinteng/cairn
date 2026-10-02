@@ -61,6 +61,10 @@
   v0.7.10: 拉取预览 Modal 的 Descriptions label 列加宽 nowrap —— 中文 label 默认
   80px 被自动换行成「源 / registry」「目 的 / 引 用」,看着别扭。labelStyle 加
   minWidth 108 + whiteSpace nowrap,中文标签不再换行。
+
+  v0.7.11: 拉取任务表瘦身列宽总和 1390 → 1110 —— v0.7.7 加「拉取架构」后总和
+  超主区域宽度,底部出横滚条。来源 / 目标 / 状态 / 拉取架构 / 进度都按内容需求
+  缩窄(状态按用户反馈缩到 140),URL 等长字段走 ellipsis,横滚条消失。
 -->
 <style>
   :root {
