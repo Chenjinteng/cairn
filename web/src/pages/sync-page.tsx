@@ -100,6 +100,14 @@ interface Props {
    */
   sidebarFilter: SidebarSelection;
   onPublishGroups: (groups: SidebarGroup[]) => void;
+  /**
+   * v0.6.26: App 层缓存的 sync 任务列表。挂载时直接用这个做初始 state,
+   * 避免切走再回时全屏蒙板闪一次。空数组 = 首次进入 → loading=true 走 fetch;
+   * 非空 = 之前看过 → loading=false,后台静默刷新。详细说明见 App.tsx 注释。
+   */
+  initialTasks: SyncTask[];
+  /** v0.6.26: 本页 tasks 更新时回调,App 用它写回缓存层。 */
+  onTasksChange?: (tasks: SyncTask[]) => void;
 }
 
 /**
@@ -174,10 +182,18 @@ function directionLabel(d: SyncDirection): string {
  *  1) 任务编辑（create / edit 共用）
  *  2) 历史查看（按 task 懒拉取 sync_runs）
  */
-export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
+export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks, onTasksChange }: Props) {
   const { message, modal } = AntdApp.useApp();
-  const [tasks, setTasks] = useState<SyncTask[]>([]);
-  const [loading, setLoading] = useState(true);
+  /*
+   * v0.6.26: tasks 用 App 层缓存的 initialTasks 初始化 —— 切走再回时立刻
+   * 有数据可显示,loading=false,PageLoading 不出现;useEffect 仍然走
+   * refresh(),新数据(silent update,setTasks 不会触发 loading 变 true)
+   * 覆盖到本地 + 通过 onTasksChange 写回 App 缓存。
+   *
+   * 第一次进入(initialTasks.length === 0)走原行为:loading=true 触发蒙板。
+   */
+  const [tasks, setTasks] = useState<SyncTask[]>(initialTasks);
+  const [loading, setLoading] = useState(initialTasks.length === 0);
   const [error, setError] = useState<ApiResult<unknown> | null>(null);
 
   /** 编辑/新建 Modal：editing == null → 新建；非空 → 编辑（token 字段空表示保留旧值）。 */
@@ -253,12 +269,14 @@ export default function SyncPage({ sidebarFilter, onPublishGroups }: Props) {
     const result = await listSyncTasks();
     if (result.success && result.data) {
       setTasks(result.data);
+      // v0.6.26: 把新数据写回 App 层缓存,下次从外部切回 sync 时直接拿这版
+      onTasksChange?.(result.data);
       setError(null);
     } else {
       setError(result);
     }
     setLoading(false);
-  }, []);
+  }, [onTasksChange]);
 
   useEffect(() => {
     void refresh();

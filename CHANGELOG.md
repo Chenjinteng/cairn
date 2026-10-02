@@ -6,6 +6,45 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.6.26] - 2026-10-02
+
+本轮是 UAT 反馈 —— 切到「镜像热度」和「镜像同步」时整个页面「刷新一次」，但其它页面不会。
+
+根因：sync/stats 两页的列表数据全在本地 state，页面 unmount 时一起丢；从切回到这边后 `useState(true)` 重新初始化为 loading=true，再走一遍 fetch + PageLoading 蒙板 —— 用户感知为「页面刷新」。其它页面（images 走 App 层 inventory 缓存，proxies/credentials/pull 用户没专门提）首次访问也是这套行为，但 sync 任务进出 / stats 周期刷更频繁，切回来时常有新数据可看，「重刷」更显眼。
+
+### 变更
+
+- **sync/stats 数据提升到 App 层缓存**。`web/src/App.tsx`：
+  - 新增 `cachedSyncTasks: SyncTask[]` 和 `cachedStatsData`（5 字段对象 summary/topItems/points/events/clients/totals），跟 images 的 inventory 同款位置。
+  - 跨重启不持久化（内存里），符合「状态只在内存」原则，跟其它页面一致。
+  - 把 setSharedState 留作 prop 回调，让对应页面 fetch 完成时把新数据写回。
+- **SyncPage 走缓存路径**。`web/src/pages/sync-page.tsx`：
+  - Props 加 `initialTasks: SyncTask[]` 和 `onTasksChange?`。
+  - `useState<SyncTask[]>(initialTasks)` 替代 `useState<SyncTask[]>([])`。
+  - `loading` 初始值 = `initialTasks.length === 0` —— 非空说明之前看过，loading=false 直接显示缓存数据 + 后台 silent refresh；空说明首次进入，走原 fetch + PageLoading 蒙板。
+  - `refresh()` 内 `setTasks(result.data)` 后调 `onTasksChange?.(result.data)` 把新数据写回 App。
+- **StatsPage 走缓存路径**。`web/src/pages/stats-page.tsx`：
+  - Props 加 `initialData: {summary, topItems, points, events, clients, totals} | null` 和 `onDataChange?`。
+  - 5 个数据字段的 `useState` 初值都从 `initialData?.xxx ?? null/[]` 取。
+  - `loading` 初始值 = `initialData === null`。
+  - 5 路 fetch 完成后调 `onDataChange({...})` 写回 App。
+  - 仅全成功的 Fetch 才写回缓存（任一路失败时不污染 App cache，避免下次切回来加载的是空快照）。
+
+### 兼容性
+
+- 严格兼容：纯前端 state 提升，**无后端 / API / 数据库变更**。
+- 切页行为变化：sync/stats 在切走再回时**不再**闪 PageLoading 蒙板（首次进入仍闪）。
+- 数据新鲜度不变**：2 路 fetch 在 useEffect 里仍跑，silent update 写回本地 + App 缓存；用户能看到的最新数据就是最新数据。
+- 重启 cairn 后 App state 回到空，跟之前一样仍会重新 fetch —— 这是设计意图，不是 bug。
+
+### 用户须知
+
+- sync/stats 切走再回：立刻显示之前的数据（无蒙板），后台静默刷新（不闪蒙板）。
+- sync/stats 首次进入：仍走 fetch + PageLoading 蒙板（同原行为）。
+- 其它页面（images / proxies / credentials / pull）：行为不变。
+
+---
+
 ## [0.6.25] - 2026-10-02
 
 本轮是构建性能改进 —— UAT 反馈 `go build` 阶段仍然看到 `# go: downloading xxx` 一堆。

@@ -27,7 +27,38 @@ import PageSidebar, {
   type SidebarGroup,
   type SidebarSelection,
 } from './components/page-sidebar';
-import type { Inventory } from './types';
+import type {
+  Inventory,
+  StatsClientItem,
+  StatsEventItem,
+  StatsEvents,
+  StatsSeriesPoint,
+  StatsSummary,
+  StatsTopItem,
+  SyncTask,
+} from './types';
+
+/**
+ * v0.6.26: 把 sync / stats 两页的数据提升到 App 层缓存 —— 跟 images-page 的
+ * inventory 同款。原因:切到 sync/stats 再切走,本地 state 随页面卸载一起丢,
+ * 回到这两页时 `useEffect` 重新触发 fetch + 整页 PageLoading 蒙板 → 用户
+ * 感知为「整个页面刷新一次」。
+ *
+ * 其它页面(proxies / credentials / pull)首次访问同样会 fetch + 蒙板,
+ * 但用户没专门提 —— 推测是因为这两页的内容变更更频繁(sync 任务进出、
+ * stats 周期刷),第二次进入时常需要新数据,看起来「重刷」更显眼。
+ *
+ * 提升到 App 层后:
+ *   - 首次进入:fetch 完,App 持有最新数据,本地 state 也初始化为这份数据
+ *   - 切走再回:页面 mount,本地 state 用 App 传入的 cached 值,**loading = false**,
+ *     PageLoading 不出现;后台 useEffect 仍然走 refresh(),新数据覆盖旧数据
+ *     (silent update,不闪蒙板)
+ *   - 跨重启:数据不持久化(全在内存),重启 cairn 后仍会重新 fetch —— 这是
+ *     设计意图,跟 images 一致
+ *
+ * 把缓存放 App 层而不是 Context/Store 是因为这两份数据只有对应页面会用,
+ * 没跨页共享需求;一个 useState + prop drilling 已经够清晰。
+ */
 
 /**
  * v0.5.37.4：每页 sidebar 的选择状态。
@@ -106,6 +137,18 @@ export default function App({
     }
   }, [page]);
   const [inventory, setInventory] = useState<Inventory | null>(null);
+  // v0.6.26: sync/stats 数据缓存,见上方大段注释。空数组/对象代表「首次进入,
+  // App 还没拿到数据」 —— 页面拿这个初始值会让 loading=true 走 fetch 路径,
+  // 跟旧行为一致;非空则 loading=false,跳过蒙板。
+  const [cachedSyncTasks, setCachedSyncTasks] = useState<SyncTask[]>([]);
+  const [cachedStatsData, setCachedStatsData] = useState<{
+    summary: StatsSummary | null;
+    topItems: StatsTopItem[];
+    points: StatsSeriesPoint[];
+    events: StatsEventItem[];
+    clients: StatsClientItem[];
+    totals: StatsEvents['totals'] | null;
+  } | null>(null);
   // v0.5.37.4：每页 sidebar 的当前选择（groupKey -> itemKey）。
   // stats 的时间窗默认 30 天，跟页面自身的 days 默认值对齐 —— 否则首屏侧栏
   // 会显示「30d 高亮」而页面按别的天数在拉数据，看着像坏了。
@@ -310,11 +353,15 @@ export default function App({
                   onConfigChange={publishConfig}
                   sidebarFilter={currentFilter}
                   onPublishGroups={publishHandlers.stats}
+                  initialData={cachedStatsData}
+                  onDataChange={setCachedStatsData}
                 />
               ) : page === 'sync' ? (
                 <SyncPage
                   sidebarFilter={currentFilter}
                   onPublishGroups={publishHandlers.sync}
+                  initialTasks={cachedSyncTasks}
+                  onTasksChange={setCachedSyncTasks}
                 />
               ) : page === 'credentials' ? (
                 <CredentialsPage

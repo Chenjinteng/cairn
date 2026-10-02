@@ -62,6 +62,21 @@ interface Props {
   sidebarFilter: SidebarSelection;
   /** 把本页真实分组上浮给 App，再统一下发给 PageSidebar。热度统计未启用时下发空组。 */
   onPublishGroups: (groups: SidebarGroup[]) => void;
+  /**
+   * v0.6.26: App 层缓存的 stats 数据(summary/topItems/points/events/
+   * clients/totals)。null = 首次进入 → 走 fetch + PageLoading;非 null = 之前看过
+   * → 用作初始值,后台静默刷新。详细说明见 App.tsx 注释。
+   */
+  initialData: {
+    summary: StatsSummary | null;
+    topItems: StatsTopItem[];
+    points: StatsSeriesPoint[];
+    events: StatsEventItem[];
+    clients: StatsClientItem[];
+    totals: StatsEvents['totals'] | null;
+  } | null;
+  /** v0.6.26: stats 数据任一字段更新时回调,App 用它写回缓存层。 */
+  onDataChange?: (data: Props['initialData']) => void;
 }
 
 /**
@@ -127,6 +142,8 @@ export default function StatsPage({
   onConfigChange,
   sidebarFilter,
   onPublishGroups,
+  initialData,
+  onDataChange,
 }: Props) {
   /**
    * v0.5.37.4：时间窗不再自带 state —— 它在侧栏里，App 存 choice，这里只是读出来。
@@ -134,19 +151,34 @@ export default function StatsPage({
    */
   const days = WINDOW_VALUES[sidebarFilter.window ?? ''] ?? DEFAULT_WINDOW;
   const [topBy, setTopBy] = useState<StatsTopBy>('repository');
-  const [summary, setSummary] = useState<StatsSummary | null>(null);
-  const [topItems, setTopItems] = useState<StatsTopItem[]>([]);
-  const [points, setPoints] = useState<StatsSeriesPoint[]>([]);
-  const [events, setEvents] = useState<StatsEventItem[]>([]);
-  const [clients, setClients] = useState<StatsClientItem[]>([]);
+  /*
+   * v0.6.26: 5 个数据字段用 initialData(来自 App 层缓存)初始化 —— 切走再回时
+   * 立刻有数据可显示,loading=false 不闪 PageLoading;useEffect 仍然走
+   * 5 路 fetch,silent update 写入本地 + 通过 onDataChange 写回 App。
+   *
+   * initialData=null 是首次进入,所有字段 fallback 到空 + loading=true 走 fetch。
+   */
+  const [summary, setSummary] = useState<StatsSummary | null>(initialData?.summary ?? null);
+  const [topItems, setTopItems] = useState<StatsTopItem[]>(initialData?.topItems ?? []);
+  const [points, setPoints] = useState<StatsSeriesPoint[]>(initialData?.points ?? []);
+  const [events, setEvents] = useState<StatsEventItem[]>(initialData?.events ?? []);
+  const [clients, setClients] = useState<StatsClientItem[]>(initialData?.clients ?? []);
   /**
    * v0.5.52: 「见过的客户端」 默认 "all" —— 该面板落 SQLite 之后,主用途是
    * "看看有没有非法的在打",限定时间窗反而把"上次重启前那个可疑客户端"挡掉了。
    * 仍提供 7/30/90 切换,跟时间窗对齐看趋势。
    */
   const [clientsDays, setClientsDays] = useState<number | 'all'>('all');
-  const [eventTotals, setEventTotals] = useState<StatsEvents['totals'] | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [eventTotals, setEventTotals] = useState<StatsEvents['totals'] | null>(
+    initialData?.totals ?? null,
+  );
+  /*
+   * v0.6.26: loading 初值跟 initialData 绑定 —— 首次进入 (initialData=null)
+   * → loading=true 走 fetch + PageLoading;切走再回 (initialData 非 null)
+   * → loading=false,PageLoading 不出现,后台 useEffect 仍然走 fetch,silent
+   * update 通过 onDataChange 写回 App 缓存。
+   */
+  const [loading, setLoading] = useState<boolean>(initialData === null);
   const [error, setError] = useState<ApiResult<unknown> | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   /**
@@ -261,6 +293,30 @@ export default function StatsPage({
       }
       if (clientsResult.success && clientsResult.data) {
         setClients(clientsResult.data.items);
+      }
+      /*
+       * v0.6.26: 把当前 stats 数据快照写回 App 缓存层。
+       *
+       * 在 setLoading(false) 之前调用 —— 此时 latest 字段全是这一轮 fetch
+       * 的新值,React 还没 commit,本地 state 是上一轮的旧值(来自
+       * useState 初值或上次的 silent update)。直接读闭包变量,不读 state,
+       * 避免读到旧值。
+       *
+       * 仅在失败次数 < 全部时写回 —— 全失败的快照会污染 App 缓存,下次
+       * 切回来仍然过不了 fetch(loading=false 但数据是空的),体感更糟。
+       */
+      const anyFailed = [summaryResult, topResult, seriesResult, eventsResult, clientsResult].some(
+        (item) => !item.success,
+      );
+      if (!anyFailed && onDataChange) {
+        onDataChange({
+          summary: summaryResult.success ? summaryResult.data ?? null : null,
+          topItems: topResult.success ? topResult.data?.items ?? [] : [],
+          points: seriesResult.success ? seriesResult.data?.points ?? [] : [],
+          events: eventsResult.success ? eventsResult.data?.items ?? [] : [],
+          clients: clientsResult.success ? clientsResult.data?.items ?? [] : [],
+          totals: eventsResult.success ? eventsResult.data?.totals ?? null : null,
+        });
       }
       const failure = [summaryResult, topResult, seriesResult, eventsResult, clientsResult].find(
         (item) => !item.success
