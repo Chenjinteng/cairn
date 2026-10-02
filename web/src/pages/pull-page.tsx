@@ -637,6 +637,39 @@ export default function PullPage({ config, sidebarFilter, onPublishGroups }: Pro
       },
     },
     {
+      // v0.7.7: 显示当前任务实际要拉的架构 —— 直接读设置页
+      // pullPlatforms(同一份 Mutable.pullPlatforms,全 UI 共享)。
+      // 任务提交时刻的 allow-list 已经被存储引擎 snapshot,展示当前设置值
+      // 是「下次拉取会用」的指示,不一定是这次任务用的 —— 任务已经在跑
+      // 时改设置不影响当前 job。
+      title: '拉取架构',
+      key: 'platforms',
+      width: 200,
+      render: () => {
+        // 共享 pullPlatforms —— 每次 render 重读 config,响应最新设置。
+        const csv = config?.mutable?.pullPlatforms ?? '';
+        const list = csv
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
+        if (list.length === 0) {
+          return (
+            <Tooltip title="未限制(等于拉所有架构 —— 上游 image index 列出的每个 child 都会下)">
+              <span style={{ color: 'var(--color-text-3)' }}>未限制</span>
+            </Tooltip>
+          );
+        }
+        const text = list.join(', ');
+        return (
+          <Tooltip placement="topLeft" title={text}>
+            <span className="mono ellipsis" style={{ display: 'block', maxWidth: 180 }}>
+              {text}
+            </span>
+          </Tooltip>
+        );
+      },
+    },
+    {
       title: '进度',
       key: 'progress',
       width: 220,
