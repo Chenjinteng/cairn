@@ -6,6 +6,24 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.10] - 2026-10-03
+
+本轮修一个 UI 体验问题 ——「即将创建拉取任务」弹窗里 Descriptions 的中文 label
+被自动换行成「源 / registry」「目 的 / 引 用」,看着别扭。属既有 UI 微调 →
+小版本进位 0.7.10。
+
+### 修复
+
+- **前端 · 拉取预览 Modal 的 Descriptions label 列加宽 + nowrap**(v0.7.10)。
+  `web/src/pages/pull-page.tsx`:
+  - 给 `<Descriptions>` 加 `labelStyle={{ minWidth: 108, whiteSpace: 'nowrap',
+    verticalAlign: 'top' }}`
+  - 108px 放下「目的引用」四字(原 80px 装不下)
+  - nowrap 阻止任何 label 内部换行
+  - vertical-align top 让多行 content 时 label 顶部对齐,不再被内容拉高
+
+---
+
 ## [0.7.9] - 2026-10-03
 
 本轮在「即将创建拉取任务」弹窗加「拉取架构」预览项,让用户入队前就能看明白

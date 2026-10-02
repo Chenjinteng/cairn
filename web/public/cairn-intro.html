@@ -57,6 +57,10 @@
   v0.7.9: 拉取预览 Modal 加「拉取架构」项 —— 跟设置页 pullPlatforms 共享
   同一份 Mutable,入队前展示「这次拉取实际要下哪些架构」(`linux/amd64, linux/arm64`
   或「未限制」),免得任务跑起来才发现 arm64 没拉到。
+
+  v0.7.10: 拉取预览 Modal 的 Descriptions label 列加宽 nowrap —— 中文 label 默认
+  80px 被自动换行成「源 / registry」「目 的 / 引 用」,看着别扭。labelStyle 加
+  minWidth 108 + whiteSpace nowrap,中文标签不再换行。
 -->
 <style>
   :root {

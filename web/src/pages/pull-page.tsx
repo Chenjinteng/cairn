@@ -1293,7 +1293,21 @@ function PullPreviewModal({
     >
       {input ? (
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <Descriptions size="small" column={1} bordered>
+          {/* v0.7.10: label 列加宽 + nowrap —— 中文 label 默认 80px 会换
+               行成「源 / registry」「目 的 / 引 用」(用户反馈),看着别扭。
+               min-width 设 108 够放下「目的引用」四字,whiteSpace: nowrap
+               阻止任何换行;vertical-align: top 让多行 content 时 label 顶部
+               对齐,不再被内容拉高。 */}
+          <Descriptions
+            size="small"
+            column={1}
+            bordered
+            labelStyle={{
+              minWidth: 108,
+              whiteSpace: 'nowrap',
+              verticalAlign: 'top',
+            }}
+          >
             <Descriptions.Item label="源 registry">
               <span className="mono">{input.sourceUrl}</span>
               {input.sourceProxyId || input.sourceProxy ? (
