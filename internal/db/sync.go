@@ -237,6 +237,45 @@ func (d *Db) SyncRunCreate(ctx context.Context, r SyncRunRow) (int64, error) {
 	return id, nil
 }
 
+// SyncRunTrimOlder deletes runs older than the most recent `keep` runs
+// for a task. Called after each new run (SyncRunCreate) so the table
+// stays bounded — v0.6.30 introduces this; before that, runs accumulated
+// forever (UI showed only the latest 50, but DB grew unboundedly).
+//
+// `keep` is the number of newest runs to retain per task; older ones are
+// removed. ON DELETE CASCADE on sync_run_items(run_id) (db.go v6+) takes
+// the per-tag detail rows with the parent runs in one statement.
+//
+// Returns the number of runs actually deleted — useful for logging, but
+// callers can ignore it (the trim is best-effort; failure here shouldn't
+// abort the new run that triggered it).
+func (d *Db) SyncRunTrimOlder(ctx context.Context, taskID int64, keep int) (int64, error) {
+	if keep <= 0 {
+		// Defensive: caller passed 0 or negative. Treat as "no trim" — the
+		// DB-keep-default falls back to the UI's historical limit (50),
+		// not infinity. We never want this path to mean "delete all".
+		return 0, nil
+	}
+	res, err := d.conn.ExecContext(ctx, `
+		DELETE FROM sync_runs
+		WHERE task_id = ?
+		  AND id NOT IN (
+		    SELECT id FROM sync_runs
+		    WHERE task_id = ?
+		    ORDER BY started_at DESC, id DESC
+		    LIMIT ?
+		  )
+	`, taskID, taskID, keep)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 // SyncRunUpdate is called once when the engine finishes a run (success,
 // partial, or failed). Replaces finished_at, status, summary counters,
 // and the error string. task_id is immutable.
@@ -293,8 +332,9 @@ func (d *Db) SyncRunUpdateProgress(ctx context.Context, id int64, currentRepo, c
 }
 
 // SyncRunListByTask returns runs for a task, newest first. limit<=0
-// means no limit; the UI passes 50 (recent runs only — older history is
-// eventual v0.6.2+ retention cleanup territory).
+// means no limit; the UI passes 10 (recent runs only — older runs are
+// trimmed by SyncRunTrimOlder after each new run, so 10 covers everything
+// still in DB).
 func (d *Db) SyncRunListByTask(ctx context.Context, taskID int64, limit int) ([]SyncRunRow, error) {
 	query := `
 		SELECT id, task_id, started_at, finished_at, status, repos_total, repos_synced, repos_failed, error, current_repo, current_tag

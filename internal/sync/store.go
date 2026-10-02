@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -134,11 +135,31 @@ func (s *Store) ListTasks(ctx context.Context) ([]SyncTask, error) {
 	return out, nil
 }
 
+// MaxRunsPerTask is the per-task run-history retention cap. v0.6.30.
+//
+// sync_runs has no auto-cleanup mechanism — runs accumulated forever
+// before 0.6.30, with the UI only fetching the latest 50 for display
+// (Store.ListRunsByTask default). The remaining rows were dead weight
+// in the DB and made the per-task history unbounded.
+//
+// After every CreateRun, the engine trims to keep only the most recent
+// MaxRunsPerTask runs for that task; ON DELETE CASCADE on
+// sync_run_items(run_id) carries the per-tag detail rows along.
+//
+// 10 is empirically "enough to spot a recent trend" (the UI lists them
+// newest-first; a typical user complaint is "the last 3-4 ran fine"),
+// small enough that a chatty / hourly task doesn't grow the DB forever.
+const MaxRunsPerTask = 10
+
 // CreateRun records a run start. The engine calls this once at the
 // beginning of iteration. Sets r.ID in place.
 //
 // Status must be one of the four valid values; anything else returns
 // ErrInvalidStatus without touching the DB.
+//
+// v0.6.30: after a successful insert, trims the per-task history down to
+// MaxRunsPerTask. Failure to trim is logged at WARN and swallowed — the
+// new run still completes; trim is best-effort.
 func (s *Store) CreateRun(ctx context.Context, r *SyncRun) error {
 	if !r.Status.Valid() {
 		return ErrInvalidStatus
@@ -159,7 +180,31 @@ func (s *Store) CreateRun(ctx context.Context, r *SyncRun) error {
 		return err
 	}
 	r.ID = id
+
+	// v0.6.30: bound the per-task history. Best-effort — failures are
+	// logged but don't abort the new run. The trim target uses MaxRunsPerTask,
+	// not the UI's historical 50; see MaxRunsPerTask doc for the rationale.
+	if _, err := s.TrimRuns(ctx, r.TaskID, MaxRunsPerTask); err != nil {
+		// Don't propagate: trim is housekeeping; the run already succeeded.
+		// Log here so operators can spot repeated failures (a stuck trim
+		// would let the table grow unboundedly).
+		slog.Default().Warn("sync: trim old runs failed",
+			"task_id", r.TaskID,
+			"keep", MaxRunsPerTask,
+			"err", err.Error())
+	}
 	return nil
+}
+
+// TrimRuns is the public wrapper over db.SyncRunTrimOlder — keeps the
+// newest `keep` runs for a task, deletes the rest. Returns the number of
+// rows actually deleted (0 is fine — a task with <= keep runs does no
+// deletes). v0.6.30.
+//
+// `keep <= 0` is a no-op (defensive — caller passed an uninitialized
+// config or similar). Never means "delete all".
+func (s *Store) TrimRuns(ctx context.Context, taskID int64, keep int) (int64, error) {
+	return s.db.SyncRunTrimOlder(ctx, taskID, keep)
 }
 
 // UpdateRun applies the terminal state when iteration ends. The engine

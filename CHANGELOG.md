@@ -6,6 +6,48 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.6.30] - 2026-10-02
+
+本轮是 UAT 反馈 —— 两件事打包一起发：
+
+- 「定时规则的 cron 不要用表达式,用下拉方式选每日/每周之类的」
+- 「同步的历史任务提示一下只保留最近 10 个历史,不然太多」
+
+### 变更
+
+- **定时规则改 4 档下拉选择器**(每小时 / 每日 / 每周 / 每月)。`web/src/pages/sync-page.tsx`:
+  - 新增模块级 `parseCron` / `kindToCron` / `cronSummary` 三个纯函数 —— 把 cron 字符串跟「下拉状态」双向翻译。
+  - 新增 `KIND_OPTIONS` / `WEEKDAY_OPTIONS` 给 antd Select 用。
+  - `ScheduleRowEditor` 完全重写:
+    - 频率下拉(4 档) + 条件子选择(每小时只选分,其它 3 档选时+分;每周多一个周几下拉,每月多一个几号 InputNumber)
+    - 「保存」按下时 `kindToCron({...})` 拼成 5 字段 cron 提交。
+    - 仍保留时区 + 启用开关。
+    - 「将保存为: <code>0 30 3 * *</code> → 每日 03:30」实时预览。
+  - `ScheduleTab` 表格列名从「cron」改成「频率」,渲染从 raw cron 改成 `cronSummary` 中文摘要。
+  - 列表里的「自定义」分支显示橙色 Tag + Tooltip(展示原 cron),运维一眼能看出哪些是历史遗留的复杂规则。
+- **存量 cron 兼容**: 编辑「自定义」规则时,顶部黄色 Alert 提示「这是历史自定义 cron 规则,保存会被下拉选定的规则覆盖」。下拉初始值默认「每日」+ 00:00,用户主动选 4 档之一 + 保存后原自定义 cron 被覆盖。不主动提供「自定义」保留编辑 —— 一旦猜错,代价太高(参见 `parseCron` 注释)。
+- **同步历史每个 task 只保留最近 10 条**:
+  - `internal/db/sync.go`: 新增 `SyncRunTrimOlder(ctx, taskID, keep)` —— `DELETE FROM sync_runs WHERE task_id=? AND id NOT IN (SELECT id FROM sync_runs WHERE task_id=? ORDER BY started_at DESC, id DESC LIMIT ?)`。
+  - `internal/sync/store.go`: 新增 `MaxRunsPerTask = 10` 常量 + `TrimRuns` 公共 wrapper;`CreateRun` 末尾 trim,best-effort(失败仅 WARN,不影响新 run)。
+  - `ON DELETE CASCADE` 在 `sync_run_items(run_id)`(`db.go v6+`)已声明,删老 runs 自动带走 run_items,无需 schema 改动。
+  - UI 列表拉取从 limit=50 改成 limit=10(`web/src/pages/sync-page.tsx:RUN_HISTORY_LIMIT`),常驻小灰字「仅保留最近 10 条历史」提示。
+
+### 兼容性
+
+- **API 行为变化**:`POST /api/sync/{id}/schedules` 和 `PATCH /api/sync/{id}/schedules/{sid}` 接受的 `cronExpr` 字符串范围没变(还是 5 字段 cron),但客户端只构造 4 个 pattern 之一。**后端零改动**。
+- **DB 数据**:升级到 v0.6.30 后,`sync_runs` 表会被 trim —— 之前累积超过 10 条的 task,旧 run 会被物理 DELETE;`sync_run_items` 同步清掉。**这是有意的数据清理,不是 bug**。
+- **存量 cron**:升级后存量 cron 在 UI 仍能正确显示(解析出来的下拉值仍可编辑;解析不出来的会标记「自定义」并显示原文)。
+- 后端 `cron` 解析器 (`internal/sync/cron.go`) 完全没动,继续支持标准 5 字段表达式 —— 万一有运维脚本/工具绕过 UI 直接 POST 复杂 cron,后端仍按设计执行。
+
+### 用户须知
+
+- 定时规则编辑器:**不再接受手写 cron 表达式**;统一走 4 档下拉 + 子选择器。
+- 同步历史:每个 task DB 里只留最近 10 条 sync_runs,旧 run 物理删除(CASCADE 带走 items)。列表常驻提示「仅保留最近 10 条历史」。
+- 删任务时 `ON DELETE CASCADE` 仍生效(task 删除连带 runs + schedules + items 全清)。
+- 「自定义」标记的规则在「保存」后会被替换为下拉选定的规则 —— 如果一定要保留原 cron 表达式,只能删了重建时用同样的 cron(目前 UI 没法直接构造,但后端 API 仍接受)。
+
+---
+
 ## [0.6.29] - 2026-10-02
 
 本轮是 UAT 反馈 ——「`cairn-sync/0.6.14` 这个同步的版本要跟着软件版本走」。具体来说,outbound User-Agent header 的字面量版本号漂了 14 个版本才被发现。

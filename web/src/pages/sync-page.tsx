@@ -33,6 +33,7 @@ import {
   Empty,
   Form,
   Input,
+  InputNumber,
   Modal,
   Pagination,
   Popconfirm,
@@ -175,6 +176,166 @@ function statusLabel(status: SyncRunStatus): string {
 /** direction → 中文。pull 是「我拉对端」,push 是「我推对端」—— 文案按操作者视角。 */
 function directionLabel(d: SyncDirection): string {
   return d === 'pull' ? '拉（Pull）' : '推（Push）';
+}
+
+/**
+ * v0.6.30: 定时规则改下拉选择 —— 历史 cron 表达式让用户绕晕,改成 4 档下拉
+ * (每小时 / 每日 / 每周 / 每月),每档再选时 / 分 / 周几 / 几号。后端 schema 不动,
+ * 前端构造 5 字段 cron 字符串提交。存量 cron 表达式如果不属于这 4 个 pattern
+ * (例如「每 N 分钟」「工作日 0 点」这种带范围/通配 cron),UI 标记为「自定义」
+ * 并保留原文 —— 编辑时强行走下拉,失去原 cron,但保留可改时区 / 启用的能力
+ * (细节见 ScheduleRowEditor)。
+ *
+ * 整套逻辑三块:
+ *   1. cron → Parsed: parseCron 把 cron 字符串反解成 {kind, hour, minute, dow, dom}
+ *      任意字段不是简单数字(带通配/范围/列表)或不属于 4 个 pattern,返回 null
+ *      (走「自定义」分支)。
+ *   2. Parsed → cron: kindToCron 把下拉状态组装成 5 字段字符串提交。
+ *   3. cron → 显示: cronSummary 把 cron 翻成中文(用于列表 + 编辑器预览),
+ *      解析失败时回落到原文。
+ */
+type ScheduleKind = 'hourly' | 'daily' | 'weekly' | 'monthly';
+
+interface ParsedCron {
+  kind: ScheduleKind;
+  minute: number;
+  hour: number;
+  /** 0=周日, 1=周一, ..., 6=周六 —— 跟 cron dow 同款,周一是常见一周起点。 */
+  dayOfWeek: number;
+  /** 1-31 —— cron dom 同款。 */
+  dayOfMonth: number;
+}
+
+const KIND_OPTIONS: { value: ScheduleKind; label: string }[] = [
+  { value: 'hourly', label: '每小时' },
+  { value: 'daily', label: '每日' },
+  { value: 'weekly', label: '每周' },
+  { value: 'monthly', label: '每月' },
+];
+
+const WEEKDAY_OPTIONS: { value: number; label: string }[] = [
+  { value: 1, label: '周一' },
+  { value: 2, label: '周二' },
+  { value: 3, label: '周三' },
+  { value: 4, label: '周四' },
+  { value: 5, label: '周五' },
+  { value: 6, label: '周六' },
+  { value: 0, label: '周日' },
+];
+
+const WEEKDAY_LABEL: Record<number, string> = {
+  0: '周日',
+  1: '周一',
+  2: '周二',
+  3: '周三',
+  4: '周四',
+  5: '周五',
+  6: '周六',
+};
+
+/** 简单整数判断 —— 解析器只接受这一种,带特殊操作符的(例如 `star-slash` `-` `,`)都算「自定义」。 */
+function isSimpleInt(s: string): boolean {
+  return /^\d+$/.test(s);
+}
+
+/**
+ * 5 字段 cron → ParsedCron。判定规则(顺序敏感,从最具体到最不具体):
+ *   - M H D * *  → monthly(M+H+D 都是单个数字,month 必 *)
+ *   - M H * * D  → weekly(month 必 *, dom 必 *, dow 单数字)
+ *   - M H * * *  → daily(month + dom + dow 都 *)
+ *   - M * * * *  → hourly(只 minute 是数字)
+ *   - 其他        → null(自定义,UI 走 raw cron 显示路径)
+ *
+ * 字段是 *, /, -, , 的表达式一律返回 null,不试图「智能」猜测 —— 一旦猜错就
+ * 静默覆盖用户原始 cron,代价太高。复杂度让用户走下拉解决。
+ */
+function parseCron(expr: string): ParsedCron | null {
+  const fields = expr.trim().split(/\s+/);
+  if (fields.length !== 5) return null;
+  const [m, h, dom, mon, dow] = fields;
+  // month 必须 * —— 月度定时规则不在本轮下拉覆盖范围(太罕见)
+  if (mon !== '*') return null;
+  if (!isSimpleInt(m)) return null;
+
+  if (isSimpleInt(dom) && dow === '*') {
+    // M H D * *  — monthly
+    if (!isSimpleInt(h)) return null;
+    return {
+      kind: 'monthly',
+      minute: parseInt(m, 10),
+      hour: parseInt(h, 10),
+      dayOfMonth: parseInt(dom, 10),
+      dayOfWeek: 1,
+    };
+  }
+  if (dom === '*' && isSimpleInt(dow)) {
+    // M H * * D  — weekly
+    if (!isSimpleInt(h)) return null;
+    return {
+      kind: 'weekly',
+      minute: parseInt(m, 10),
+      hour: parseInt(h, 10),
+      dayOfWeek: parseInt(dow, 10),
+      dayOfMonth: 1,
+    };
+  }
+  if (dom === '*' && dow === '*' && isSimpleInt(h)) {
+    // M H * * *  — daily
+    return {
+      kind: 'daily',
+      minute: parseInt(m, 10),
+      hour: parseInt(h, 10),
+      dayOfWeek: 1,
+      dayOfMonth: 1,
+    };
+  }
+  if (h === '*' && dom === '*' && dow === '*') {
+    // M * * * *  — hourly
+    return {
+      kind: 'hourly',
+      minute: parseInt(m, 10),
+      hour: 0,
+      dayOfWeek: 1,
+      dayOfMonth: 1,
+    };
+  }
+  return null;
+}
+
+/** ParsedCron → 5 字段 cron。编辑器保存时调用,跟后端 ParseCron 完全对称。 */
+function kindToCron(p: ParsedCron): string {
+  switch (p.kind) {
+    case 'hourly':
+      return `${p.minute} * * * *`;
+    case 'daily':
+      return `${p.minute} ${p.hour} * * *`;
+    case 'weekly':
+      return `${p.minute} ${p.hour} * * ${p.dayOfWeek}`;
+    case 'monthly':
+      return `${p.minute} ${p.hour} ${p.dayOfMonth} * *`;
+  }
+}
+
+const pad2 = (n: number): string => (n < 10 ? `0${n}` : String(n));
+
+/**
+ * cron 字符串 → 中文摘要,用于列表 + 编辑器预览:
+ *   「每小时 第 30 分」「每日 03:30」「每周一 03:30」「每月 1 日 03:30」
+ * 解析失败(自定义)直接返回原文 + 「自定义」前缀。
+ */
+function cronSummary(expr: string): string {
+  const parsed = parseCron(expr);
+  if (!parsed) return `自定义: ${expr}`;
+  switch (parsed.kind) {
+    case 'hourly':
+      return `每小时 第 ${parsed.minute} 分`;
+    case 'daily':
+      return `每日 ${pad2(parsed.hour)}:${pad2(parsed.minute)}`;
+    case 'weekly':
+      return `每${WEEKDAY_LABEL[parsed.dayOfWeek] ?? `周${parsed.dayOfWeek}`} ${pad2(parsed.hour)}:${pad2(parsed.minute)}`;
+    case 'monthly':
+      return `每月 ${parsed.dayOfMonth} 日 ${pad2(parsed.hour)}:${pad2(parsed.minute)}`;
+  }
 }
 
 /**
@@ -501,9 +662,11 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
    * - 加载中(loading)直接返回,避免重复刷 spinner
    * - 错误:toast 失败原因,仍标记 loaded=true (否则 loading 永不清掉)
    *
-   * 上限 50 条 run —— 跟原 Modal 行为一致。后端默认 limit 50,够大多数场景
-   * 用(典型一个 task 一天跑几次,一个月 ~60 条)。要看更早历史再加 limit,先不做。
+   * v0.6.30: 上限 10 条 run —— 后端 CreateRun 末尾会 trim,每个 task 只保留最近
+   * 10 条 sync_runs(CASCADE 带走 run_items)。UI 拿 10 跟后端保留数对齐,不再
+   * 默默截断;「仅保留最近 10 条历史」提示常驻在 runs 表头。
    */
+  const RUN_HISTORY_LIMIT = 10;
   const loadTaskRuns = async (taskId: number, opts?: { force?: boolean }) => {
     const existing = runsByTaskId[taskId];
     /*
@@ -519,7 +682,7 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
       ...prev,
       [taskId]: { runs: prev[taskId]?.runs ?? [], loading: true, loaded: false },
     }));
-    const result = await listSyncRuns(taskId, 50);
+    const result = await listSyncRuns(taskId, RUN_HISTORY_LIMIT);
     if (result.success && result.data) {
       setRunsByTaskId((prev) => ({
         ...prev,
@@ -1174,6 +1337,14 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
                  * /api/sync/{taskId}/runs/{runId}/items。
                  */
                 <div className="expanded-row-anim">
+                {/*
+                 * v0.6.30: 「仅保留最近 10 条历史」提示 —— 后端 CreateRun 末尾 trim,
+                 * 每个 task 只留最近 10 条 sync_runs(CASCADE 带走 run_items)。
+                 * 常驻小灰字,不强提示,让用户知道「为什么看不到更早的」。
+                 */}
+                <div style={{ fontSize: 12, color: '#999', margin: '0 0 6px 4px' }}>
+                  仅保留最近 {RUN_HISTORY_LIMIT} 条历史
+                </div>
                 <Table<SyncRun>
                   rowKey="id"
                   columns={runColumns}
@@ -1638,10 +1809,26 @@ function ScheduleTab({ schedules, loading, onCreate, onUpdate, onDelete }: Sched
       render: (on: boolean) => (on ? <Tag color="green">启用</Tag> : <Tag>停用</Tag>),
     },
     {
-      title: 'cron',
+      title: '频率',
       dataIndex: 'cronExpr',
       key: 'cronExpr',
-      render: (e: string) => <code style={{ fontSize: 12 }}>{e}</code>,
+      /*
+       * v0.6.30: 列名从「cron」改成「频率」,渲染从 raw cron 表达式改成
+       * cronSummary —— 中文摘要(每日 03:30 / 每周一 03:30 / 每月 1 日 03:30
+       * / 每小时 第 30 分 / 自定义: * * * * *)。「自定义」分支保留 raw 表达式
+       * 给运维一眼看到。规则定义见 ScheduleKind / cronSummary。
+       */
+      render: (e: string) => {
+        const summary = cronSummary(e);
+        const isCustom = summary.startsWith('自定义:');
+        return isCustom ? (
+          <Tooltip title={e}>
+            <Tag color="orange">{summary}</Tag>
+          </Tooltip>
+        ) : (
+          <span style={{ fontSize: 12 }}>{summary}</span>
+        );
+      },
     },
     {
       title: '时区',
@@ -1755,30 +1942,131 @@ interface ScheduleRowEditorProps {
 }
 
 /**
- * 单行编辑器:cron 表达式 + 可选时区 + 启用开关。
- * 「保存」直接调 onSubmit,后端 Validate 失败会弹 message;前端不做
- * 客户端 cron 解析（解析器在 internal/sync/cron.go,后端是唯一权威）。
+ * 单行编辑器：v0.6.30 起从 cron 表达式文本框改成 4 档下拉。
+ *
+ *   频率下拉:每小时 / 每日 / 每周 / 每月
+ *   条件子选择:
+ *     - 每小时:分钟(0-59)
+ *     - 每日:  时(0-23) + 分(0-59)
+ *     - 每周:  时 + 分 + 周几(一-日)
+ *     - 每月:  时 + 分 + 几号(1-31)
+ *   时区(可选,默认 UTC) + 启用开关
+ *
+ * 「保存」直接调 onSubmit,后端 Validate 失败会弹 message;前端不做客户端
+ * cron 解析(解析器在 internal/sync/cron.go,后端是唯一权威)。前端只负责
+ * kindToCron 把下拉状态组装成 5 字段字符串。
+ *
+ * 存量「自定义」cron(没匹配 4 个 pattern 的,例如 `star-slash 15` 或 `0 0 star star 1-5`):
+ *   - 顶部 Alert 提示「这是历史自定义 cron 规则,保存会被下拉选定的规则覆盖」
+ *   - 下拉初始值默认「每日」,但 initial cron 不变,只是显示警告
+ *   - 用户主动选择 4 档之一 + 保存,原自定义 cron 被覆盖
+ *   - 不主动提供「自定义」保留编辑 —— 一旦猜错,代价太高(参见 parseCron 注释)
  */
 function ScheduleRowEditor({ mode, initial, onCancel, onSubmit }: ScheduleRowEditorProps) {
-  const [cronExpr, setCronExpr] = useState(initial?.cronExpr ?? '');
+  const initialParsed = initial?.cronExpr ? parseCron(initial.cronExpr) : null;
+  /*
+   * 编辑「自定义」时,下拉默认值定「每日」+ 00:00 —— 历史 cron 没法反推,
+   * 给一个明显的「改了才知道要选」的状态,配合 Alert 提示用户:
+   * 「保存会变成下方选定的规则,原自定义 cron 没了」。
+   */
+  const [kind, setKind] = useState<ScheduleKind>(initialParsed?.kind ?? 'daily');
+  const [hour, setHour] = useState<number>(initialParsed?.hour ?? 0);
+  const [minute, setMinute] = useState<number>(initialParsed?.minute ?? 0);
+  const [dayOfWeek, setDayOfWeek] = useState<number>(initialParsed?.dayOfWeek ?? 1);
+  const [dayOfMonth, setDayOfMonth] = useState<number>(initialParsed?.dayOfMonth ?? 1);
   const [timezone, setTimezone] = useState(initial?.timezone ?? '');
   const [enabled, setEnabled] = useState(initial?.enabled ?? true);
   const [submitting, setSubmitting] = useState(false);
 
+  /*
+   * initial.cronExpr 存在 + 解析不出 4 档之一 → 标记为「自定义」,顶部
+   * 展示 Alert。mode=create 时永远 false(没有 initial)。
+   */
+  const isCustom = mode === 'edit' && !!initial?.cronExpr && initialParsed === null;
+  const previewCron = kindToCron({ kind, minute, hour, dayOfWeek, dayOfMonth });
+
   return (
-    <Space direction="vertical" style={{ width: '100%' }} size={8}>
-      <Space wrap>
-        <Input
-          style={{ width: 280 }}
-          placeholder="cron 表达式,如 0 0 * * * (每天 0 点 UTC)"
-          value={cronExpr}
-          onChange={(e) => setCronExpr(e.target.value)}
+    <Space direction="vertical" style={{ width: '100%' }} size={12}>
+      {isCustom ? (
+        <Alert
+          type="warning"
+          showIcon
+          message="这是历史自定义 cron 规则"
+          description={
+            <>
+              原始表达式: <code style={{ background: 'rgba(0,0,0,0.05)', padding: '1px 6px', borderRadius: 3 }}>{initial?.cronExpr}</code>
+              <br />
+              保存时会替换为下方下拉选定的规则(<code>{previewCron}</code>)。
+              如需保留原表达式,请勿保存,直接取消。
+            </>
+          }
         />
+      ) : null}
+      <Space wrap>
+        <Select
+          value={kind}
+          onChange={setKind}
+          options={KIND_OPTIONS}
+          style={{ width: 120 }}
+        />
+        {kind === 'hourly' ? (
+          // 每小时只选分
+          <InputNumber
+            min={0}
+            max={59}
+            value={minute}
+            onChange={(v) => setMinute(typeof v === 'number' ? v : 0)}
+            addonAfter="分"
+            style={{ width: 140 }}
+            placeholder="分"
+          />
+        ) : (
+          // 每日 / 每周 / 每月:选时 + 分
+          <>
+            <InputNumber
+              min={0}
+              max={23}
+              value={hour}
+              onChange={(v) => setHour(typeof v === 'number' ? v : 0)}
+              addonAfter="时"
+              style={{ width: 140 }}
+              placeholder="时"
+            />
+            <InputNumber
+              min={0}
+              max={59}
+              value={minute}
+              onChange={(v) => setMinute(typeof v === 'number' ? v : 0)}
+              addonAfter="分"
+              style={{ width: 140 }}
+              placeholder="分"
+            />
+          </>
+        )}
+        {kind === 'weekly' ? (
+          <Select
+            value={dayOfWeek}
+            onChange={setDayOfWeek}
+            options={WEEKDAY_OPTIONS}
+            style={{ width: 140 }}
+          />
+        ) : null}
+        {kind === 'monthly' ? (
+          <InputNumber
+            min={1}
+            max={31}
+            value={dayOfMonth}
+            onChange={(v) => setDayOfMonth(typeof v === 'number' ? v : 1)}
+            addonAfter="日"
+            style={{ width: 140 }}
+            placeholder="几号"
+          />
+        ) : null}
         <Input
-          style={{ width: 200 }}
           placeholder="时区 (可选,默认 UTC)"
           value={timezone}
           onChange={(e) => setTimezone(e.target.value)}
+          style={{ width: 200 }}
         />
         <Switch
           checkedChildren="启用"
@@ -1791,12 +2079,11 @@ function ScheduleRowEditor({ mode, initial, onCancel, onSubmit }: ScheduleRowEdi
         <Button
           type="primary"
           loading={submitting}
-          disabled={!cronExpr.trim()}
           onClick={async () => {
             setSubmitting(true);
             try {
               await onSubmit({
-                cronExpr: cronExpr.trim(),
+                cronExpr: previewCron,
                 timezone: timezone.trim(),
                 enabled,
               });
@@ -1809,7 +2096,9 @@ function ScheduleRowEditor({ mode, initial, onCancel, onSubmit }: ScheduleRowEdi
         </Button>
         <Button onClick={onCancel}>取消</Button>
         <span style={{ color: '#999', fontSize: 12 }}>
-          标准 5 字段 cron（分 时 日 月 周）。例: <code>*/15 * * * *</code> = 每 15 分钟,<code>0 0 * * 1-5</code> = 工作日 0 点。
+          将保存为:&nbsp;
+          <code style={{ background: 'rgba(0,0,0,0.05)', padding: '1px 6px', borderRadius: 3 }}>{previewCron}</code>
+          &nbsp;→ {cronSummary(previewCron)}
         </span>
       </Space>
     </Space>
