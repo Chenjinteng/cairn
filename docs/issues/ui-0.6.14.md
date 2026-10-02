@@ -251,6 +251,7 @@
 - 第九轮 UAT 反馈（切到 sync/stats 整页刷新一次）→ **0.6.26**
 - 第十轮 UAT 反馈（首次进入 sync/stats 仍闪蒙板 → App mount 后台预取）→ **0.6.27**
 - 第十一轮 UAT 反馈（清缓存刷新 sync/stats 仍闪 → PageLoading 加 delay prop，延迟窗口内数据回来则不弹蒙板）→ **0.6.28**
+- 第十二轮 UAT 反馈（同步 UA 版本号 `cairn-sync/0.6.14` 漂了 14 个版本没跟 binary 走 → 让 User-Agent 从 `version.Version` 派生）→ **0.6.29**
 - UI-6b → **暂缓**（详见下文）
 
 > **不进位的原因**：用户认为这两项是「既有 UI 一致性收尾」的延续，不构成 AGENTS.md 所说的"新增模块"或"破坏性变化"——后者才必须进中版本。AI 尊重用户拍板，但本拍板记录在文档里留作 context，下次类似口径分歧时翻这段作为判例。
@@ -296,3 +297,31 @@
 **API 兼容性**：默认 200ms 行为变化，所有调用方不用改。若需退回旧行为，传 `delay={0}`。
 
 **进一步可能**：将来某页业务真的「永远快」（比如 SSG 缓存命中），可传 `delay={500}`。本轮不动，按需扩展。
+
+### 拍板记录（2026-10-02 · 第十二轮 UAT 反馈）
+
+**症状**：用户反馈「`cairn-sync/0.6.14` 这个同步的版本要跟着软件版本走」—— outbound User-Agent header 里写死了 `0.6.14`，binary 已经到 0.6.28，差 14 个版本。
+
+**根因**：git log 显示从 v0.6.6 起每次发版手动 bump 这两个 UA 字面量（writer.go / probe.go 各一个），到 0.6.14 就停下了 —— 没有机制提醒「binary 涨了，这两个串也得涨」。
+
+- `internal/sync/writer.go:241`：`req.Header.Set("User-Agent", "cairn-sync/0.6.14")`
+- `internal/sync/probe.go:79`：`req.Header.Set("User-Agent", "cairn-sync-probe/0.6.14")`
+
+注：registry client 流量走 `internal/registry/client.go`，用的是 `version.UserAgent = "cairn/" + Version` 派生，本身没漂 —— 漂的是 sync 模块这两条。
+
+**拍板修法**（用户 2026-10-02 拍板）：**从 `version.Version` 派生，再写死就还会漂**：
+
+- `internal/version/version.go` 新增两个常量：
+  - `SyncUserAgent = "cairn-sync/" + Version`
+  - `ProbeUserAgent = "cairn-sync-probe/" + Version`
+- writer.go / probe.go 各 import `internal/version`，改用对应常量。
+- bump Version 时这两条自动跟上。
+
+**为什么不动版本节奏**：用户拍板独立 v0.6.29，不 amend 进 v0.6.28。理由：UA 是 outbound 行为变化（上游 registry 看到的字符串实际变了），不是 v0.6.28 的 PageLoading delay 那一类「前端 prop 增量」。给一个独立 version 让 UAT log / allowlist 关联更清晰。
+
+**为什么不延后**：「sync UA 漂 14 个版本」这件事本身已经是问题，越早修越好 —— 拖到下个版本期间上游 registry 又会累积一段 `0.6.14` 标识的错误 sync 流量，反而更难清理。
+
+**对上游 registry 的影响**：
+
+- 日志：`cairn-sync/0.6.14` → `cairn-sync/0.6.29`，`cairn-sync-probe/0.6.14` → `cairn-sync-probe/0.6.29`。
+- allowlist：基于 UA 的 allowlist 需要同步更新（建议改成 `cairn-sync/.*` 通配，避免下次再漂）。

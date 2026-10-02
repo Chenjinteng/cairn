@@ -9,6 +9,8 @@ import (
 	"path"
 	"strings"
 	"time"
+
+	"github.com/Chenjinteng/cairn/internal/version"
 )
 
 // Writer is the *outbound* side of the sync engine — it pushes blobs
@@ -238,7 +240,9 @@ func (w *Writer) newRequest(ctx context.Context, method, url string, body io.Rea
 		cred := base64.StdEncoding.EncodeToString([]byte(w.username + ":" + w.password))
 		req.Header.Set("Authorization", "Basic "+cred)
 	}
-	req.Header.Set("User-Agent", "cairn-sync/0.6.14")
+	// v0.6.29: 从 version.Version 派生 —— 历史硬编码 "cairn-sync/0.6.14"
+	// 漂了 14 个版本才被发现。bump Version 时这里自动跟上,不再漂。
+	req.Header.Set("User-Agent", version.SyncUserAgent)
 	return req, nil
 }
 

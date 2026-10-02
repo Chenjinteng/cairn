@@ -6,6 +6,39 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.6.29] - 2026-10-02
+
+本轮是 UAT 反馈 ——「`cairn-sync/0.6.14` 这个同步的版本要跟着软件版本走」。具体来说,outbound User-Agent header 的字面量版本号漂了 14 个版本才被发现。
+
+### 修复
+
+- **同步流量 + 探测流量的 User-Agent 从 `version.Version` 派生,不再写死字面量版本号**。`internal/version/version.go`:
+  - 新增 `SyncUserAgent = "cairn-sync/" + Version` 和 `ProbeUserAgent = "cairn-sync-probe/" + Version`,跟现有的 `UserAgent = "cairn/" + Version` 同款。
+  - bump Version 时这里自动跟上,未来再也不会漂。
+- **`internal/sync/writer.go:241`**:`User-Agent` header 从硬编码 `"cairn-sync/0.6.14"` 改为 `version.SyncUserAgent`,新增 `internal/version` import。
+- **`internal/sync/probe.go:79`**:`User-Agent` header 从硬编码 `"cairn-sync-probe/0.6.14"` 改为 `version.ProbeUserAgent`,新增 `internal/version` import。
+
+### 历史回顾
+
+git log 显示这两个字面量版本号从 v0.6.6 起每次发版都**手动 bump**(0.6.6 → 0.6.7 → ... → 0.6.14),到 0.6.14 就停下了 —— 没机制提醒「binary 版本涨了,这两串也得涨」。这次从 0.6.14 直接漂到 0.6.28,差 14 个版本,直到 UAT 反馈才被发现。
+
+改成从 `Version` 派生后,这类「下游硬编码版本号」drift 风险彻底消除。
+
+### 兼容性
+
+- **Outbound UA header 字符串实际值变了**:之前所有 cairn sync 请求打到上游 registry 时,UA 都是 `cairn-sync/0.6.14`;升级到 v0.6.29 后变成 `cairn-sync/0.6.29`。
+- 上游 registry 看到 UA 变化,**不影响功能**(registry 不根据 UA 路由请求);**仅影响运维维度**:
+  - 日志关联:registry access log 里之前 `0.6.14` 标识的 sync 流量,升级后变成 `0.6.29`。这是设计意图(让上游能看到 cairn 的版本演进),但如果你的 log 看板按 UA 做了 hardcoded alert 阈值,记得同步更新。
+  - allowlist:基于 UA 的 allowlist 需要把 `cairn-sync/0.6.14` 改成 `cairn-sync/0.6.29`(或者直接写通配 `cairn-sync/.*`)。注意 0.6.5 之前 UA 不带版本号,那批老版本的请求仍会命中通配规则的另一段。
+
+### 用户须知
+
+- 上游 registry 的 access log 里 `cairn-sync` / `cairn-sync-probe` 现在显示 0.6.29(跟 binary 对齐)。
+- 这次只动 outbound header 字符串,**不动任何请求路径、请求体、鉴权、行为**。
+- 探测流量仍带独立 `cairn-sync-probe/` UA,跟 0.6.5 引入的设计一致 —— 上游仍能区分「真实同步」和「测试连接」流量。
+
+---
+
 ## [0.6.28] - 2026-10-02
 
 本轮是 UAT 第十一轮反馈 —— 清缓存刷新后访问「镜像热度 / 镜像同步」仍能看到一闪而过的 PageLoading 蒙板。

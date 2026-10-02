@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/Chenjinteng/cairn/internal/version"
 )
 
 // ProbeResult describes the outcome of a connectivity check against
@@ -76,7 +78,9 @@ func ProbeConnection(ctx context.Context, baseURL, username, password string) Pr
 		cred := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
 		req.Header.Set("Authorization", "Basic "+cred)
 	}
-	req.Header.Set("User-Agent", "cairn-sync-probe/0.6.14")
+	// v0.6.29: 从 version.Version 派生 —— 历史硬编码 "cairn-sync-probe/0.6.14"
+	// 漂了 14 个版本才被发现。bump Version 时这里自动跟上,不再漂。
+	req.Header.Set("User-Agent", version.ProbeUserAgent)
 
 	hc := &http.Client{Timeout: 5 * time.Second}
 	resp, err := hc.Do(req)
