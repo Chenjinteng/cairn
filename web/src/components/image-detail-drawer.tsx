@@ -144,13 +144,31 @@ export default function ImageDetailDrawer({
       title: '架构',
       dataIndex: 'architecture',
       key: 'architecture',
-      width: 150,
-      render: (value: string, record) => {
-        if (!value) {
+      width: 180,
+      // v0.7.3: render the full platform list so multi-arch tags show
+      // "linux/amd64, linux/arm64" instead of "linux/amd64 +1". Older
+      // inventory responses won't carry `platforms`; fall back to the
+      // back-compat single-arch + "+N" form in that case.
+      render: (_, record: RegistryTag) => {
+        const list = record.platforms && record.platforms.length > 0
+          ? record.platforms
+          : record.architecture
+            ? [`${record.os || 'linux'}/${record.architecture}`]
+            : [];
+        if (list.length === 0) {
           return '--';
         }
-        const platform = `${record.os || 'linux'}/${value}`;
-        return record.platformCount > 1 ? `${platform} +${record.platformCount - 1}` : platform;
+        if (list.length === 1) {
+          return <span className="mono">{list[0]}</span>;
+        }
+        return (
+          <Tooltip
+            placement="topLeft"
+            title={list.join(', ')}
+          >
+            <span className="mono">{list.join(', ')}</span>
+          </Tooltip>
+        );
       },
     },
     { title: '层数', dataIndex: 'layerCount', key: 'layerCount', width: 80 },
@@ -249,7 +267,11 @@ export default function ImageDetailDrawer({
              *
              * 点按钮 → 浏览器 GET /api/repositories/{repo}/tags/{tag}/export,
              * 服务端吐 `docker save`-compatible tar 流,Content-Disposition
-             * 让浏览器自动以 <repo>-<tag>.tar 存盘。
+             * 让浏览器自动以 <repo>-<tag>-<arch>.tar 存盘(v0.7.3 起文件名带架构)。
+             *
+             * v0.7.3: 多架构 tag 现在是 Dropdown,菜单列出 platforms 数组,
+             * 用户选哪个就下载哪个。文件名前缀固定由后端贴架构(平台 query
+             * 显式传了 → 用实际架构;没传 → 用 chip 默认 amd64),不会撞名。
              *
              * 注意事项:
              *   - 用 <a href download> 而不是 fetch + blob,前者让浏览器
@@ -257,33 +279,60 @@ export default function ImageDetailDrawer({
              *     几 GB 镜像不可行。
              *   - URL 拼装要 encodeURIComponent(repo) 因为 repo 名常含
              *     "/" (library/nginx),dispatcher 内部再解码。
-             *   - 不传 ?platform= 让后端走设置页 chip 的默认平台
-             *     (linux/amd64 by default) —— 跟「拉取镜像的架构」口径一致。
-             *   - 镜像 schema1 / 多平台镜像里没 amd64 时,后端会 400,
-             *     但 axios 这条不会触发(直接 <a> 走,不走 axios);
-             *     错误状态码浏览器看不到,但 tar 头不对的响应会得到
-             *     一个非 tar 文件,用户看着「下载了但 docker load
-             *     不认」—— 在镜像列表 Platform 列显示「linux/amd64」或
-             *     「linux/amd64, linux/arm64」的镜像上点才能保证成功。
+             *   - 单架构 tag 走默认 platform(后端 chip 默认 amd64)。
+             *   - 镜像 schema1 / 多平台镜像里没请求的 platform 时,后端
+             *     会 400;axios 不触发(直接 <a> 走),错误状态码浏览器
+             *     看不到,但 tar 头不对的响应会得到一个非 tar 文件。
              */}
-            <Button
-              type="text"
-              size="small"
-              icon={<DownloadOutlined />}
-              aria-label="下载镜像 tar"
-              onClick={() => {
-                const url = `/api/repositories/${encodeURIComponent(repo)}/tags/${encodeURIComponent(record.tag)}/export`;
-                // Use a transient <a> so we don't fight React's hydration
-                // around the persistent anchor; download attribute drives
-                // the browser's save-as behaviour for any Content-Type.
+            {(() => {
+              const platforms = record.platforms && record.platforms.length > 0
+                ? record.platforms
+                : record.architecture
+                  ? [`${record.os || 'linux'}/${record.architecture}`]
+                  : [];
+              const trigger = (platform?: string) => {
+                let url = `/api/repositories/${encodeURIComponent(repo)}/tags/${encodeURIComponent(record.tag)}/export`;
+                if (platform) {
+                  url += `?platform=${encodeURIComponent(platform)}`;
+                }
                 const a = document.createElement('a');
                 a.href = url;
                 a.rel = 'noopener';
                 document.body.appendChild(a);
                 a.click();
                 a.remove();
-              }}
-            />
+              };
+              if (platforms.length <= 1) {
+                return (
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<DownloadOutlined />}
+                    aria-label="下载镜像 tar"
+                    onClick={() => trigger()}
+                  />
+                );
+              }
+              return (
+                <Dropdown
+                  trigger={['hover']}
+                  menu={{
+                    items: platforms.map((p) => ({
+                      key: p,
+                      label: `下载 ${p}`,
+                      onClick: () => trigger(p),
+                    })),
+                  }}
+                >
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<DownloadOutlined />}
+                    aria-label="下载镜像 tar(选架构)"
+                  />
+                </Dropdown>
+              );
+            })()}
             {allowDelete ? (
               <Popconfirm
                 title={`确认删除 ${record.tag}？`}

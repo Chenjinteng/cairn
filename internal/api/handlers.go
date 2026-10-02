@@ -498,6 +498,12 @@ type Repository struct {
 
 // TagInfo is one tag of a repository. Size is the sum of the config blob
 // and all layers (index manifests sum their platforms, best-effort).
+//
+// v0.7.3: Platforms carries the full "<os>/<arch>[/<variant>]" list for
+// multi-arch images so the UI can render the column as "linux/amd64,
+// linux/arm64" and the download button can offer a per-platform menu.
+// Architecture / OS remain as best-effort single-string fallbacks for
+// callers / frontends that haven't moved to the array form yet.
 type TagInfo struct {
 	Tag           string     `json:"tag"`
 	Digest        string     `json:"digest"`
@@ -506,6 +512,7 @@ type TagInfo struct {
 	Architecture  string     `json:"architecture"`
 	OS            string     `json:"os"`
 	PlatformCount int        `json:"platformCount"`
+	Platforms     []string   `json:"platforms,omitempty"`
 	CreatedAt     *time.Time `json:"createdAt"`
 }
 
@@ -612,6 +619,9 @@ type manifestDoc struct {
 		Platform struct {
 			Architecture string `json:"architecture"`
 			OS           string `json:"os"`
+			// v0.7.3: variant lets us distinguish arm/v6 vs arm/v7 (both
+			// report architecture="arm" on the wire) and arm64 vs arm64/v8.
+			Variant string `json:"variant,omitempty"`
 		} `json:"platform"`
 	} `json:"manifests"`
 }
@@ -650,26 +660,31 @@ func buildTagInfo(ctx context.Context, store storage.Storage, repo, tag string) 
 	if len(doc.Manifests) > 0 {
 		// Image index: aggregate platform identities and sum sub-manifest sizes.
 		info.PlatformCount = len(doc.Manifests)
-		archSeen := map[string]struct{}{}
-		osSeen := map[string]struct{}{}
-		archs := []string{}
-		oss := []string{}
+		platformSeen := map[string]struct{}{}
+		platforms := []string{}
 		for _, m := range doc.Manifests {
-			if a := m.Platform.Architecture; a != "" {
-				if _, ok := archSeen[a]; !ok {
-					archSeen[a] = struct{}{}
-					archs = append(archs, a)
-				}
+			key := formatPlatformKey(m.Platform.OS, m.Platform.Architecture, m.Platform.Variant)
+			if key == "" {
+				continue
 			}
-			if o := m.Platform.OS; o != "" {
-				if _, ok := osSeen[o]; !ok {
-					osSeen[o] = struct{}{}
-					oss = append(oss, o)
-				}
+			if _, ok := platformSeen[key]; ok {
+				continue
+			}
+			platformSeen[key] = struct{}{}
+			platforms = append(platforms, key)
+		}
+		info.Platforms = platforms
+		// Back-compat: keep the first platform as Architecture / OS for
+		// callers that haven't moved to the Platforms array yet. We pick
+		// the first populated entry rather than the first array slot so a
+		// manifest whose only entry has no platform still gets a sane value.
+		for _, m := range doc.Manifests {
+			if m.Platform.Architecture != "" {
+				info.Architecture = m.Platform.Architecture
+				info.OS = m.Platform.OS
+				break
 			}
 		}
-		info.Architecture = strings.Join(archs, ",")
-		info.OS = strings.Join(oss, ",")
 		size, layers := sumIndexMembers(ctx, store, repo, doc)
 		info.Size = size
 		info.LayerCount = layers
@@ -696,7 +711,30 @@ func buildTagInfo(ctx context.Context, store storage.Storage, repo, tag string) 
 		info.Size += l.Size
 	}
 	info.LayerCount = len(doc.Layers)
+	// Single-arch manifest: expose its own platform key so the download
+	// button can render the same Dropdown shape as multi-arch tags.
+	// Architecture / OS come from the config blob above; honour them.
+	if key := formatPlatformKey(info.OS, info.Architecture, ""); key != "" {
+		info.Platforms = []string{key}
+	}
 	return info, nil
+}
+
+// formatPlatformKey renders the canonical "<os>/<arch>[/<variant>]" string
+// the UI uses for the architecture column and the per-platform download
+// menu. Returns "" when os or arch is missing — the caller treats that as
+// "skip" rather than emitting a half-formed key.
+func formatPlatformKey(os, arch, variant string) string {
+	os = strings.ToLower(strings.TrimSpace(os))
+	arch = strings.ToLower(strings.TrimSpace(arch))
+	variant = strings.ToLower(strings.TrimSpace(variant))
+	if os == "" || arch == "" {
+		return ""
+	}
+	if variant != "" {
+		return os + "/" + arch + "/" + variant
+	}
+	return os + "/" + arch
 }
 
 // readImageConfig fetches and parses a config blob (capped at 4 MiB).
@@ -899,7 +937,14 @@ func (h *Handlers) ExportTar(w http.ResponseWriter, r *http.Request) {
 	// names like "library/ubuntu:14.04") with underscores so the
 	// browser saves it as a flat file. The colon in <repo>:<tag> is
 	// fine on every modern OS file system.
-	filename := sanitizeFilename(repo + "-" + tag) + ".tar"
+	//
+	// v0.7.3: append the platform arch (e.g. "library/alpine-3.19-amd64.tar")
+	// so multi-arch downloads land as separate files when the user fetches
+	// both arm64 and amd64 in the same browser session. Variant is kept
+	// when present so arm/v7 disambiguates from arm64; "/" inside the
+	// platform string is collapsed to "_" by sanitizeFilename below.
+	archSuffix := platformArchForFilename(platform)
+	filename := sanitizeFilename(repo+"-"+tag+"-"+archSuffix) + ".tar"
 
 	// We don't know the size up front (storage doesn't pre-sum), so
 	// the response is always chunked. WriteTimeout is disabled at
@@ -939,6 +984,28 @@ func (h *Handlers) ExportTar(w http.ResponseWriter, r *http.Request) {
 // traversal vector.
 func sanitizeFilename(s string) string {
 	return strings.NewReplacer("/", "_", "\\", "_").Replace(s)
+}
+
+// platformArchForFilename turns a full "os/arch[/variant]" platform
+// token into the arch-only suffix we append to the downloaded filename.
+// "linux/arm64/v8" → "arm64v8" (no slash survives sanitizeFilename); the
+// empty / partial case falls back to "amd64" so the filename always
+// carries something the user can recognise.
+func platformArchForFilename(platform string) string {
+	parts := strings.Split(strings.ToLower(strings.TrimSpace(platform)), "/")
+	switch len(parts) {
+	case 0, 1:
+		return "amd64"
+	case 2:
+		a := strings.TrimSpace(parts[1])
+		if a == "" {
+			return "amd64"
+		}
+		return a
+	default:
+		// arch + variant concatenated: arm64v8 / armv7 / armv6
+		return strings.TrimSpace(parts[1]) + strings.TrimSpace(parts[2])
+	}
 }
 
 // tagsForDigest lists all tags in repo that currently point at digest.

@@ -27,6 +27,11 @@
   Docker Hub 上 arm64 child 的 platform 字段是 `{architecture:"arm64", variant:"v8"}`,
   而 chip 写的是 `linux/arm64`(无 variant),原 matchAny 严格按 `os/arch/variant` 精确比较,
   arm64 永远被过滤。改成 `(os, arch)` 二元比较,variant 忽略。
+
+  v0.7.3: 多架构 UI 收尾 —— inventory 加 `platforms: ["linux/amd64", "linux/arm64/v8", ...]`
+  完整数组;镜像列表架构列改 `linux/amd64, linux/arm64, linux/arm/v7` 格式(取代 `linux/amd64 +2`);
+  多架构 tag 下载按钮改成 Dropdown(下载 linux/amd64 / 下载 linux/arm64 等);
+  下载文件名带架构:`library/alpine-3.19-arm64.tar`,连下两份不撞名。
 -->
 <style>
   :root {

@@ -6,6 +6,10 @@ export interface RegistryTag {
   architecture: string;
   os: string;
   platformCount: number;
+  // v0.7.3: full "<os>/<arch>[/<variant>]" list for multi-arch tags.
+  // Older API responses (or inventory cache from before this field shipped)
+  // won't include it; renderers fall back to architecture/os in that case.
+  platforms?: string[];
   createdAt: string | null;
 }
 

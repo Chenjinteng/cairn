@@ -6,6 +6,55 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.3] - 2026-10-02
+
+本轮是 v0.7.0 镜像 tar 导出落地的 UI 收尾 —— 用户在 158 UAT 上发现三个 UI 问题:
+镜像列表架构列 `linux/amd64, arm64+1` 拼接不规范、多架构 tag 下载按钮没暴露平台选择、
+tar 文件名不带架构导致连下两份会被浏览器改名。属既有功能优化 → 小版本进位 0.7.3。
+
+### 新增
+
+- **后端 · inventory 返回 `platforms: ["<os>/<arch>[/<variant>]", ...]` 数组**(v0.7.3)。
+  `internal/api/handlers.go`:
+  - `TagInfo` 加 `Platforms []string` 字段(JSON `omitempty`,老客户端拿不到这个字段
+    也照常工作)
+  - `manifestDoc.Manifests[].Platform` 加 `Variant` 字段(Docker Hub 上 arm/v6 /
+    arm/v7 都是 `architecture=arm`,需要 variant 才能区分)
+  - `buildTagInfo` image-index 分支改为收集完整 `<os>/<arch>[/<variant>]` 列表,
+    `Architecture` / `OS` 仍保留第一个 entry 作为向后兼容字段
+  - `buildTagInfo` 单平台分支从 config blob 读 arch/os 后也填 `Platforms`,保证
+    前端 UI 不论 tag 是几平台都拿到一致 shape
+  - 新增内部 helper `formatPlatformKey(os, arch, variant)`,空 os/arch 返回空串
+- **后端 · 下载文件名带架构**(v0.7.3)。`internal/api/handlers.go`:
+  - 新增内部 helper `platformArchForFilename(platform)`,把 `linux/arm64/v8` →
+    `arm64v8`、`linux/arm64` → `arm64`,空 / 残缺 fallback `amd64`
+  - `ExportTar` filename 改为 `<repo>-<tag>-<arch>.tar`,显式带 `?platform=` 时
+    贴实际架构,走默认 chip 时贴默认架构。`/linux/被 sanitizeFilename 折叠成 `_`,
+    `arm64/v8` 变 `arm64v8`,文件落到用户下载目录不会撞名
+- **前端 · 镜像列表架构列改格式**(v0.7.3)。`web/src/components/image-detail-drawer.tsx`:
+  之前 `${platform} +${record.platformCount - 1}`(`linux/amd64 +1`);现在
+  `record.platforms.join(', ')`(`linux/amd64, linux/arm64, linux/arm/v7`)。老 inventory
+  响应(没 `platforms`)降级回单架构 + 历史 `+N` 写法
+- **前端 · 多架构下载按钮改 Dropdown**(v0.7.3)。镜像列表「下载 tar」按钮:
+  - `platforms.length <= 1` 时仍是单图标按钮,onClick 走默认(后端 chip 默认 amd64)
+  - `platforms.length > 1` 时是 `Dropdown`(trigger=hover),菜单每项 `下载 <platform>`,
+    点哪个走 `?platform=<...>`,后端用真实架构拼文件名
+
+### 新增(单测)
+
+- `internal/api/inventory_internal_test.go`(新文件,v0.7.3):
+  - `TestInventoryPlatforms_MultiArch` —— seed 一个 image index + amd64 / arm64/v8 /
+    arm/v7 三个 child,断言 `Platforms = ["linux/amd64", "linux/arm64/v8", "linux/arm/v7"]`、
+    `Architecture="amd64"`(back-compat)+ `PlatformCount=3`
+  - `TestInventoryPlatforms_SingleArch` —— seed 一个单平台 manifest + 真 config blob,
+    断言 `Platforms = ["linux/amd64"]`(shape 一致,前端不需要判分支)
+  - `TestFormatPlatformKey` —— 8 个 case 覆盖 `(os, arch, variant)` 完整三段、
+    case-fold、空字段跳过、trim 空白
+  - `TestPlatformArchForFilename` —— 8 个 case 覆盖 `linux/arm64/v8` → `arm64v8`、
+    `linux/arm/v7` → `armv7`、空 / 残缺 fallback `amd64`、大小写
+
+---
+
 ## [0.7.2] - 2026-10-02
 
 本轮是 v0.7.0 multi-arch pull 路径上的 release-blocker hotfix —— 用户在 158 UAT 上勾选
