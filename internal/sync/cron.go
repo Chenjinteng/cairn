@@ -173,15 +173,13 @@ func NextAfter(cronExprStr string, now time.Time) (time.Time, error) {
 	if err != nil {
 		return time.Time{}, err
 	}
-	// v0.6.31: hardcoded Asia/Shanghai — single predictable wall-clock
-	// semantics for all cairn deployments (China-targeted product).
-	loc, err := time.LoadLocation("Asia/Shanghai")
-	if err != nil {
-		// tzdata missing is catastrophic and would only happen on a
-		// stripped-down base image; surface it loudly rather than
-		// silently falling back to UTC.
-		return time.Time{}, fmt.Errorf("load Asia/Shanghai: %w", err)
-	}
+	// v0.7.4: switch from time.LoadLocation("Asia/Shanghai") to a fixed
+	// UTC+8 offset. The IANA lookup walks /usr/share/zoneinfo, which the
+	// scratch base image doesn't ship — every cron save failed with
+	// "load Asia/Shanghai: unknown time zone" until this fix.
+	// Asia/Shanghai has no DST so FixedZone is exact-equivalent here,
+	// and it works anywhere Go runs (no tzdata dependency).
+	loc := chinaTimezone()
 	// Anchor in target timezone. Iterate minute-by-minute; this is fast
 	// enough for human-scale cadences (rarely more than a few thousand
 	// minutes to next fire) and the alternative (computing fields
@@ -198,6 +196,15 @@ func NextAfter(cronExprStr string, now time.Time) (time.Time, error) {
 		}
 		t = t.Add(time.Minute)
 	}
+}
+
+// chinaTimezone returns a *time.Location fixed at UTC+8 (Asia/Shanghai's
+// offset; the zone has no DST so this is exact-equivalent to the IANA
+// zone without depending on the host's tzdata). Pulled out so tests can
+// reference the same constant — they used to call time.LoadLocation
+// directly and so didn't catch the scratch-image bug this replaces.
+func chinaTimezone() *time.Location {
+	return time.FixedZone("Asia/Shanghai", 8*60*60)
 }
 
 // matches evaluates all 5 fields against t. CRITICAL: t.Hour() / t.Minute()

@@ -194,7 +194,7 @@ function directionLabel(d: SyncDirection): string {
  *   3. cron → 显示: cronSummary 把 cron 翻成中文(用于列表 + 编辑器预览),
  *      解析失败时回落到原文。
  */
-type ScheduleKind = 'hourly' | 'daily' | 'weekly' | 'monthly';
+type ScheduleKind = 'perMinute' | 'hourly' | 'daily' | 'weekly' | 'monthly';
 
 interface ParsedCron {
   kind: ScheduleKind;
@@ -207,6 +207,10 @@ interface ParsedCron {
 }
 
 const KIND_OPTIONS: { value: ScheduleKind; label: string }[] = [
+  // v0.7.4: 每分钟 = "* * * * *",sync 任务一启动就跑(每 60 秒);
+  // 调试同步延迟、镜像刚 pull 完想立刻再拉一遍、监控类场景用得到。
+  // 频率上限保护不在 UI 走,后端 scheduler 永远 30s 扫一次(见 scheduler.go)。
+  { value: 'perMinute', label: '每分钟' },
   { value: 'hourly', label: '每小时' },
   { value: 'daily', label: '每日' },
   { value: 'weekly', label: '每周' },
@@ -240,6 +244,7 @@ function isSimpleInt(s: string): boolean {
 
 /**
  * 5 字段 cron → ParsedCron。判定规则(顺序敏感,从最具体到最不具体):
+ *   - * * * * *  → perMinute(全部 *)
  *   - M H D * *  → monthly(M+H+D 都是单个数字,month 必 *)
  *   - M H * * D  → weekly(month 必 *, dom 必 *, dow 单数字)
  *   - M H * * *  → daily(month + dom + dow 都 *)
@@ -253,6 +258,17 @@ function parseCron(expr: string): ParsedCron | null {
   const fields = expr.trim().split(/\s+/);
   if (fields.length !== 5) return null;
   const [m, h, dom, mon, dow] = fields;
+  // v0.7.4: perMinute 必须排在最前(全部 * 才算),否则会被下面
+  // isSimpleInt(m) 拒掉。
+  if (m === '*' && h === '*' && dom === '*' && mon === '*' && dow === '*') {
+    return {
+      kind: 'perMinute',
+      minute: 0,
+      hour: 0,
+      dayOfWeek: 1,
+      dayOfMonth: 1,
+    };
+  }
   // month 必须 * —— 月度定时规则不在本轮下拉覆盖范围(太罕见)
   if (mon !== '*') return null;
   if (!isSimpleInt(m)) return null;
@@ -305,6 +321,8 @@ function parseCron(expr: string): ParsedCron | null {
 /** ParsedCron → 5 字段 cron。编辑器保存时调用,跟后端 ParseCron 完全对称。 */
 function kindToCron(p: ParsedCron): string {
   switch (p.kind) {
+    case 'perMinute':
+      return '* * * * *';
     case 'hourly':
       return `${p.minute} * * * *`;
     case 'daily':
@@ -320,13 +338,15 @@ const pad2 = (n: number): string => (n < 10 ? `0${n}` : String(n));
 
 /**
  * cron 字符串 → 中文摘要,用于列表 + 编辑器预览:
- *   「每小时 第 30 分」「每日 03:30」「每周一 03:30」「每月 1 日 03:30」
+ *   「每分钟」「每小时 第 30 分」「每日 03:30」「每周一 03:30」「每月 1 日 03:30」
  * 解析失败(自定义)直接返回原文 + 「自定义」前缀。
  */
 function cronSummary(expr: string): string {
   const parsed = parseCron(expr);
   if (!parsed) return `自定义: ${expr}`;
   switch (parsed.kind) {
+    case 'perMinute':
+      return '每分钟';
     case 'hourly':
       return `每小时 第 ${parsed.minute} 分`;
     case 'daily':
@@ -2013,7 +2033,7 @@ function ScheduleRowEditor({ mode, initial, onCancel, onSubmit }: ScheduleRowEdi
           options={KIND_OPTIONS}
           style={{ width: 120 }}
         />
-        {kind === 'hourly' ? (
+        {kind === 'perMinute' ? null : kind === 'hourly' ? (
           // 每小时只选分
           <InputNumber
             min={0}

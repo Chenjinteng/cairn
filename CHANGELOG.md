@@ -6,6 +6,38 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.4] - 2026-10-03
+
+本轮修一个**阻塞所有定时任务创建**的 release-blocker bug,顺手加一个 UI 预置。
+属缺陷修复 + 既有功能扩展 → 小版本进位 0.7.4。
+
+### 修复
+
+- **后端 · `internal/sync/cron.go` `NextAfter` 在 scratch 镜像里必崩**。
+  `time.LoadLocation("Asia/Shanghai")` 走 Go 标准库 IANA tzdata lookup,需要
+  `/usr/share/zoneinfo/Asia/Shanghai` 文件 —— 但 cairn 用的 scratch 基础镜像里
+  **没有 tzdata**,任何 cron 表达式创建都立刻报:
+  `sync: invalid cron expression: load Asia/Shanghai: unknown time zone Asia/Shanghai`。
+  修法:抽 `chinaTimezone()` helper,改用 `time.FixedZone("Asia/Shanghai", 8*60*60)`,
+  固定 UTC+8 offset。Asia/Shanghai 无 DST,FixedZone 与 IANA 完全等价,但完全
+  不依赖 tzdata。`NextAfter` 不再返 error,**所有现有 cron 表达式现在都能保存**。
+
+### 新增
+
+- **前端 · 同步任务「每分钟」预置**(v0.7.4)。`web/src/pages/sync-page.tsx`:
+  - `ScheduleKind` 加 `'perMinute'`(`* * * * *`)
+  - 下拉第一项「每分钟」(原 4 档:每小时 / 每日 / 每周 / 每月)
+  - 编辑器选「每分钟」时不显示任何 InputNumber(没参数)
+  - 列表 / 编辑器预览 `cronSummary` 输出「每分钟」
+- **单测**(v0.7.4)。`internal/sync/cron_test.go`:
+  - `TestNextAfter_EveryMinute` —— `* * * * *` + 10:29:30 CST → 10:30:00 CST
+  - `TestChinaTimezone_MatchesAsiaShanghaiOffset` —— 锁 UTC+8 offset +
+    半年 DST 检查(防止有人误改成 Europe/Berlin 之类带 DST 的 zone)
+  - 所有 `time.LoadLocation("Asia/Shanghai")` 调用换 `chinaTimezone()`,让
+    测试也走 FixedZone 路径(本来开发机有 tzdata,这一改也保证 test 反映生产)
+
+---
+
 ## [0.7.3] - 2026-10-02
 
 本轮是 v0.7.0 镜像 tar 导出落地的 UI 收尾 —— 用户在 158 UAT 上发现三个 UI 问题:

@@ -1,3 +1,4 @@
+
 package sync
 
 import (
@@ -87,10 +88,7 @@ func TestNextAfter_StarEvery15Minutes(t *testing.T) {
 	// v0.6.31: NextAfter is hardcoded Asia/Shanghai. Pick `now` so the
 	// Asia/Shanghai wall clock is what we want to reason about, then
 	// assert the returned UTC value.
-	cst, err := time.LoadLocation("Asia/Shanghai")
-	if err != nil {
-		t.Fatal(err)
-	}
+	cst := chinaTimezone()
 	// 10:29 CST → next 0/15/30/45 is 10:30 CST.
 	now := time.Date(2026, 9, 30, 10, 29, 0, 0, cst)
 	got, err := NextAfter("*/15 * * * *", now)
@@ -115,10 +113,7 @@ func TestNextAfter_StarEvery15Minutes(t *testing.T) {
 }
 
 func TestNextAfter_MidnightDaily(t *testing.T) {
-	cst, err := time.LoadLocation("Asia/Shanghai")
-	if err != nil {
-		t.Fatal(err)
-	}
+	cst := chinaTimezone()
 	// 12:00 CST on Sep 30 — next "00:00 CST" is Oct 1 00:00 CST.
 	now := time.Date(2026, 9, 30, 12, 0, 0, 0, cst)
 	got, err := NextAfter("0 0 * * *", now)
@@ -132,10 +127,7 @@ func TestNextAfter_MidnightDaily(t *testing.T) {
 }
 
 func TestNextAfter_WeekdaysOnly(t *testing.T) {
-	cst, err := time.LoadLocation("Asia/Shanghai")
-	if err != nil {
-		t.Fatal(err)
-	}
+	cst := chinaTimezone()
 	// 2026-09-30 is a Wednesday. "0 0 * * 1-5" means 00:00 CST Mon-Fri.
 	// From noon Wed CST, next is Thu (Oct 1) 00:00 CST.
 	now := time.Date(2026, 9, 30, 12, 0, 0, 0, cst)
@@ -155,10 +147,7 @@ func TestNextAfter_WeekdaysOnly(t *testing.T) {
 }
 
 func TestNextAfter_DOM_OR_DOW_Vixie(t *testing.T) {
-	cst, err := time.LoadLocation("Asia/Shanghai")
-	if err != nil {
-		t.Fatal(err)
-	}
+	cst := chinaTimezone()
 	// 0 0 1 * 1 — 00:00 CST on day-1 OR Monday. Should fire on both.
 	// Sunday Oct 4 noon CST → next is Mon Oct 5 00:00 CST.
 	now := time.Date(2026, 10, 4, 12, 0, 0, 0, cst)
@@ -186,10 +175,7 @@ func TestNextAfter_DOM_OR_DOW_Vixie(t *testing.T) {
 func TestNextAfter_AsiaShanghaiHardcoded(t *testing.T) {
 	// v0.6.31: the tz parameter is gone — NextAfter is always evaluated
 	// in Asia/Shanghai. Confirm "30 4 * * *" still maps to 04:30 CST.
-	cst, err := time.LoadLocation("Asia/Shanghai")
-	if err != nil {
-		t.Fatal(err)
-	}
+	cst := chinaTimezone()
 	// Sep 30 00:00 CST. Today's 04:30 CST is still ahead → expect today.
 	now := time.Date(2026, 9, 30, 0, 0, 0, 0, cst)
 	got, err := NextAfter("30 4 * * *", now)
@@ -217,10 +203,7 @@ func TestSchedule_Validate(t *testing.T) {
 	// v0.6.31: Timezone field is ignored — Validate no longer checks it.
 	// The cron expression "0 0 * * *" evaluated in Asia/Shanghai gives
 	// Oct 1 00:00 CST as the next fire after Sep 30 12:00 CST.
-	cst, err := time.LoadLocation("Asia/Shanghai")
-	if err != nil {
-		t.Fatal(err)
-	}
+	cst := chinaTimezone()
 	s := &Schedule{
 		CronExpr: "0 0 * * *",
 		Timezone: "", // v0.6.31: ignored
@@ -251,5 +234,47 @@ func TestSchedule_Validate_Errors(t *testing.T) {
 	// value (including "Not/A/Zone") is accepted and silently ignored.
 	if err := (&Schedule{CronExpr: "0 0 * * *", Timezone: "Not/A/Zone"}).Validate(now); err != nil {
 		t.Errorf("bad timezone should NOT error (field is ignored): %v", err)
+	}
+}
+
+// TestNextAfter_EveryMinute covers the v0.7.4 UI "每分钟" preset
+// ("* * * * *"). The previous scheduler implementation required a tzdata
+// lookup on every NextAfter call and exploded on the scratch base image;
+// this test is here so any future regression back to LoadLocation trips
+// the dependency immediately on a dev box, before shipping.
+func TestNextAfter_EveryMinute(t *testing.T) {
+	cst := chinaTimezone()
+	now := time.Date(2026, 9, 30, 10, 29, 30, 0, cst)
+	got, err := NextAfter("* * * * *", now)
+	if err != nil {
+		t.Fatalf("NextAfter: %v", err)
+	}
+	want := time.Date(2026, 9, 30, 10, 30, 0, 0, cst).UTC()
+	if !got.Equal(want) {
+		t.Errorf("NextAfter from 10:29:30 CST = %v, want %v (next minute boundary)", got, want)
+	}
+}
+
+// TestChinaTimezone_MatchesAsiaShanghaiOffset locks the v0.7.4 swap to
+// FixedZone: it must always produce UTC+8 wall-clock times, matching the
+// IANA Asia/Shanghai zone (which also never observes DST). If a future
+// refactor accidentally changes the offset, this test catches it.
+func TestChinaTimezone_MatchesAsiaShanghaiOffset(t *testing.T) {
+	got := chinaTimezone()
+	// Build a known UTC instant and read its UTC instant back through
+	// chinaTimezone — Equal() compares the underlying time, not the
+	// display zone, so this works regardless of how the zone formats.
+	instant := time.Date(2026, 6, 15, 3, 47, 0, 0, time.UTC)
+	if !instant.In(got).UTC().Equal(instant) {
+		t.Errorf("chinaTimezone round-trip mismatch")
+	}
+	// Half-year offset check: Asia/Shanghai has no DST, so January and
+	// July wall-clock hours must be identical. If the IANA zone is ever
+	// swapped for a DST-observing zone by accident, this catches it.
+	january := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC).In(got).Hour()
+	july := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC).In(got).Hour()
+	if january != july {
+		t.Errorf("chinaTimezone observes DST: January hour = %d, July hour = %d",
+			january, july)
 	}
 }

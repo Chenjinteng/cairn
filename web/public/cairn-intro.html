@@ -32,6 +32,11 @@
   完整数组;镜像列表架构列改 `linux/amd64, linux/arm64, linux/arm/v7` 格式(取代 `linux/amd64 +2`);
   多架构 tag 下载按钮改成 Dropdown(下载 linux/amd64 / 下载 linux/arm64 等);
   下载文件名带架构:`library/alpine-3.19-arm64.tar`,连下两份不撞名。
+
+  v0.7.4: hotfix 修同步任务定时崩 —— NextAfter 之前用 time.LoadLocation("Asia/Shanghai"),
+  scratch 基础镜像没 tzdata,任何 cron 保存都报「unknown time zone」,同步任务一条都建不了。
+  改成 time.FixedZone("Asia/Shanghai", 8h) 固定 offset,Asia/Shanghai 无 DST 完全等价。
+  顺手在「同步任务」下拉第一档加「每分钟」(`* * * * *`)。
 -->
 <style>
   :root {
