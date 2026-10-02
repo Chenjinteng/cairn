@@ -15,6 +15,7 @@ package api
 // Supported actions after the dispatcher splits the path:
 //
 //	GET    /repositories/{repo}/tags/{tag}/manifest  → Handlers.GetManifest
+//	GET    /repositories/{repo}/tags/{tag}/export    → Handlers.ExportTar (v0.7.0)
 //	DELETE /repositories/{repo}                      → ExtraHandlers.DeleteRepository
 //	DELETE /repositories/{repo}/manifests/{digest}    → ExtraHandlers.DeleteManifestByDigest
 //
@@ -55,6 +56,14 @@ func dispatchRepositoriesRoute(w http.ResponseWriter, r *http.Request, h *Handle
 				h.GetManifest(w, r)
 				return
 			}
+			// GET /repositories/{repo}/tags/{tag}/export
+			// v0.7.0: streams a `docker save`-compatible tar.
+			// rest = "<repo>/tags/<tag>/export"
+			if repo, tag, ok := splitGetExport(rest); ok {
+				injectRouteParams(r, "repo", repo, "tag", tag)
+				h.ExportTar(w, r)
+				return
+			}
 		}
 	case http.MethodDelete:
 		if e == nil {
@@ -89,6 +98,27 @@ func dispatchRepositoriesRoute(w http.ResponseWriter, r *http.Request, h *Handle
 func splitGetManifest(rest string) (repo, tag string, ok bool) {
 	const tagsMarker = "/tags/"
 	const tail = "/manifest"
+	i := strings.LastIndex(rest, tagsMarker)
+	if i <= 0 {
+		return "", "", false
+	}
+	after := rest[i+len(tagsMarker):]
+	if !strings.HasSuffix(after, tail) {
+		return "", "", false
+	}
+	tag = strings.TrimSuffix(after, tail)
+	if tag == "" || strings.Contains(tag, "/") {
+		return "", "", false
+	}
+	return rest[:i], tag, true
+}
+
+// splitGetExport (v0.7.0) parses "<repo>/tags/<tag>/export" the same way
+// splitGetManifest does. Kept as its own helper so the dispatcher reads
+// like a route table — each recognised action has a one-line entry.
+func splitGetExport(rest string) (repo, tag string, ok bool) {
+	const tagsMarker = "/tags/"
+	const tail = "/export"
 	i := strings.LastIndex(rest, tagsMarker)
 	if i <= 0 {
 		return "", "", false

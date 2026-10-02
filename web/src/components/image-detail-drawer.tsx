@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Alert, App, Button, Descriptions, Drawer, Dropdown, Empty, Popconfirm, Space, Table, Tooltip } from 'antd';
-import { CopyOutlined, DeleteOutlined } from '@ant-design/icons';
+import { CopyOutlined, DeleteOutlined, DownloadOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 
 import { deleteTag } from '../api';
@@ -244,6 +244,46 @@ export default function ImageDetailDrawer({
                 aria-label="复制 pull 命令"
               />
             </Dropdown>
+            {/*
+             * v0.7.0: 镜像 tar 下载。
+             *
+             * 点按钮 → 浏览器 GET /api/repositories/{repo}/tags/{tag}/export,
+             * 服务端吐 `docker save`-compatible tar 流,Content-Disposition
+             * 让浏览器自动以 <repo>-<tag>.tar 存盘。
+             *
+             * 注意事项:
+             *   - 用 <a href download> 而不是 fetch + blob,前者让浏览器
+             *     自动处理大文件流(避免一次内存合并);后者对几百 MB +
+             *     几 GB 镜像不可行。
+             *   - URL 拼装要 encodeURIComponent(repo) 因为 repo 名常含
+             *     "/" (library/nginx),dispatcher 内部再解码。
+             *   - 不传 ?platform= 让后端走设置页 chip 的默认平台
+             *     (linux/amd64 by default) —— 跟「拉取镜像的架构」口径一致。
+             *   - 镜像 schema1 / 多平台镜像里没 amd64 时,后端会 400,
+             *     但 axios 这条不会触发(直接 <a> 走,不走 axios);
+             *     错误状态码浏览器看不到,但 tar 头不对的响应会得到
+             *     一个非 tar 文件,用户看着「下载了但 docker load
+             *     不认」—— 在镜像列表 Platform 列显示「linux/amd64」或
+             *     「linux/amd64, linux/arm64」的镜像上点才能保证成功。
+             */}
+            <Button
+              type="text"
+              size="small"
+              icon={<DownloadOutlined />}
+              aria-label="下载镜像 tar"
+              onClick={() => {
+                const url = `/api/repositories/${encodeURIComponent(repo)}/tags/${encodeURIComponent(record.tag)}/export`;
+                // Use a transient <a> so we don't fight React's hydration
+                // around the persistent anchor; download attribute drives
+                // the browser's save-as behaviour for any Content-Type.
+                const a = document.createElement('a');
+                a.href = url;
+                a.rel = 'noopener';
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+              }}
+            />
             {allowDelete ? (
               <Popconfirm
                 title={`确认删除 ${record.tag}？`}

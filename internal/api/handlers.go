@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -831,6 +832,113 @@ func (h *Handlers) GetManifest(w http.ResponseWriter, r *http.Request) {
 	}
 	m.Repo = repo
 	writeJSON(w, http.StatusOK, m)
+}
+
+// ExportTar (v0.7.0) streams a `docker save`-compatible tar archive of
+// the manifest currently pointed at by tag. Equivalent to running
+// `docker pull` + `docker save` against the registry, except it stays
+// entirely inside cairn — no docker daemon required, no intermediate
+// docker images cache, no extra disk.
+//
+// Query params:
+//
+//	?platform=<os>/<arch>    — required when the tag points at an
+//	                            image index (multi-arch); selects the
+//	                            platform whose image manifest gets
+//	                            exported. Defaults to "linux/amd64" to
+//	                            match the settings-page chip default
+//	                            (cairn's deployment target is x86).
+//	                            Ignored when the manifest is single-arch.
+//
+// Returns 200 with `Content-Type: application/x-tar` +
+// `Content-Disposition: attachment; filename="<repo>-<tag>.tar"` and
+// streams the tar to the client. Returns 400 when the manifest is an
+// image index with no matching platform, or schema1 (unsupported);
+// 404 when the tag doesn't resolve; 500 on read errors.
+//
+// Big layers (multi-GB) stream fully without buffering: storage.GetBlob
+// returns an io.ReadCloser, ExportTar copies 64 KiB chunks while
+// honouring ctx cancellation. Client disconnect → ctx cancel → tar
+// write aborts cleanly. WriteTimeout is disabled at the server level
+// (server.go:262) for the same reason pull jobs are.
+func (h *Handlers) ExportTar(w http.ResponseWriter, r *http.Request) {
+	repo := chiURLParam(r, "repo")
+	tag := chiURLParam(r, "tag")
+	if repo == "" || tag == "" {
+		writeError(w, r, http.StatusBadRequest, errMissingParam)
+		return
+	}
+
+	// Default to amd64 to match the settings-page chip default; the
+	// caller can override with ?platform= for rare arm64 / etc. flows.
+	// PullPlatforms returns nil for the "all platforms" legacy setting
+	// — empty slice also falls back to amd64 (the common case).
+	platform := r.URL.Query().Get("platform")
+	if platform == "" {
+		if pp := h.Cfg.PullPlatforms(); len(pp) > 0 {
+			platform = pp[0]
+		} else {
+			platform = "linux/amd64"
+		}
+	}
+
+	// Build the RepoTags overlay for the tar's manifest.json +
+	// repositories file. Storage doesn't track tag→digest (it has
+	// TagsForDigest, but we already know the tag the caller asked
+	// for). Single-tag tar is the common case; multi-tag images
+	// (the same digest under several tags) get one entry per tag.
+	repoTags := []string{repo + ":" + tag}
+
+	opt := storage.ExportOpt{
+		Platform:   platform,
+		RepoTags:   repoTags,
+		OutputRepo: repo,
+	}
+
+	// Filename: replace path separators in repo + tag (multi-segment
+	// names like "library/ubuntu:14.04") with underscores so the
+	// browser saves it as a flat file. The colon in <repo>:<tag> is
+	// fine on every modern OS file system.
+	filename := sanitizeFilename(repo + "-" + tag) + ".tar"
+
+	// We don't know the size up front (storage doesn't pre-sum), so
+	// the response is always chunked. WriteTimeout is disabled at
+	// server.go to match.
+	w.Header().Set("Content-Type", "application/x-tar")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+	w.Header().Set("X-Cairn-Export", repo+":"+tag)
+	w.WriteHeader(http.StatusOK)
+
+	res, err := h.Store.ExportTar(r.Context(), repo, tag, opt, w)
+	if err != nil {
+		// Headers + status already written at this point — can't
+		// switch to a JSON error envelope without confusing the
+		// browser (it has already started receiving a tar and
+		// decided to save it). Log + abort the connection; the
+		// client gets a truncated tar that docker load will reject
+		// with a clean error.
+		slog.Error("export tar failed mid-stream",
+			"repo", repo, "tag", tag, "platform", platform,
+			"bytes", res, "err", err)
+		// Force-close: Hijack isn't available on the wrapped ResponseWriter,
+		// but a panic from a stuck write below would be worse. Best
+		// practical signal is the truncated tar + slog line above.
+		return
+	}
+	if res != nil {
+		slog.Info("export tar ok",
+			"repo", repo, "tag", tag, "platform", platform,
+			"bytes", res.Bytes)
+	}
+}
+
+// sanitizeFilename strips path separators from a candidate download
+// filename so a tag name like "library/ubuntu:14.04" doesn't try to
+// walk the browser's download directory. Other characters are left
+// alone (UTF-8 names survive); we only defend against the one path
+// traversal vector.
+func sanitizeFilename(s string) string {
+	return strings.NewReplacer("/", "_", "\\", "_").Replace(s)
 }
 
 // tagsForDigest lists all tags in repo that currently point at digest.

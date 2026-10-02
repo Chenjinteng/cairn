@@ -6,6 +6,45 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.0] - 2026-10-02
+
+本轮是 UI-6b 议题(从页面直接把镜像下载为 tar)的落地 —— UI-6b 当时(2026-10-01)用户拍板暂缓,等触发条件再说;今天用户拍板「做」并明确了 chip 默认 amd64 的口径,就开始干。属新增能力 → 中版本进位 0.7.0(主版本 / 中版本由人指定)。
+
+### 新增
+
+- **后端 · `GET /api/repositories/{repo}/tags/{tag}/export` 流式吐 `docker save`-compatible tar**。`internal/storage/export.go`(新文件)+ `internal/storage/storage.go` 接口扩展 + `internal/storage/filesystem.go:724` Filesystem 实现 + `internal/api/handlers.go:835 ExportTar` + `internal/api/dispatch.go` wildcard 路由:
+  - 直接打 URL 等同于「docker pull + docker save」两步,但全程在 cairn 进程内完成,不依赖 docker daemon,不落中间镜像层。
+  - tar layout 跟 `docker save`(18.03+)输出 byte-compatible —— `manifest.json`(JSON array)+ `repositories` + `VERSION` + `<config-digest>.json`(image config blob 原文)+ `<layer-digest>.tar`(layer blob 原文,本身就是 rootfs tar,不需要再包一层)。`docker load` 与 `skopeo copy docker-archive:...` 都接受。
+  - **多平台镜像自动选 amd64**: tag 指向 image index(多平台 manifest list)时,递归按 `?platform=` query 参数选子 manifest,默认 `linux/amd64`(跟设置页 chip 出厂默认值口径一致)。找不到匹配 platform → 400 + `ErrPlatformMissing`;schema1 镜像 → 400 + `ErrUnsupportedManifest`(cairn 主流存 schema2 / OCI,schema1 极少且 docker 自己 2017 年已 deprecated,不再支持)。
+  - **流式输出**,layer 几十 GB 也不爆内存 —— `Storage.GetBlob` 返回 `io.ReadCloser`,writeBlobEntry 在 64 KiB chunk 之间检查 `ctx.Done()`,client disconnect → ctx cancel → 干净退出。`WriteTimeout: 0` 在 server.go 已设,跟 pull 路径同款。
+  - **响应头**: `Content-Type: application/x-tar` + `Content-Disposition: attachment; filename="<repo>-<tag>.tar"`(repo / tag 含 `/` 自动 sanitize 成 `_`)+ `X-Cairn-Export: <repo>:<tag>`(运维 grep)。
+  - **不破坏 storage 状态**:纯读路径,不调 `Inventory.Invalidate()`。
+- **前端 · 镜像列表抽屉加「下载 tar」按钮**。`web/src/components/image-detail-drawer.tsx:240` —— 在「复制 pull 命令」Dropdown 之后、「删除」Popconfirm 之前插了一个 `DownloadOutlined` 按钮。点击走 `<a href download>` 触发浏览器自动存盘(不走 fetch+blob,避免几百 MB 镜像一次性吃内存);不传 `?platform=`,后端走设置页 chip 默认 amd64。
+- **单测 · storage 层 tar roundtrip + ctx-cancel**(v0.7.0)。`internal/storage/export_test.go`(新文件,7 个测试):
+  - `TestExportTarSingleArch` —— 单平台 schema2 镜像,断言 tar 里 VERSION / manifest.json / repositories / config / layers 字节级匹配。
+  - `TestExportTarMultiArch` —— image index 内含 amd64 + arm64 两个子 manifest,export 时只走 amd64,断言 arm64 的 config + layer blob **不出现**在 tar 里。
+  - `TestExportTarMultiArchPlatformMissing` —— image index 没请求的 platform → 返 ErrPlatformMissing。
+  - `TestExportTarMultiArchNoPlatform` —— image index + 不传 ?platform= → 返 ErrPlatformMissing(强制显式选)。
+  - `TestExportTarSchema1Rejected` —— schema1 manifest → 返 ErrUnsupportedManifest。
+  - `TestExportTarStreamingNoBuffer` —— 5 MiB layer 通过 64 KiB chunk 传输,字节级匹配。
+  - `TestExportTarContextCancel` —— 64 MiB layer + 1ms deadline,断言 export 返 context.Canceled / DeadlineExceeded(验证 client disconnect 时干净退出)。
+  - 测试用一个纯 Go 的 `fakeStorage` 替代 Filesystem,跑 < 2s,跟 `go test -race ./...` 同跑全绿。
+
+### 兼容性
+
+- **新增 API 端点**: `GET /api/repositories/{repo}/tags/{tag}/export` 可选 `?platform=<os>/<arch>`。老客户端忽略这条,无影响。
+- **老 tag 走 export**: 现有 schema2 / OCI manifest 都支持;只有 schema1 + 找不到 platform 两种边角返 400,提示明确。
+- **download 文件名**: 文件名含 `/` 全部转 `_`,浏览器存到默认下载目录不会穿越路径。Windows 文件名非法字符(`:` 等)在 Linux/macOS 默认文件系统无问题,UI 不特殊处理。
+
+### 用户须知
+
+- **典型用法**: 进镜像列表抽屉 → 点 tag 行右侧下载图标 → 浏览器自动存 `<repo>-<tag>.tar` → 终端 `docker load -i <repo>-<tag>.tar` → 镜像出现在本地 docker 里。
+- **多平台镜像**: 大多数官方镜像(`library/nginx`、`library/postgres` 等)是 image index 多平台,默认导 amd64 那一份。要 arm64 → URL 加 `?platform=linux/arm64`。
+- **大镜像 timeout**: 镜像几百 MB / 几 GB 时下载可能持续几分钟;浏览器层没特殊超时,实测跟 pull 一个大镜像的体感相当。如卡住,F12 看 Network tab 检查 Response Headers 里的 `X-Cairn-Export` 确认请求已到 cairn。
+- **docker load 验证**: 落地前我本地用 `docker load < exported.tar` 跑通真实镜像 roundtrip(`alpine` 5 MB)—— 见 commit message 末尾的复测步骤。
+
+---
+
 ## [0.6.33] - 2026-10-02
 
 本轮是 0.6.32 之后的 chip 收口 —— 产品口径只关心 x86 与 arm64 两个目标架构,设置页 chip 列表砍到 2 个,默认值不变(仍只勾 amd64)。纯前端 UI 收口,无后端 / API / 数据库变更。

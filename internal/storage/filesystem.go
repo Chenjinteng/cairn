@@ -721,6 +721,19 @@ func (f *Filesystem) ManifestDigests(_ context.Context, repo string) ([]string, 
 // DeleteRepository drops an entire repository: every manifest, tag, and
 // in-flight upload session under it. Blobs are content-addressed and shared
 // between repositories, so they are left untouched — run GC to reclaim them.
+// ExportTar streams a `docker save`-compatible tar archive for one
+// tag/digest into w. Implementation lives in export.go so the tar
+// layout can be unit-tested against any Storage impl (fake / future
+// remote backends) without going through the filesystem. The Filesystem
+// implementation here just forwards — every blob read goes through
+// f.GetBlob which already does the sha256 verification on Put, so the
+// stream contains exactly the bytes that landed on disk.
+//
+// See export.go for the format reference and the layout choices.
+func (f *Filesystem) ExportTar(ctx context.Context, repo, ref string, opt ExportOpt, w io.Writer) (*ExportResult, error) {
+	return exportTar(ctx, f, repo, ref, opt, w)
+}
+
 func (f *Filesystem) DeleteRepository(_ context.Context, repo string) error {
 	if err := cleanRepoName(repo); err != nil {
 		return err

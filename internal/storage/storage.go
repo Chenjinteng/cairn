@@ -33,6 +33,23 @@ var ErrNotFound = errors.New("storage: not found")
 // "sha256:<64hex>".
 var ErrInvalidDigest = errors.New("storage: invalid digest")
 
+// ErrPlatformMissing is returned by ExportTar when the manifest is an
+// image index (manifest list / multi-arch) and the caller did not
+// specify which platform to pick. The API layer maps this to a 400
+// with a clear "this image is multi-arch, pass ?platform=..." message.
+//
+// Distinct from ErrNotFound because the index IS there — we just don't
+// know which of its platforms the caller wants.
+var ErrPlatformMissing = errors.New("storage: multi-arch manifest needs a platform selector")
+
+// ErrUnsupportedManifest is returned by ExportTar when the manifest's
+// schemaVersion / mediaType combination isn't supported (currently
+// schema1 only — schema2 + OCI are the two formats cairn actually
+// stores, and supporting schema1 would mean re-implementing the
+// schema1 config-descriptor chain in addition to its already-deprecated
+// status). API layer maps this to a 400.
+var ErrUnsupportedManifest = errors.New("storage: manifest format not supported for export")
+
 // Manifest is the on-disk representation of a stored manifest.
 // Digests are always the registry-computed sha256 from the body bytes;
 // references (tags) map to digests via the tags/ tree.
@@ -131,6 +148,59 @@ type Storage interface {
 	// Best-effort: may be slow on very large trees; cached for a few seconds
 	// upstream if needed.
 	Stats(ctx context.Context) (*StorageStats, error)
+
+	// ExportTar (v0.7.0) streams a `docker save`-compatible tar archive
+	// for one tag/digest into w. The output is byte-compatible with
+	// `docker load` / `skopeo copy` for OCI and Docker schema2 manifests
+	// (the two formats cairn stores in practice — schema1 is rejected
+	// with an explicit error rather than guessed at).
+	//
+	// opt.Platform selects the platform for image-index manifests
+	// (multi-arch). Empty string means "single-arch manifest only" —
+	// image indexes without a target platform return ErrPlatformMissing
+	// so the caller can surface a clear 400 instead of guessing.
+	//
+	// opt.RepoTags and opt.OutputRepo are written into the tar's
+	// `manifest.json` RepoTags field and the `repositories` file —
+	// storage doesn't know tag → digest mappings, so the caller (the
+	// API handler, which has the tag list) supplies them.
+	//
+	// The output is fully streamed — large layers (multi-GB) never
+	// materialise in memory. ctx cancellation propagates: a client
+	// disconnect during a layer copy aborts the tar write cleanly.
+	ExportTar(ctx context.Context, repo, ref string, opt ExportOpt, w io.Writer) (*ExportResult, error)
+}
+
+// ExportOpt tunes one ExportTar call. Zero value reproduces the most
+// common case: single-arch image manifest, no extra RepoTags overlay,
+// default platform selection.
+type ExportOpt struct {
+	// Platform is the OS/architecture to pick from an image index
+	// (manifest list). Format: "linux/amd64" — same tokens the
+	// pull.platforms setting uses, so the API layer can pipe that
+	// through directly.
+	//
+	// Empty + the manifest IS an image index → ErrPlatformMissing so
+	// the caller can 400 with a "this image is multi-arch, specify
+	// ?platform=..." message.
+	Platform string
+
+	// RepoTags are written into the tar's `manifest.json[].RepoTags`
+	// field and the `repositories` map. Storage doesn't know which
+	// tags point at this manifest; the API layer (which DOES know,
+	// via TagsForDigest) supplies them.
+	RepoTags []string
+
+	// OutputRepo is the repo name written into the `repositories`
+	// file as the outer key. Single-arch manifests only ever have one
+	// repo, so this is non-optional in practice.
+	OutputRepo string
+}
+
+// ExportResult reports how many bytes streamed into the writer.
+// Returned alongside ExportTar so the API layer can log / header-set.
+type ExportResult struct {
+	Bytes int64
 }
 
 // GCOption tunes one GC sweep. The zero value reproduces the v0.5.18
