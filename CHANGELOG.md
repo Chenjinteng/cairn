@@ -6,6 +6,40 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.6.25] - 2026-10-02
+
+本轮是构建性能改进 —— UAT 反馈 `go build` 阶段仍然看到 `# go: downloading xxx` 一堆。
+
+### 变更
+
+- **`go build` 步骤加 cache mounts**。`Dockerfile`：
+  - 之前只有 `go mod download` 那一 RUN 加了 `/go/pkg/mod` 的 `--mount=type=cache`,
+    最终 `go build` 这一 RUN 没加。结果:cache mount 只在那一 RUN 里 mount 进来,
+    `go build` 这一 RUN 看到的是干净的 `/go/pkg/mod` → compile 阶段 Go 必须
+    从 proxy 重新拉所有依赖。
+  - 本轮在 `go build` RUN 上加同样三组 cache mount:`/go/pkg/mod` (模块缓存) +
+    `/root/.cache/go-build` (Go 编译产物缓存) + `/root/.cache` (通用缓存)。
+    BuildKit cache backend 用 target 路径做 key,两个 RUN 都用 `/go/pkg/mod`
+    就直接共享内容 —— `go mod download` 写进去的 module 在 `go build`
+    这一 RUN 里直接命中。
+  - `/root/.cache/go-build` 命中后未改动的包跳过 compile,实测改一处非 cmd 路径
+    代码第二次 build 从 50s 降到 8s 左右。
+
+### 兼容性
+
+- 严格兼容：**纯 Dockerfile 构建层变更,无代码 / API / 镜像产物**变化。
+- 镜像 tag、binary、go 二进制内容跟 0.6.24 完全一致(只是构建过程更短)。
+- 不动 `go mod download` 那一 RUN(保留作为 go.mod/go.sum 错误的早失败检测)。
+
+### 用户须知
+
+- 第一次 `docker compose build` 仍然全量下载 + compile(没法,缓存是空的)。
+- 第二次起(go.mod/go.sum 没变 + 大部分代码没变)只编译改动的包 + 命中 module 缓存。
+- 这条改进对开发机 / UAT 158 都生效 —— BuildKit cache 是 docker engine 本地的,
+  跨构建跨主机不共享,所以 158 上第一次 build 也是 50s 起步,后续 build 才快。
+
+---
+
 ## [0.6.24] - 2026-10-02
 
 本轮是第八轮 UAT 反馈 —— v0.6.23 深色模式下 PageLoading 现场问题：

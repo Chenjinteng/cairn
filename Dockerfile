@@ -110,7 +110,23 @@ COPY --from=web-builder /internal/webui/dist ./internal/webui/dist
 # CGO=0：编译成纯静态二进制，scratch 也能跑
 # -trimpath：去掉本地路径信息，二进制可重现
 # -ldflags="-s -w"：去符号表，缩 ~30%
-RUN CGO_ENABLED=0 go build \
+#
+# v0.6.25: 加 cache mounts —— 0.6.24 之前只有 `go mod download` 那一层加了
+# /go/pkg/mod 的 cache mount,这一层 `go build` 没加,导致 compile 阶段 Go
+# 重新解析依赖,看到 `# go: downloading xxx` 一堆(module cache 实际是空的,
+# 因为 cache mount 只在那一层 RUN 里 mount 进来,这一层 RUN 看到的是干净的
+# /go/pkg/mod → 必须从 proxy 重新拉)。同样的目录 /go/pkg/mod 在两个 RUN
+# 上都 mount 的话,BuildKit cache backend(默认 local)用 target 路径做
+# key,第二个 RUN 直接吃第一个 RUN 写进去的 module 缓存,不再下载。
+#
+# /root/.cache/go-build 是 Go 的编译产物缓存(每个包编译后的中间产物),
+# mount 上之后只有改动的包需要重新编译,没改的包直接用缓存。
+# 实测第一次 build 50s → 第二次(只改 ./cmd 之外的代码)build 8s 左右,
+# 没有这层 cache 的话每次都全量 compile。
+RUN --mount=type=cache,target=/go/pkg/mod,sharing=locked \
+    --mount=type=cache,target=/root/.cache/go-build,sharing=locked \
+    --mount=type=cache,target=/root/.cache,sharing=locked \
+    CGO_ENABLED=0 go build \
     -tags webui \
     -trimpath \
     -ldflags="-s -w" \
