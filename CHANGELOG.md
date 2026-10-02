@@ -6,6 +6,35 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.6.27] - 2026-10-02
+
+本轮是 v0.6.26 的尾巴 —— 用户实测切走再回不闪蒙板了，但「首次进入还会」。
+
+### 变更
+
+- **App.tsx mount 后立刻预取 sync / stats 数据**。`web/src/App.tsx`：
+  - 新增一个空 deps 的 `useEffect` —— App 启动后并发发 1 个 sync list 请求 + 5 个 stats fetch 请求，结果直接写回 `cachedSyncTasks` / `cachedStatsData`。
+  - 默认参数跟 stats-page 的 useState 初值对齐：`30` 天 / `repository` 维度 / `clientsDays='all'` / series 跨度 365 天 —— 跟侧栏初值 `{ window: '30d' }` 一致，用户选了 '90d' 后第一次进 stats 不会看到「30d 数据」造成「侧栏点了没生效」的错觉。
+  - stats 仅 5 路全成功才写缓存，任一路失败不污染 App —— 跟 0.6.26 sync-page 的 onDataChange 同款防御性写法。
+  - 6 个并发 fetch 在 cairn 后端（net/http 并发）上忽略不计；浏览器 tab 打开时这些 fetch 在用户「加载中」状态下完成，几乎免费。
+- **用户进入 sync / stats 时不再需要等数据**：
+  - 0.6.26：首次进入 → 缓存空 → useEffect 拉数据 → PageLoading 蒙板闪一下 → 数据到位
+  - 0.6.27：App mount 后缓存已填好 → 首次进入页面 mount 时 `initialTasks` / `initialData` 非空 → `loading=false` → PageLoading 不出现；后台 useEffect 仍然走 fetch 做 silent update，跟 0.6.26 一致。
+
+### 兼容性
+
+- 严格兼容：纯前端 mount 时机变更，**无后端 / API / 数据库变更**。
+- 启动时多 6 个并发 API 调用，对 cairn 无感（net/http + 单机部署）。
+- 用户只访问 settings / proxies / credentials / pull / images 时,6 个并发 fetch 仍是空跑 —— 成本是几次轻量 API 调用,收益是「首次进 sync/stats 零蒙板」。
+
+### 用户须知
+
+- sync / stats 首次进入：仍然无蒙板直接显示数据（之前要等 ~250ms-1s 的 fetch+蒙板）。
+- 6 个并发 prefetch 在浏览器打开 tab 时并发发出,F12 Network 里能看到对应请求 —— 它们不是「被点错」的代价,是设计意图。
+- 如果 cairn 重启或浏览器在初次数据到达前刷新,这 6 个 prefetch 会重跑 —— 不持久化跨重启是设计意图,跟 images 的 inventory 缓存一致。
+
+---
+
 ## [0.6.26] - 2026-10-02
 
 本轮是 UAT 反馈 —— 切到「镜像热度」和「镜像同步」时整个页面「刷新一次」，但其它页面不会。

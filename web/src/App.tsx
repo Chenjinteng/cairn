@@ -37,6 +37,14 @@ import type {
   StatsTopItem,
   SyncTask,
 } from './types';
+import {
+  fetchStatsClients,
+  fetchStatsEvents,
+  fetchStatsSeries,
+  fetchStatsSummary,
+  fetchStatsTop,
+  listSyncTasks,
+} from './api';
 
 /**
  * v0.6.26: 把 sync / stats 两页的数据提升到 App 层缓存 —— 跟 images-page 的
@@ -44,20 +52,19 @@ import type {
  * 回到这两页时 `useEffect` 重新触发 fetch + 整页 PageLoading 蒙板 → 用户
  * 感知为「整个页面刷新一次」。
  *
- * 其它页面(proxies / credentials / pull)首次访问同样会 fetch + 蒙板,
- * 但用户没专门提 —— 推测是因为这两页的内容变更更频繁(sync 任务进出、
- * stats 周期刷),第二次进入时常需要新数据,看起来「重刷」更显眼。
+ * v0.6.27: App mount 后立即在后台**预取** sync / stats 数据填进缓存。
+ * 这样**首次**进入这两页时数据已经在 App 缓存里,initialTasks / initialData
+ * 非空 → loading=false → PageLoading 不出现。**切走再回**同样命中。
  *
- * 提升到 App 层后:
- *   - 首次进入:fetch 完,App 持有最新数据,本地 state 也初始化为这份数据
- *   - 切走再回:页面 mount,本地 state 用 App 传入的 cached 值,**loading = false**,
- *     PageLoading 不出现;后台 useEffect 仍然走 refresh(),新数据覆盖旧数据
- *     (silent update,不闪蒙板)
- *   - 跨重启:数据不持久化(全在内存),重启 cairn 后仍会重新 fetch —— 这是
- *     设计意图,跟 images 一致
+ * 成本:App 启动后多了 6 个并发 API 调用(sync 1 + stats 5)。cairn 后端是
+ * net/http 并发,这点负载忽略不计;初次打开浏览器 tab 时这些 fetch 在用户
+ * 还在「加载中」状态下完成,几乎免费。
  *
- * 把缓存放 App 层而不是 Context/Store 是因为这两份数据只有对应页面会用,
- * 没跨页共享需求;一个 useState + prop drilling 已经够清晰。
+ * 其它页面(proxies / credentials / pull)首次访问仍会闪蒙板,跟这次统一
+ * 处理是同一类 —— 后续轮次按需拍板扩展,本轮不动。
+ *
+ * 缓存放 App 层而不是 Context/Store:这两份数据只有对应页面会用,没跨页
+ * 共享需求;一个 useState + prop drilling 已经够清晰。
  */
 
 /**
@@ -149,6 +156,53 @@ export default function App({
     clients: StatsClientItem[];
     totals: StatsEvents['totals'] | null;
   } | null>(null);
+  /*
+   * v0.6.27: 后台预取 —— App mount 后立刻并发拉这两份数据填进缓存。
+   * 空 deps:整次会话只跑一次;重启 cairn / 刷新浏览器会重跑。
+   * 如果用户一直在 settings 页没动 sync/stats,这两个 fetch 就被空跑了 —
+   * 但成本是 6 个并发 API 调用,net/http 服务端忽略不计;用户点开时立刻
+   * 有数据可显示,体验收益 >> 几次空跑。
+   *
+   * 默认参数跟 stats-page 的 useState 初值对齐(30d / repository / 'all'),
+   * 跟侧栏 init `pageFilter: { window: '30d' }` 一致 —— 不然用户手动选了
+   * '90d' 后第一次进 stats 还会看到「30d」的数据,看着像坏了。
+   */
+  useEffect(() => {
+    void (async () => {
+      const result = await listSyncTasks();
+      if (result.success && result.data) {
+        setCachedSyncTasks(result.data);
+      }
+    })();
+    void (async () => {
+      const [summaryResult, topResult, seriesResult, eventsResult, clientsResult] =
+        await Promise.all([
+          fetchStatsSummary(30),
+          fetchStatsTop(30, 'repository'),
+          fetchStatsSeries(365),
+          fetchStatsEvents(50),
+          fetchStatsClients('all'),
+        ]);
+      // 仅全成功才写缓存 —— 任一路失败时不让旧快照盖住新拉取的数据。
+      // 但即便不写缓存,stats-page 自己挂载时也会再拉一次,所以这层只是
+      // 「能填就填,不能填也不挡路」。
+      const allOk =
+        summaryResult.success &&
+        topResult.success &&
+        seriesResult.success &&
+        eventsResult.success &&
+        clientsResult.success;
+      if (!allOk) return;
+      setCachedStatsData({
+        summary: summaryResult.success ? summaryResult.data ?? null : null,
+        topItems: topResult.success ? topResult.data?.items ?? [] : [],
+        points: seriesResult.success ? seriesResult.data?.points ?? [] : [],
+        events: eventsResult.success ? eventsResult.data?.items ?? [] : [],
+        clients: clientsResult.success ? clientsResult.data?.items ?? [] : [],
+        totals: eventsResult.success ? eventsResult.data?.totals ?? null : null,
+      });
+    })();
+  }, []);
   // v0.5.37.4：每页 sidebar 的当前选择（groupKey -> itemKey）。
   // stats 的时间窗默认 30 天，跟页面自身的 days 默认值对齐 —— 否则首屏侧栏
   // 会显示「30d 高亮」而页面按别的天数在拉数据，看着像坏了。
