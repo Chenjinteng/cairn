@@ -103,14 +103,18 @@ export default function SettingsPage({
   // Platform allow-list applied to multi-arch image indexes on pull.
   // Empty array = "pull every platform" (the behaviour before the
   // allow-list existed); non-empty = only fetch children whose
-  // OS/architecture matches. The server stores this as a CSV string
-  // v0.6.19: 出厂默认从「空(全架构)」收紧到「linux/amd64」。
+  // OS/architecture matches. The server stores this as a CSV string.
   //
-  // 硬件主要跑 x86,默认「全架构」会把 13 个用不到的架构(arm/v7、386、
-  // ppc64le 等)也拉过来 —— 单个 alpine multi-arch 镜像就是 ~80MB × 13
-  // ≈ 1GB,用户绝大多数场景只需要 X86 这一份。其它架构(x86 之外的)
-  // 在 chip 列表里**仍然可选**,只是默认不勾上 —— 真要 arm64 / armv7
-  // 镜像,在设置页勾上即可,不需要改代码。
+  // v0.6.19: 出厂默认从「空(全架构)」收紧到「linux/amd64」。
+  // v0.6.33: chip 列表从 8 个选项砍到 2 个 —— x86 (linux/amd64) 与
+  // arm64 (linux/arm64)。其余架构(arm/v7、386、ppc64le、s390x、
+  // riscv64、windows)彻底移出 UI:产品口径只关心 x86 + arm64 两
+  // 个主流目标,其它场景不在本期支持范围;真要拉这几个架构,在
+  // 服务端 SQLite 的 `pull.platforms` 直接 PATCH CSV 仍可生效,
+  // UI 不提供入口。
+  //
+  // 默认值不变 —— 仍只勾 amd64。要 arm64 的用户在 chip 上点一下
+  // 保存即可,跟之前一样。
   //
   // 注意:storage 里既存的空值(老用户的「拉所有架构」配置)不受影响,
   // 这次只改「未填过的用户」初始值 —— 老用户的空 = 拉所有平台 不变,
@@ -758,7 +762,7 @@ export default function SettingsPage({
               label={<span>拉取镜像的架构</span>}
               extra={
                 editing
-                  ? '勾选目标架构；保存后对下一个 pull 任务立即生效。X86 默认勾上;其它架构(arm64 / armv7 / ppc64le 等)按需勾选 —— 真要内网 K8s 节点用的 arm64 镜像,在 chip 列表里点一下就行,不需要改代码。'
+                  ? '勾选目标架构；保存后对下一个 pull 任务立即生效。X86 默认勾上;真要内网 K8s 节点用的 arm64 镜像,在 chip 列表里点一下就行,不需要改代码。'
                   : pullPlatformsDraft.length === 0
                     ? '当前未限制(等于拉所有架构)。常见原因:从未保存过设置页、storage 是老版本默认值;在「编辑」状态下保存一次即可生效。'
                     : `当前限定：${pullPlatformsDraft.join(', ')}。其它架构的镜像不会下下来 —— x86 主机上要拉 arm64 镜像,在这里勾上「linux/arm64」保存,下次 pull 任务就会一起把 arm64 的 blobs 下下来。`
@@ -770,12 +774,6 @@ export default function SettingsPage({
                     {[
                       { id: 'linux/amd64', label: 'linux/amd64 (x86_64)' },
                       { id: 'linux/arm64', label: 'linux/arm64 (aarch64)' },
-                      { id: 'linux/arm/v7', label: 'linux/arm/v7 (32-bit ARMv7)' },
-                      { id: 'linux/386', label: 'linux/386' },
-                      { id: 'linux/ppc64le', label: 'linux/ppc64le' },
-                      { id: 'linux/s390x', label: 'linux/s390x' },
-                      { id: 'linux/riscv64', label: 'linux/riscv64' },
-                      { id: 'windows/amd64', label: 'windows/amd64' },
                     ].map((opt) => {
                       const on = pullPlatformsDraft.includes(opt.id);
                       return (

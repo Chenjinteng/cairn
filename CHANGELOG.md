@@ -6,6 +6,35 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.6.33] - 2026-10-02
+
+本轮是 0.6.32 之后的 chip 收口 —— 产品口径只关心 x86 与 arm64 两个目标架构,设置页 chip 列表砍到 2 个,默认值不变(仍只勾 amd64)。纯前端 UI 收口,无后端 / API / 数据库变更。
+
+### 变更
+
+- **设置页 · 「拉取镜像的架构」chip 列表从 8 个砍到 2 个**。`web/src/pages/settings-page.tsx:770-779`:
+  - **保留**: `linux/amd64 (x86_64)` · `linux/arm64 (aarch64)`
+  - **移除**: `linux/arm/v7` (32-bit ARMv7) · `linux/386` · `linux/ppc64le` · `linux/s390x` · `linux/riscv64` · `windows/amd64` —— 这六个架构产品口径不关心(cairn 部署目标就是 Linux x86 + arm64 两类),UI 不再提供入口。
+  - **默认值不变**: `DEFAULT_PULL_PLATFORMS` 仍是 `['linux/amd64']`。要 arm64 的用户在 chip 上点一下保存即可,行为跟之前完全一样。
+  - **「重置为仅 X86」按钮不变**: 重置仍然 `setPullPlatformsDraft(['linux/amd64'])`,跟新默认值口径一致。
+- **编辑态 / 非空态文案同步简化**。`web/src/pages/settings-page.tsx:761` 把 "arm64 / armv7 / ppc64le 等" 列举收成 "arm64";非空态文案原本就只提 amd64 + arm64,不动。
+- **状态变量注释更新**。`web/src/pages/settings-page.tsx:103-118` 注明 chip 收口到 2 个,并指出 "真要拉其它架构,在服务端 SQLite 的 `pull.platforms` 直接 PATCH CSV 仍可生效,UI 不提供入口" —— 给以后翻代码的人留个口子。
+
+### 兼容性
+
+- 严格兼容,纯前端 UI 收口,**无后端 / API / 数据库变更**。
+- **存量用户配置不受影响**: 之前在 UI 上主动勾过 `linux/arm/v7` 等 6 个被移除的架构的用户,升级到 0.6.33 后 chip 列表上看不到这些 chip,但 `pull.platforms` SQLite 里既存的 CSV 值不被清空 —— pull 行为完全保留。UI 上「当前限定」文案会照实显示 `linux/amd64,linux/arm/v7,...`,只是编辑态下无法再用 chip 移除这些值。要清掉的话要么点「重置为仅 X86」(会把整个数组覆盖为 `['linux/amd64']`),要么手动改 SQLite。
+- **新用户默认值不变**: 仍是 `linux/amd64`(0.6.19 立的口径)。
+- 后端 `internal/api/handlers.go` 的 `stringcsv` 校验逻辑不变,任何 `<os>/<arch>[/<variant>]` 形态的 CSV 仍合法 —— 只是 UI 不再生成除 amd64 / arm64 之外的值了。
+
+### 用户须知
+
+- **老用户**: UI 编辑状态下看不到之前勾上的 chip 了,但 pull 行为完全保留。要清理的话点「重置为仅 X86」按钮覆盖(覆盖整个数组,不只是「取消勾选」)。
+- **新用户**: 进设置页默认勾 amd64,要 arm64 在 chip 上点一下保存即可。
+- **运维**: 真要在服务端给某个 cairn 实例强行拉 armv7 / windows 之类的镜像,绕过 UI 直接 `sqlite3 cairn.db 'UPDATE settings SET value="linux/amd64,linux/arm/v7" WHERE key="pull.platforms"'`,UI 显示会反映但无法编辑。
+
+---
+
 ## [0.6.32] - 2026-10-02
 
 本轮是 v0.6.31 的延续 —— UAT 三个运维反馈打包合发:O2 (access log 分级) · F1 (`/api/inventory` 缓存) · F2 (`/api/gc` dry-run)。三者都是既有运维面的可观测性 / 性能 / 防误操作,纯后端 + 纯前端均无破坏性变更。
