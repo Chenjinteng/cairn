@@ -6,6 +6,30 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.6] - 2026-10-03
+
+本轮加 UI 「每 N 分钟」定时档(`*/N * * * *`)。v0.7.4 加的「每分钟」
+(`* * * * *`)只覆盖 N=1;`*/15` / `*/5` / `*/30` 这些运维最常用的 step
+表达式之前只能写自定义 cron,跟下拉 5 档对齐。属既有 UI 增强 → 小版本进位 0.7.6。
+
+### 新增
+
+- **前端 · 同步任务下拉加「每 N 分钟」档**(v0.7.6)。`web/src/pages/sync-page.tsx`:
+  - `ScheduleKind` 加 `'perNMinutes'`(独立档,不挤掉 v0.7.4 的 `perMinute`,
+    保持向后兼容 —— 老 cron `* * * * *` 解析仍走 perMinute)
+  - `ParsedCron` 加 `stepMinutes: number` 字段;`*/N` 解析时填 N,
+    其他档填 1(语义 noop)
+  - `parseCron` 加分支识别 `*/N * * * *` (h+dom+mon+dow 必 *,N ∈ [2, 59])
+  - `kindToCron` perNMinutes 输出 `*/${stepMinutes} * * * *`
+  - `cronSummary` 输出「每 N 分钟」
+  - 编辑器:选 perNMinutes 时显示 InputNumber(2-59,默认 15,addon「分钟一次」);
+    选 perMinute 时不显示任何输入框(没参数)
+- **后端**:不需要改。`internal/sync/cron.go` 的 `parseCronPart` 早支持 step
+  表达式(parseCronField 也接受 `*/15`);`TestParseCron_Valid` 已有 `*/15`
+  case。
+
+---
+
 ## [0.7.5] - 2026-10-03
 
 本轮修一个 UI 体验问题 —— 镜像详情抽屉的 TAG 表格列宽总和 1060px,撑出

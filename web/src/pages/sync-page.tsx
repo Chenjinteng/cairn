@@ -194,12 +194,14 @@ function directionLabel(d: SyncDirection): string {
  *   3. cron → 显示: cronSummary 把 cron 翻成中文(用于列表 + 编辑器预览),
  *      解析失败时回落到原文。
  */
-type ScheduleKind = 'perMinute' | 'hourly' | 'daily' | 'weekly' | 'monthly';
+type ScheduleKind = 'perMinute' | 'perNMinutes' | 'hourly' | 'daily' | 'weekly' | 'monthly';
 
 interface ParsedCron {
   kind: ScheduleKind;
   minute: number;
   hour: number;
+  /** v0.7.5: perNMinutes 的步长(2-59,默认 15,对应 "*&#47;15 * * * *" 表达式)。 */
+  stepMinutes: number;
   /** 0=周日, 1=周一, ..., 6=周六 —— 跟 cron dow 同款,周一是常见一周起点。 */
   dayOfWeek: number;
   /** 1-31 —— cron dom 同款。 */
@@ -211,6 +213,10 @@ const KIND_OPTIONS: { value: ScheduleKind; label: string }[] = [
   // 调试同步延迟、镜像刚 pull 完想立刻再拉一遍、监控类场景用得到。
   // 频率上限保护不在 UI 走,后端 scheduler 永远 30s 扫一次(见 scheduler.go)。
   { value: 'perMinute', label: '每分钟' },
+  // v0.7.5: 每 N 分钟 = "*/N * * * *",运维最常用 */5 / */15 / */30 等。
+  // N=1 跟 perMinute 等价,但分开两档 UI 清晰:N=1 走 perMinute、
+  // N≥2 走 perNMinutes。
+  { value: 'perNMinutes', label: '每 N 分钟' },
   { value: 'hourly', label: '每小时' },
   { value: 'daily', label: '每日' },
   { value: 'weekly', label: '每周' },
@@ -244,12 +250,13 @@ function isSimpleInt(s: string): boolean {
 
 /**
  * 5 字段 cron → ParsedCron。判定规则(顺序敏感,从最具体到最不具体):
- *   - * * * * *  → perMinute(全部 *)
- *   - M H D * *  → monthly(M+H+D 都是单个数字,month 必 *)
- *   - M H * * D  → weekly(month 必 *, dom 必 *, dow 单数字)
- *   - M H * * *  → daily(month + dom + dow 都 *)
- *   - M * * * *  → hourly(只 minute 是数字)
- *   - 其他        → null(自定义,UI 走 raw cron 显示路径)
+ *   - "* * * * *"        → perMinute(全部 *)
+ *   - "*&#47;N * * * *"  → perNMinutes(step 表达式,hour + 之后都 *)
+ *   - M H D * *     → monthly(M+H+D 都是单个数字,month 必 *)
+ *   - M H * * D     → weekly(month 必 *, dom 必 *, dow 单数字)
+ *   - M H * * *     → daily(month + dom + dow 都 *)
+ *   - M * * * *     → hourly(只 minute 是数字)
+ *   - 其他           → null(自定义,UI 走 raw cron 显示路径)
  *
  * 字段是 *, /, -, , 的表达式一律返回 null,不试图「智能」猜测 —— 一旦猜错就
  * 静默覆盖用户原始 cron,代价太高。复杂度让用户走下拉解决。
@@ -265,9 +272,28 @@ function parseCron(expr: string): ParsedCron | null {
       kind: 'perMinute',
       minute: 0,
       hour: 0,
+      stepMinutes: 1,
       dayOfWeek: 1,
       dayOfMonth: 1,
     };
+  }
+  // v0.7.5: perNMinutes = "*/N * * * *" —— 必须在 isSimpleInt(m) 拒掉
+  // 之前拦下来。step ≥ 2(N=1 等价 perMinute,走上面那一档)。
+  if (h === '*' && dom === '*' && mon === '*' && dow === '*') {
+    const stepMatch = m.match(/^\*\/(\d+)$/);
+    if (stepMatch) {
+      const n = parseInt(stepMatch[1], 10);
+      if (n >= 2 && n <= 59) {
+        return {
+          kind: 'perNMinutes',
+          minute: 0,
+          hour: 0,
+          stepMinutes: n,
+          dayOfWeek: 1,
+          dayOfMonth: 1,
+        };
+      }
+    }
   }
   // month 必须 * —— 月度定时规则不在本轮下拉覆盖范围(太罕见)
   if (mon !== '*') return null;
@@ -280,6 +306,7 @@ function parseCron(expr: string): ParsedCron | null {
       kind: 'monthly',
       minute: parseInt(m, 10),
       hour: parseInt(h, 10),
+      stepMinutes: 1,
       dayOfMonth: parseInt(dom, 10),
       dayOfWeek: 1,
     };
@@ -291,6 +318,7 @@ function parseCron(expr: string): ParsedCron | null {
       kind: 'weekly',
       minute: parseInt(m, 10),
       hour: parseInt(h, 10),
+      stepMinutes: 1,
       dayOfWeek: parseInt(dow, 10),
       dayOfMonth: 1,
     };
@@ -301,6 +329,7 @@ function parseCron(expr: string): ParsedCron | null {
       kind: 'daily',
       minute: parseInt(m, 10),
       hour: parseInt(h, 10),
+      stepMinutes: 1,
       dayOfWeek: 1,
       dayOfMonth: 1,
     };
@@ -311,6 +340,7 @@ function parseCron(expr: string): ParsedCron | null {
       kind: 'hourly',
       minute: parseInt(m, 10),
       hour: 0,
+      stepMinutes: 1,
       dayOfWeek: 1,
       dayOfMonth: 1,
     };
@@ -323,6 +353,9 @@ function kindToCron(p: ParsedCron): string {
   switch (p.kind) {
     case 'perMinute':
       return '* * * * *';
+    case 'perNMinutes':
+      // stepMinutes=15 → */15 * * * *;N=1 等价 perMinute,但分两档 UI 更清晰。
+      return `*/${p.stepMinutes} * * * *`;
     case 'hourly':
       return `${p.minute} * * * *`;
     case 'daily':
@@ -338,7 +371,7 @@ const pad2 = (n: number): string => (n < 10 ? `0${n}` : String(n));
 
 /**
  * cron 字符串 → 中文摘要,用于列表 + 编辑器预览:
- *   「每分钟」「每小时 第 30 分」「每日 03:30」「每周一 03:30」「每月 1 日 03:30」
+ *   「每分钟」「每 15 分钟」「每小时 第 30 分」「每日 03:30」「每周一 03:30」「每月 1 日 03:30」
  * 解析失败(自定义)直接返回原文 + 「自定义」前缀。
  */
 function cronSummary(expr: string): string {
@@ -347,6 +380,8 @@ function cronSummary(expr: string): string {
   switch (parsed.kind) {
     case 'perMinute':
       return '每分钟';
+    case 'perNMinutes':
+      return `每 ${parsed.stepMinutes} 分钟`;
     case 'hourly':
       return `每小时 第 ${parsed.minute} 分`;
     case 'daily':
@@ -1994,6 +2029,9 @@ function ScheduleRowEditor({ mode, initial, onCancel, onSubmit }: ScheduleRowEdi
   const [kind, setKind] = useState<ScheduleKind>(initialParsed?.kind ?? 'daily');
   const [hour, setHour] = useState<number>(initialParsed?.hour ?? 0);
   const [minute, setMinute] = useState<number>(initialParsed?.minute ?? 0);
+  // v0.7.5: perNMinutes 步长,默认 15(运维最常用的 */15)。
+  // 范围 2-59:N=1 等价 perMinute,UI 单独给了「每分钟」一档。
+  const [stepMinutes, setStepMinutes] = useState<number>(initialParsed?.stepMinutes ?? 15);
   const [dayOfWeek, setDayOfWeek] = useState<number>(initialParsed?.dayOfWeek ?? 1);
   const [dayOfMonth, setDayOfMonth] = useState<number>(initialParsed?.dayOfMonth ?? 1);
   // v0.6.31: 时区输入框删除 —— cairn 永远用 Asia/Shanghai 评估 cron,
@@ -2007,7 +2045,7 @@ function ScheduleRowEditor({ mode, initial, onCancel, onSubmit }: ScheduleRowEdi
    * 展示 Alert。mode=create 时永远 false(没有 initial)。
    */
   const isCustom = mode === 'edit' && !!initial?.cronExpr && initialParsed === null;
-  const previewCron = kindToCron({ kind, minute, hour, dayOfWeek, dayOfMonth });
+  const previewCron = kindToCron({ kind, minute, hour, stepMinutes, dayOfWeek, dayOfMonth });
 
   return (
     <Space direction="vertical" style={{ width: '100%' }} size={12}>
@@ -2033,7 +2071,20 @@ function ScheduleRowEditor({ mode, initial, onCancel, onSubmit }: ScheduleRowEdi
           options={KIND_OPTIONS}
           style={{ width: 120 }}
         />
-        {kind === 'perMinute' ? null : kind === 'hourly' ? (
+        {kind === 'perMinute' ? null : kind === 'perNMinutes' ? (
+          // v0.7.5: 每 N 分钟 = "*/N * * * *"。N 范围 2-59
+          // (N=1 等价 perMinute,UI 单独给了「每分钟」一档)。
+          // 默认 15,跟运维最常见的 */15 */30 */5 对齐。
+          <InputNumber
+            min={2}
+            max={59}
+            value={stepMinutes}
+            onChange={(v) => setStepMinutes(typeof v === 'number' ? v : 15)}
+            addonAfter="分钟一次"
+            style={{ width: 160 }}
+            placeholder="N"
+          />
+        ) : kind === 'hourly' ? (
           // 每小时只选分
           <InputNumber
             min={0}
