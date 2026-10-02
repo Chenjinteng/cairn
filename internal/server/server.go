@@ -211,6 +211,14 @@ func Build(cfg *config.Config) (*Runtime, error) {
 		syncScheduler = sync.NewScheduler(syncStore, syncEngine, slog.Default())
 	}
 
+	// v0.6.32: shared /api/inventory cache. One instance, shared by the
+	// Handlers.GetInventory read path and the V2 / extra write paths that
+	// call Invalidate after a successful state change. Construction here
+	// (not lazily inside the Handlers struct) so a single instance is
+	// reachable from both the management API and the V2 protocol router
+	// even though they live in different packages.
+	inventoryCache := &api.InventoryCache{}
+
 	// 8. Admin handlers (browse/delete talk to local storage; pull uses external client).
 	handlers := &api.Handlers{
 		Cfg:        cfg,
@@ -218,6 +226,7 @@ func Build(cfg *config.Config) (*Runtime, error) {
 		Vault:      vault,
 		Proxies:    proxyStore,
 		DB:         store_db,
+		Inventory:  inventoryCache,
 		VaultErr:   vaultErr,
 		ProxiesErr: proxiesErr,
 		DBErr:      dbErr,
@@ -240,17 +249,28 @@ func Build(cfg *config.Config) (*Runtime, error) {
 		// When nil, the UI's "镜像同步" tab is hidden and the API
 		// surface simply doesn't include /api/sync/* routes.
 		SyncHandlers: syncHandlers,
-		VaultErr:     vaultErr,
-		ProxiesErr:   proxiesErr,
-		DBErr:        dbErr,
+		// v0.6.32: share the inventory cache with the /api/* delete
+		// handlers so they can drop the snapshot on a successful
+		// DeleteTag / DeleteRepository / DeleteManifestByDigest / RunGC.
+		Inventory: inventoryCache,
+		VaultErr:  vaultErr,
+		ProxiesErr: proxiesErr,
+		DBErr:     dbErr,
 	}
 
 	// 9. Composite router: /api/* + /v2/*
 	apiMux := api.NewRouterWithExtras(handlers, extras, cfg)
 	// apiMux is a *chi.Mux (http.Handler that satisfies chi.Router); mount
-	// the registryd sub-router under /v2/*.
+	// the registryd sub-router under /v2/*. The OnWrite callback drops the
+	// shared /api/inventory cache after any successful V2 PUT / DELETE /
+	// upload-commit so the management UI sees the change without waiting
+	// for the 30s TTL.
 	chiRouter := apiMux.(chi.Router)
-	chiRouter.Mount("/v2", registryd.New(store, func() (string, string) { return cfg.RegistryUsername(), cfg.RegistryPassword() }, eventsHandler))
+	chiRouter.Mount("/v2", registryd.NewWithOnWrite(store,
+		func() (string, string) { return cfg.RegistryUsername(), cfg.RegistryPassword() },
+		eventsHandler,
+		inventoryCache.Invalidate,
+	))
 	mux := apiMux.(http.Handler)
 
 	srv := &http.Server{

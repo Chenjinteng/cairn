@@ -143,6 +143,17 @@ type GCOption struct {
 	// directories are reported in GCResult.EmptyRepoFreedBytes so the UI
 	// can credit them to the user.
 	CleanEmptyRepos bool
+	// DryRun (v0.6.32): when true, every pass still walks the tree and
+	// counts what *would* be removed, but performs no filesystem writes.
+	// Pass 1 returns ScannedBlobs / OrphanBlobs / OrphanBytes; Pass 2 returns
+	// AbandonedUploads; Pass 3 returns WouldRemoveEmptyRepos /
+	// WouldEmptyRepoFreedBytes (the byte count it would have credited).
+	// Pass 4 is skipped because it depends on Pass 3 actually deleting.
+	//
+	// The standard RemovedBlobs / FreedBytes / RemovedEmptyRepos /
+	// EmptyRepoFreedBytes fields stay at zero (omitempty) in dry-run mode
+	// so the v0.5.18 wire shape for non-dry-run callers is unchanged.
+	DryRun bool
 }
 
 // GCResult reports what one garbage-collection sweep reclaimed.
@@ -150,11 +161,34 @@ type GCOption struct {
 // v0.5.20: RemovedEmptyRepos / EmptyRepoFreedBytes are populated only when
 // the caller asked for CleanEmptyRepos; otherwise they stay at the zero
 // value (nil / 0) and the JSON shape stays identical to v0.5.18.
+//
+// v0.6.32: when GCOption.DryRun is set, the Would* / Scanned* / Orphan*
+// fields carry the "what would have happened" counts and the standard
+// Removed* fields stay at zero. All new fields are omitempty so the
+// non-dry-run JSON shape is byte-identical to v0.5.18.
 type GCResult struct {
 	RemovedBlobs        int      `json:"removedBlobs"`
 	FreedBytes          int64    `json:"freedBytes"`
 	RemovedEmptyRepos   []string `json:"removedEmptyRepos,omitempty"`
 	EmptyRepoFreedBytes int64    `json:"emptyRepoFreedBytes,omitempty"`
+
+	// DryRun-only fields. Populated only when GCOption.DryRun=true.
+	// ScannedBlobs        — every blob data file the sweep walked past.
+	// OrphanBlobs         — ScannedBlobs minus blobs referenced by any
+	//                        manifest body (would be RemovedBlobs in a
+	//                        non-dry-run sweep with the same input).
+	// OrphanBytes         — total bytes the orphans would free.
+	// AbandonedUploads    — upload sessions older than 24h that Pass 2
+	//                        would rm-rf.
+	// WouldRemoveEmptyRepos — repos that Pass 3 would delete (empty tags/
+	//                        + no in-flight upload).
+	// WouldEmptyRepoFreedBytes — bytes Pass 3 would free from those.
+	ScannedBlobs            int      `json:"scannedBlobs,omitempty"`
+	OrphanBlobs             int      `json:"orphanBlobs,omitempty"`
+	OrphanBytes             int64    `json:"orphanBytes,omitempty"`
+	AbandonedUploads        int      `json:"abandonedUploads,omitempty"`
+	WouldRemoveEmptyRepos   []string `json:"wouldRemoveEmptyRepos,omitempty"`
+	WouldEmptyRepoFreedBytes int64   `json:"wouldEmptyRepoFreedBytes,omitempty"`
 }
 
 // StorageStats is a summary used by the admin UI's "清单概览" panel.

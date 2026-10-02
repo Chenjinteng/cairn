@@ -117,20 +117,78 @@ func NewRouterWithExtras(h *Handlers, extras *ExtraHandlers, cfg *config.Config)
 
 // slogLogger emits a single structured log line per request via slog.
 // Replaces chi's stdlib-Logger so we keep one JSON log stream end to end.
+//
+// v0.6.32 (O2 — log level split): the line level now reflects the outcome
+// instead of always being Info:
+//
+//   - 5xx                 → slog.Error    (operator wants to grep these
+//                                           out first; tail latency + 5xx
+//                                           are the two "page me" signals)
+//   - 4xx                 → slog.Warn     (still client-facing errors,
+//                                           not a server fault)
+//   - 2xx / 3xx on writes → slog.Info     (read 2xx are below — same
+//                                           level, distinct kind=write tag
+//                                           so operators can grep "writes
+//                                           only" without losing noise
+//                                           from background GETs)
+//   - 2xx / 3xx on reads  → slog.Debug    (production noise floor: image
+//                                           tags list / stats / etc. all
+//                                           return 200, every request —
+//                                           promote to Debug so Info stays
+//                                           meaningful)
+//
+// Two extra fields are added on every line:
+//
+//   - actor: the value of the X-Auth-User header set by the V2 basic-auth
+//     middleware after a successful credential match, or "-" for /api/*
+//     traffic (no auth yet) and unauthenticated V2 calls. Operators can
+//     group audit-friendly lines by actor without enabling the heavier
+//     audit-log machinery.
+//   - kind: "read" or "write", the HTTP verb bucketed into "mutates
+//     state" vs "doesn't". Anything other than GET / HEAD is "write";
+//     OPTIONS stays "read" since it's a CORS preflight, not an action.
 func slogLogger(cfg *config.Config) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			start := time.Now()
 			ww := middleware.NewWrapResponseWriter(w, req.ProtoMajor)
 			next.ServeHTTP(ww, req)
-			slog.Info("http",
+
+			status := ww.Status()
+			level := slog.LevelInfo
+			switch {
+			case status >= 500:
+				level = slog.LevelError
+			case status >= 400:
+				level = slog.LevelWarn
+			case status >= 200 && (req.Method != http.MethodGet && req.Method != http.MethodHead):
+				// 2xx/3xx on a mutating verb — keep at Info so writes
+				// don't drown in the noise floor. (See godoc.)
+				level = slog.LevelInfo
+			case status >= 200:
+				// 2xx/3xx on a read verb — most cairn traffic is this.
+				// Drop to Debug so the Info channel isn't 99% /api/inventory.
+				level = slog.LevelDebug
+			}
+			kind := "read"
+			if req.Method != http.MethodGet && req.Method != http.MethodHead && req.Method != http.MethodOptions {
+				kind = "write"
+			}
+			actor := req.Header.Get("X-Auth-User")
+			if actor == "" {
+				actor = "-"
+			}
+			attrs := []any{
 				"method", req.Method,
 				"path", req.URL.Path,
-				"status", ww.Status(),
+				"status", status,
 				"bytes", ww.BytesWritten(),
 				"dur_ms", time.Since(start).Milliseconds(),
 				"env", cfg.Env,
-			)
+				"kind", kind,
+				"actor", actor,
+			}
+			slog.Log(req.Context(), level, "http", attrs...)
 		})
 	}
 }

@@ -6,6 +6,82 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.6.32] - 2026-10-02
+
+本轮是 v0.6.31 的延续 —— UAT 三个运维反馈打包合发:O2 (access log 分级) · F1 (`/api/inventory` 缓存) · F2 (`/api/gc` dry-run)。三者都是既有运维面的可观测性 / 性能 / 防误操作,纯后端 + 纯前端均无破坏性变更。
+
+### 新增
+
+- **F2 · `POST /api/gc` 加 dry-run 模式**(v0.6.32)。`internal/api/handlers_extra.go:690 RunGC` 新增两种 opt-in 入口:
+  - **query 参数**: `POST /api/gc?dry_run=true` 或 `?dry_run=1`(`dryRun` camelCase 也接受)
+  - **JSON body**: `{"dryRun": true, "cleanEmptyRepos": false}`
+  
+  dry-run 模式下存储层 **走遍每条 pass 但不写文件系统**;响应额外带 6 个 omitempty 字段,告诉用户「真跑一遍会释放多少」:
+  - `scannedBlobs` — 扫过的 blob 总数
+  - `orphanBlobs` — 其中不被任何 manifest 引用的
+  - `orphanBytes` — orphan 累计字节数
+  - `abandonedUploads` — 24h 以上的孤儿 upload session 数
+  - `wouldRemoveEmptyRepos` — `cleanEmptyRepos=true` 时会删除的仓库列表
+  - `wouldEmptyRepoFreedBytes` — 那些仓库累计会释放的字节数
+  
+  `internal/storage/storage.go:138 GCOption` 加 `DryRun bool` 字段;`GCResult` 加 6 个 `omitempty` 新字段(非 dry-run 时全部不出现在 wire 上,v0.5.18 响应 shape 完全不变);`internal/storage/filesystem.go:762 GC` + `sweepBlobs` + Pass 2/3 加 dry-run 分支,Pass 4 在 dry-run 下跳过(因为它依赖 Pass 3 真删后才能算 Pass 1 之后多 orphan 出来的 blob,dry-run 只报 Pass 1 数字即可)。
+  
+  ⚠️ **版本号口径**:严格按 AGENTS.md「新增 query 参数 = 新能力 = 中版本」走应该是 0.7.0。但用户拍板:「为既有功能加查询接口、向后兼容、纯可选」按小版本 0.6.32 合并发,F2 跟 O2 / F1 同轮降本。下版若需要再加 UI 「GC 预览」按钮可拆出单独中版本。
+
+### 变更
+
+- **O2 · access log 分级 + 加 actor / kind 字段**(v0.6.32)。`internal/api/api.go:107 slogLogger`:
+  - **level 按结果分流**(不再全部 Info):
+    - `5xx` → `slog.Error`(运维第一道 grep)
+    - `4xx` → `slog.Warn`(客户端错,不是服务器故障)
+    - `2xx/3xx` 写操作(非 GET/HEAD) → `slog.Info`(保留可见,但不污染)
+    - `2xx/3xx` 读操作 → `slog.Debug`(本仓库 99% 是读 200,降级避免 Info 噪声)
+  - **每行加两个字段**:
+    - `actor` — `X-Auth-User` header(V2 Basic Auth 中间件命中凭证后写入,见 `internal/registryd/routes.go:194`);未鉴权或 `/api/*` 还没接鉴权时为 `-`。运维可按 actor grep 错误。
+    - `kind` — `read` / `write`(非 GET/HEAD/OPTIONS 视为 write;OPTIONS 是 CORS preflight 不算 action)。
+  - **零客户端行为变化**:log line 多了两个 key,运维日志消费方按需升级解析。
+  
+  **影响**:生产部署 grep `level=ERROR` 现在直接得到 5xx 列表(以前混在 200 里);grep `kind=write` 得到所有写操作;grep `actor=alice` 得到指定用户的全部请求。
+
+- **F1 · `/api/inventory` 加 30s TTL 缓存 + 写操作即时失效**(v0.6.32)。`internal/api/inventory_cache.go`(新增文件)+ `internal/api/handlers.go:511 GetInventory`:
+  - 30s TTL(经验值:本地 cairn 后端 inventory build 在 ~250ms 量级,30s 够覆盖前端连续 tab 切换;同时「写后等不到刷新」的最坏窗口是 30s)
+  - **写操作即时失效**:V2 PUT manifest / DELETE manifest / 上传 commit blob / V2 upload cancel + `/api/tags` DELETE + `/api/repositories/*` DELETE + `/api/gc` 成功后调 `InventoryCache.Invalidate()`;下次 GET 立刻重建
+  - **新增 `InventoryCache` 实例**:在 `internal/server/server.go` 集中构造(一个),通过 `Handlers.Inventory` 与 `ExtraHandlers.Inventory` 两个字段共享;V2 协议路由走新构造 `registryd.NewWithOnWrite(store, getCreds, eventsHandler, inventoryCache.Invalidate)` 注入 `Handler.OnWrite` 钩子
+  - **向后兼容**:nil-safe,测试 / 部分构造场景下不接 Inventory 就是老的「每次重建」行为
+  - **`Host` 字段每次现算**:缓存里 host 不固化,从 Host header / X-Forwarded-Host 每次请求现算,避免代理后 host 错乱
+  
+  **影响**:`/api/inventory` 在写后第一次读返回最新数据(写入路径已失效),其后 30s 内重复读走内存快照;前端镜像列表页切走再回 **不再闪蒙板**(因为已经有数据了 — 这里的副作用:App 层 prefetch + Inventory 缓存叠加,首次进入页面 fetch 还能再省一次)。
+
+### 兼容性
+
+- **F1** 严格向后兼容:`/api/inventory` 响应 JSON shape 不变;TTL / 失效在客户端不可见。
+- **F2** 严格向后兼容:老调用方 `POST /api/gc` 不带 dry-run 走完全相同的代码路径,响应字段全部不变(RemovedBlobs / FreedBytes / RemovedEmptyRepos / EmptyRepoFreedBytes 维持 v0.5.18 口径);新字段全部 omitempty,只在 dry-run 时出现。
+- **O2** 严格向后兼容:log line 多了 actor / kind 两个字段(level 也分流但都是同一条 INFO/WARN/ERROR stream,不破结构);不影响任何 API / DB / 镜像内容。
+
+### 用户须知
+
+- **O2**: 生产日志噪音大幅下降(读 200 不再 Info 噪音);写操作有独立 grep 通道;actor 字段为「-」意味着 `/api/*` 还没接鉴权(S1 那条待办)—— 不是 bug。
+- **F1**: 「我刚 push 一个新镜像,列表没立刻出现」—— 这是 cache 失效逻辑漏挂了。请检查 `internal/api/handlers_extra.go` 和 `internal/registryd/routes.go` 的 `OnWrite` 钩子;30s 后会自然恢复。
+- **F2**: 
+  ```bash
+  # 预览(不真删)
+  curl -s -X POST 'http://cairn:8787/api/gc?dry_run=true' | jq
+  # → { removedBlobs: 0, freedBytes: 0,
+  #     dryRun: true,
+  #     scannedBlobs: 1234, orphanBlobs: 5, orphanBytes: 891230,
+  #     abandonedUploads: 0,
+  #     wouldRemoveEmptyRepos: ["dead/repo1","old/repo2"],
+  #     wouldEmptyRepoFreedBytes: 45231298 }
+  
+  # 真跑(老行为)
+  curl -s -X POST 'http://cairn:8787/api/gc' | jq
+  # → { removedBlobs: 5, freedBytes: 891230 }
+  ```
+  
+  dry-run 模式 **不依赖 lockRepo**(可接受并发 push 导致的轻微偏差,但收益是「UI 永远不卡在 dry-run 上」);真跑模式仍然按原有 lockRepo 走,与 v0.5.20 完全一致。
+
+---
+
 ## [0.6.31] - 2026-10-02
 
 本轮是 v0.6.30 的补丁 —— 用户在测 0.6.30 时反馈「时区可以不用设置,默认就是上海时区,不然加个时区的话在切换日月的时候整个长度会不一样,会有换行,直接就去掉时区就行」。

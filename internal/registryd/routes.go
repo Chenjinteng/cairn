@@ -72,6 +72,14 @@ type Handler struct {
 	// so /v2/* operations are observed exactly once and don't need
 	// a separate webhook round-trip.
 	Events *events.Handler
+
+	// OnWrite (v0.6.32) is invoked after any successful state-changing
+	// V2 operation (PUT manifest, DELETE manifest, upload commit,
+	// upload cancel). Wired by NewWithOnWrite from server.go to drop
+	// the /api/inventory cache so the next read sees the new state.
+	// Nil = no-op, which is the default for the v0.6.x callers (tests)
+	// that don't have an inventory cache to invalidate.
+	OnWrite func()
 }
 
 // New returns a chi router pre-configured with the V2 protocol routes.
@@ -91,7 +99,16 @@ type Handler struct {
 // External registries still POST to /api/events as before; the built-in
 // registry now self-reports and skips the round-trip.
 func New(store storage.Storage, getCreds basicAuthCreds, eventsH *events.Handler) http.Handler {
-	h := &Handler{Store: store, getCreds: getCreds, realm: "cairn", Events: eventsH}
+	return NewWithOnWrite(store, getCreds, eventsH, nil)
+}
+
+// NewWithOnWrite is the v0.6.32 variant of New that wires an OnWrite
+// callback fired after every successful state-changing V2 operation.
+// server.go passes a function that drops the /api/inventory cache;
+// tests that don't have such a cache pass nil and get the same
+// behaviour as the plain New constructor.
+func NewWithOnWrite(store storage.Storage, getCreds basicAuthCreds, eventsH *events.Handler, onWrite func()) http.Handler {
+	h := &Handler{Store: store, getCreds: getCreds, realm: "cairn", Events: eventsH, OnWrite: onWrite}
 	r := chi.NewRouter()
 
 	// Everything (including /v2/) goes through requireBasicAuth when
@@ -418,6 +435,11 @@ func (h *Handler) manifestPut(w http.ResponseWriter, r *http.Request) {
 	if ev := h.localEvent(repo, ref, mediaType, "push", http.MethodPut, r); ev != nil {
 		h.Events.IngestLocal(*ev)
 	}
+	// v0.6.32: drop the /api/inventory cache so the next read sees the
+	// new manifest. Nil-safe — OnWrite is unset in tests.
+	if h.OnWrite != nil {
+		h.OnWrite()
+	}
 	w.Header().Set("Docker-Content-Digest", digest)
 	// v0.5.44: 绝对 URL —— 参见 absoluteLocation 注释。
 	w.Header().Set("Location", absoluteLocation(r, fmt.Sprintf("/v2/%s/manifests/%s", repo, digest)))
@@ -443,6 +465,11 @@ func (h *Handler) manifestDelete(w http.ResponseWriter, r *http.Request) {
 		}
 		writeV2Error(w, http.StatusInternalServerError, "UNKNOWN", err.Error())
 		return
+	}
+	// v0.6.32: drop the /api/inventory cache so the next read sees the
+	// deletion. Nil-safe — OnWrite is unset in tests.
+	if h.OnWrite != nil {
+		h.OnWrite()
 	}
 	w.WriteHeader(http.StatusAccepted)
 }
@@ -639,6 +666,12 @@ func (h *Handler) uploadPut(w http.ResponseWriter, r *http.Request) {
 	// v0.5.44: 绝对 URL。
 	w.Header().Set("Location", absoluteLocation(r, fmt.Sprintf("/v2/%s/blobs/%s", repo, digest)))
 	w.WriteHeader(http.StatusCreated)
+	// v0.6.32: blob commit can introduce a new blob — drop the
+	// /api/inventory cache so the next read rebuilds and counts it.
+	// Nil-safe — OnWrite is unset in tests.
+	if h.OnWrite != nil {
+		h.OnWrite()
+	}
 }
 
 // ociRangeHeader formats the `Range` value that goes back on POST/PATCH/GET

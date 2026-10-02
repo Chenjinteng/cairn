@@ -794,6 +794,18 @@ func (f *Filesystem) GC(_ context.Context, opts GCOption) (*GCResult, error) {
 			if !looksLikeDigest(digest) {
 				return nil
 			}
+			// v0.6.32: in dry-run mode, every walked blob contributes to
+			// ScannedBlobs; ones not in `live` also bump OrphanBlobs /
+			// OrphanBytes so the UI shows both "how much we walked" and
+			// "how much is reclaimable" without ever touching the disk.
+			if opts.DryRun {
+				res.ScannedBlobs++
+				if _, ok := live[digest]; !ok {
+					res.OrphanBlobs++
+					res.OrphanBytes += info.Size()
+				}
+				return nil
+			}
 			if _, ok := live[digest]; ok {
 				return nil
 			}
@@ -828,6 +840,11 @@ func (f *Filesystem) GC(_ context.Context, opts GCOption) (*GCResult, error) {
 		ts, err := time.Parse(time.RFC3339, strings.TrimSpace(string(body)))
 		if err != nil || ts.After(cutoff) {
 			return nil
+		}
+		// v0.6.32: dry-run counts but doesn't touch the filesystem.
+		if opts.DryRun {
+			res.AbandonedUploads++
+			return filepath.SkipDir
 		}
 		_ = os.RemoveAll(p)
 		pruneEmptyDirs(filepath.Dir(p), uploadsRoot)
@@ -882,10 +899,20 @@ func (f *Filesystem) GC(_ context.Context, opts GCOption) (*GCResult, error) {
 		if f.repoHasActiveUpload(r.Name, cutoff) {
 			continue
 		}
+		freed := dirSize(r.Dir) + dirSize(filepath.Join(uploadsRoot, r.Name))
+		// v0.6.32: dry-run counts what Pass 3 *would* free but skips
+		// the lock + rm-rf + prune so nothing on disk changes. Pass 4
+		// is skipped below because it depends on Pass 3 actually
+		// deleting (a real Pass 3 removes the manifest link files
+		// whose blobs Pass 4 then orphans).
+		if opts.DryRun {
+			res.WouldRemoveEmptyRepos = append(res.WouldRemoveEmptyRepos, r.Name)
+			res.WouldEmptyRepoFreedBytes += freed
+			continue
+		}
 		// From here on we are committed to deleting the repo. Take the lock
 		// so a concurrent push can't add a tag mid-flight.
 		unlock := f.lockRepo(r.Name)
-		freed := dirSize(r.Dir) + dirSize(filepath.Join(uploadsRoot, r.Name))
 		if err := os.RemoveAll(r.Dir); err != nil {
 			unlock()
 			return res, err
@@ -901,6 +928,11 @@ func (f *Filesystem) GC(_ context.Context, opts GCOption) (*GCResult, error) {
 	// whose blobs were "live" only because those manifests existed. Now
 	// they're truly orphaned, so a second Pass 1 is what actually frees
 	// those bytes. Done in addition to Pass 1 — its count goes on top.
+	//
+	// v0.6.32: skipped in dry-run mode because Pass 4 needs Pass 3 to have
+	// actually deleted the manifest link files. Dry-run reports just Pass 1
+	// counts (ScannedBlobs / OrphanBlobs / OrphanBytes), which is the
+	// upper bound on what the next real sweep would free from blobs.
 	if len(res.RemovedEmptyRepos) > 0 {
 		extraBlobs, extraBytes := sweepBlobs(collectLive())
 		res.RemovedBlobs += extraBlobs

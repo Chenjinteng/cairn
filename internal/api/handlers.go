@@ -32,6 +32,11 @@ import (
 // v0.4.0 adds the optional service handles (Vault/Proxies/DB) plus their
 // startup error strings so GET /api/config can tell the UI *why* a
 // feature is unavailable instead of just flipping a boolean.
+//
+// v0.6.32: Inventory is the shared memoization layer for /api/inventory.
+// Wired in server.go so both Handlers.GetInventory and the V2 / extra
+// write handlers share the same instance. Nil-safe — Handlers built
+// without it (tests, partial init) just skip caching.
 type Handlers struct {
 	Cfg   *config.Config
 	Store storage.Storage
@@ -40,6 +45,11 @@ type Handlers struct {
 	Vault   *credentials.Vault
 	Proxies *proxies.Store
 	DB      *db.Db
+
+	// Inventory (v0.6.32): short-window cache for GET /api/inventory.
+	// See inventory_cache.go. Nil = no caching (always rebuild), which
+	// is the safe default for tests that don't wire it.
+	Inventory *InventoryCache
 
 	// Startup failure reasons for the optional services ("" when available).
 	VaultErr   string
@@ -508,8 +518,17 @@ type InventoryError struct {
 }
 
 // GetInventory returns the full inventory (built from local storage).
+//
+// v0.6.32: results are memoized in h.Inventory (InventoryCache) for
+// 30s, with every write path (DeleteRepository / DeleteManifestByDigest /
+// DeleteTag / RunGC / the V2 protocol's PUT / DELETE / upload-complete)
+// calling Invalidate on success. A miss falls through to buildInventory
+// and the fresh snapshot is stored for the next reader.
 func (h *Handlers) GetInventory(w http.ResponseWriter, r *http.Request) {
-	inv, err := buildInventory(r.Context(), h.Store, hostOf(h.registryURL(r)))
+	host := hostOf(h.registryURL(r))
+	inv, err := h.Inventory.GetOrBuild(host, func() (*Inventory, error) {
+		return buildInventory(r.Context(), h.Store, host)
+	})
 	if err != nil {
 		writeError(w, r, http.StatusInternalServerError, err)
 		return
@@ -778,6 +797,11 @@ func (h *Handlers) DeleteTag(w http.ResponseWriter, r *http.Request) {
 		}
 		writeError(w, r, http.StatusInternalServerError, err)
 		return
+	}
+	// v0.6.32: drop the /api/inventory cache so the next read sees the
+	// deletion. Nil-safe — Inventory is unset in tests.
+	if h.Inventory != nil {
+		h.Inventory.Invalidate()
 	}
 	repoView, _ := buildRepoView(r.Context(), h.Store, repo)
 	writeJSON(w, http.StatusOK, map[string]any{

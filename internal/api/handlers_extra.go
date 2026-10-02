@@ -48,6 +48,13 @@ type ExtraHandlers struct {
 	// invoked below alongside the other route mounts.
 	SyncHandlers *SyncHandlers
 
+	// v0.6.32: shared /api/inventory cache. Shared with Handlers (which
+	// owns the read path via Inventory.GetOrBuild) so the /api/* write
+	// handlers below can drop the snapshot on a successful state change
+	// (DeleteTag / DeleteRepository / DeleteManifestByDigest / RunGC).
+	// Nil = no caching, which is the safe default for tests.
+	Inventory *InventoryCache
+
 	// v0.4.0: startup failure reasons for the optional stores ("" when
 	// available). Surfaced by the 503 guards so the UI can explain *why*
 	// a panel is disabled.
@@ -625,6 +632,11 @@ func (e *ExtraHandlers) DeleteRepository(w http.ResponseWriter, r *http.Request)
 		writeError(w, r, http.StatusInternalServerError, err)
 		return
 	}
+	// v0.6.32: drop the /api/inventory cache so the next read sees the
+	// deletion. Nil-safe — Inventory is unset in tests.
+	if e.Inventory != nil {
+		e.Inventory.Invalidate()
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"repo": repo, "deleted": true})
 }
 
@@ -663,6 +675,11 @@ func (e *ExtraHandlers) DeleteManifestByDigest(w http.ResponseWriter, r *http.Re
 		writeError(w, r, http.StatusInternalServerError, err)
 		return
 	}
+	// v0.6.32: drop the /api/inventory cache so the next read sees the
+	// deletion. Nil-safe — Inventory is unset in tests.
+	if e.Inventory != nil {
+		e.Inventory.Invalidate()
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"repo":         repo,
 		"digest":       digest,
@@ -687,6 +704,17 @@ func (e *ExtraHandlers) DeleteManifestByDigest(w http.ResponseWriter, r *http.Re
 // Without this gate, allow.delete=false would still allow GC to wipe data,
 // which is the r-open-2 inconsistency noted in the 0.5.34 acceptance
 // report.
+//
+// v0.6.32: dry-run mode is opt-in via either:
+//   - query string: POST /api/gc?dry_run=true
+//   - JSON body:   {"dryRun": true, "cleanEmptyRepos": true}
+//
+// In dry-run mode the storage layer walks every pass but performs no
+// filesystem writes; the response gains scannedBlobs / orphanBlobs /
+// orphanBytes / abandonedUploads / wouldRemoveEmptyRepos /
+// wouldEmptyRepoFreedBytes describing what a real sweep would free.
+// The standard removedBlobs / freedBytes stay at zero in dry-run mode
+// so callers that read them as "what we did" don't get a confusing mix.
 func (e *ExtraHandlers) RunGC(w http.ResponseWriter, r *http.Request) {
 	if !e.allowDelete() {
 		writeError(w, r, http.StatusForbidden,
@@ -699,6 +727,10 @@ func (e *ExtraHandlers) RunGC(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		CleanEmptyRepos bool `json:"cleanEmptyRepos"`
+		// DryRun accepts camelCase in the JSON body. Query param takes
+		// precedence when both are sent — see the body-error note below
+		// for the JSON-only fallback path. Documented in the godoc above.
+		DryRun bool `json:"dryRun"`
 	}
 	// v0.6.12 (MA-3): a missing or empty body is the v0.5.18 path —
 	// leave CleanEmptyRepos at its zero value (false). EOF from the
@@ -712,8 +744,19 @@ func (e *ExtraHandlers) RunGC(w http.ResponseWriter, r *http.Request) {
 			fmt.Errorf("invalid JSON body: %w", err))
 		return
 	}
+	// Query param "dry_run" / "dryRun" overrides the body when present —
+	// lets a curl one-liner preview GC without crafting a JSON body.
+	q := r.URL.Query()
+	if q.Has("dry_run") {
+		body.DryRun = q.Get("dry_run") == "true" || q.Get("dry_run") == "1"
+	} else if q.Has("dryRun") {
+		body.DryRun = q.Get("dryRun") == "true" || q.Get("dryRun") == "1"
+	}
 
-	res, err := e.Store.GC(r.Context(), storage.GCOption{CleanEmptyRepos: body.CleanEmptyRepos})
+	res, err := e.Store.GC(r.Context(), storage.GCOption{
+		CleanEmptyRepos: body.CleanEmptyRepos,
+		DryRun:          body.DryRun,
+	})
 	if err != nil {
 		writeError(w, r, http.StatusInternalServerError, err)
 		return
@@ -722,6 +765,32 @@ func (e *ExtraHandlers) RunGC(w http.ResponseWriter, r *http.Request) {
 		"removedBlobs": res.RemovedBlobs,
 		"freedBytes":   res.FreedBytes,
 	}
+	if body.DryRun {
+		// dry-run mode: explicit "did we walk" flag so callers can tell
+		// a zero-result preview from a zero-result real sweep. The
+		// Would* fields tell the user what a real sweep would free.
+		out["dryRun"] = true
+		if res.ScannedBlobs > 0 {
+			out["scannedBlobs"] = res.ScannedBlobs
+		}
+		if res.OrphanBlobs > 0 {
+			out["orphanBlobs"] = res.OrphanBlobs
+		}
+		if res.OrphanBytes > 0 {
+			out["orphanBytes"] = res.OrphanBytes
+		}
+		if res.AbandonedUploads > 0 {
+			out["abandonedUploads"] = res.AbandonedUploads
+		}
+		if len(res.WouldRemoveEmptyRepos) > 0 {
+			out["wouldRemoveEmptyRepos"] = res.WouldRemoveEmptyRepos
+		}
+		if res.WouldEmptyRepoFreedBytes > 0 {
+			out["wouldEmptyRepoFreedBytes"] = res.WouldEmptyRepoFreedBytes
+		}
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
 	// Mirror the omitempty tags on GCResult so the wire shape stays
 	// identical to v0.5.18 when the flag was off.
 	if len(res.RemovedEmptyRepos) > 0 {
@@ -729,6 +798,12 @@ func (e *ExtraHandlers) RunGC(w http.ResponseWriter, r *http.Request) {
 	}
 	if res.EmptyRepoFreedBytes > 0 {
 		out["emptyRepoFreedBytes"] = res.EmptyRepoFreedBytes
+	}
+	// v0.6.32: a real GC sweep may have dropped empty repositories (when
+	// cleanEmptyRepos=true) — drop the /api/inventory cache so the next
+	// read doesn't show ghost repos. Nil-safe — Inventory is unset in tests.
+	if e.Inventory != nil {
+		e.Inventory.Invalidate()
 	}
 	writeJSON(w, http.StatusOK, out)
 }
