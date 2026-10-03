@@ -59,6 +59,7 @@ import {
   PauseCircleOutlined,
   PlayCircleOutlined,
   PlusOutlined,
+  ReloadOutlined,
   SwapOutlined,
   SyncOutlined,
   CalendarOutlined,
@@ -415,6 +416,11 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
   const [tasks, setTasks] = useState<SyncTask[]>(initialTasks);
   const [loading, setLoading] = useState(initialTasks.length === 0);
   const [error, setError] = useState<ApiResult<unknown> | null>(null);
+  /**
+   * v0.7.36: 页头「刷新」按钮的 loading —— 跟首屏 `loading` 区分开,
+   * 手动刷不想触发 PageLoading 蒙板,只是按钮转一会儿圈。
+   */
+  const [refreshing, setRefreshing] = useState(false);
 
   /** 编辑/新建 Modal：editing == null → 新建；非空 → 编辑（token 字段空表示保留旧值）。 */
   const [editing, setEditing] = useState<SyncTask | null>(null);
@@ -832,6 +838,34 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
       }));
     }
   };
+
+  /**
+   * v0.7.36: 页头「刷新」按钮的处理函数。
+   *
+   * 触发 refresh()(重新拉 task 列表 + lastRunStatus)同时给所有**已展开**
+   * 的 task 强制刷一次 runs({force:true} 绕过「已加载过」的短路)。
+   * 不依赖 3s 轮询——轮询只在 lastRunStatus=running 时启动,如果所有
+   * task 都跑完了,用户点刷新按钮是想立刻拉到最新一次 run 的结果,
+   * 等不上 3s。
+   *
+   * 单独维护一个 refreshing 标志:跟首屏 `loading` 区分,避免手动刷
+   * 也触发 PageLoading 蒙板。错误仍走 `error` state + 上方 Alert。
+   *
+   * 定义在 loadTaskRuns 之后(下面 setExpandedTaskIds 也已经在前)——
+   * 不挪 setState 顺序也能编译过,但就近放便于阅读。
+   */
+  const handleRefresh = useCallback(async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await refresh();
+      for (const id of expandedTaskIds) {
+        void loadTaskRuns(id, { force: true });
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refreshing, refresh, expandedTaskIds, loadTaskRuns]);
 
   /**
    * v0.6.20: 加载某条 run 的 (repo, tag) 明细。每页 50,每次翻页都**替换**
@@ -1549,6 +1583,17 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
             新建同步任务
           </Button>
+        </Tooltip>
+        {/* v0.7.36: 页头手动刷新按钮。
+             - 立即拉 task 列表 + 已展开 task 的 runs,不依赖 3s 轮询。
+             - 跑任务时 3s 轮询已自动追新,但「全部跑完想立刻看结果」要靠这颗按钮。
+             - 只用 refreshing 标志 → 不触发首屏 PageLoading 蒙板。 */}
+        <Tooltip title="刷新任务列表与展开行的 runs">
+          <Button
+            icon={<ReloadOutlined />}
+            loading={refreshing}
+            onClick={() => void handleRefresh()}
+          />
         </Tooltip>
       </div>
 

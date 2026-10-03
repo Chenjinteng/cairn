@@ -6,6 +6,52 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.36] - 2026-10-04
+
+镜像同步页页头加一颗「刷新」按钮。
+
+### 动机
+
+sync 页早就有两套自动轮询:
+
+- task 列表(`lastRunStatus === 'running'` 时每 3s 刷一次,
+  跑完就停 — v0.6.11 SYNC-1/4)
+- 已展开 task 的 runs(running 时 3s 刷一次 — v0.6.23 / v0.7.26)
+
+但**全部跑完之后没有自动刷新**。常见场景:
+
+- 跑一个 5 分钟的 sync,中途 5s 前轮询了一轮就停了。
+- 用户切到别的页盯 5 分钟,回来展开 task 想看结果。
+- 看到的 runs 是 5 分钟前的 lastRunStatus=running,**实际已经
+  跑完了,得手动刷新整页**(Ctrl+R / Cmd+R)。
+
+用户反馈「镜像同步页加一个刷新按钮」—— 整页刷新太重,只想
+重新打 task 列表 + 展开行的 runs,跟轮询的语义一致。
+
+### 改动
+
+- 页头「新建同步任务」按钮**左边**加一颗 `<ReloadOutlined />`
+  图标按钮(`type="default"`,无文字,跟「新建同步任务」并排)。
+- 点击行为:
+  1. 调 `refresh()` 重新拉 task 列表(覆盖 lastRunStatus / 各种派生列)。
+  2. 对所有 `expandedTaskIds` 调 `loadTaskRuns(id, { force: true })` —
+     绕过「已加载过不再 fetch」的短路,把展开行里卡住的旧 runs
+     强制拉一次。
+- 独立 `refreshing` state 控制按钮 loading — 跟首屏 `loading` 区分,
+  避免手动刷新也触发 PageLoading 蒙板(蒙板会盖住整页)。
+- 失败仍走 `error` state + 顶部 Alert 展示,跟其它错误一致。
+- 3s 自动轮询**不变** —— 刷新按钮是「立刻追新」的快速通道,不取代轮询。
+- Tooltip:「刷新任务列表与展开行的 runs」。
+
+### 改动文件
+
+- `web/src/pages/sync-page.tsx` — 加 `refreshing` state + `handleRefresh`
+  callback(放在 `loadTaskRuns` 之后避免 hoisting 报错)+ ReloadOutlined
+  import + 页头 Button。
+- 后端 / API / DB / SQL:全部不变。
+
+---
+
 ## [0.7.35] - 2026-10-04
 
 镜像同步页 runs 表展开行里,run 失败 + 0 条 item 时不再显示
