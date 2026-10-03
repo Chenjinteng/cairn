@@ -95,6 +95,7 @@ type SyncTask struct {
 	RemoteUsername     string    `json:"remoteUsername"`
 	RemotePassword     string    `json:"-"`
 	Include            string    `json:"include"` // newline-separated glob patterns; "" matches all
+	TagsFilter         string    `json:"tagsFilter,omitempty"` // v0.7.21: newline-separated `repo:tag` specs; "" = catalog path
 	Enabled            bool      `json:"enabled"`
 	CreatedAt          time.Time `json:"createdAt"`
 	UpdatedAt          time.Time `json:"updatedAt"`
@@ -137,6 +138,7 @@ type SyncTaskInput struct {
 	RemoteUsername     string    `json:"remoteUsername"`
 	RemotePassword     string    `json:"remotePassword"`
 	Include            string    `json:"include"`
+	TagsFilter         string    `json:"tagsFilter"` // v0.7.21: newline-separated `repo:tag`; empty = catalog path
 	Enabled            bool      `json:"enabled"`
 }
 
@@ -151,6 +153,7 @@ func (in SyncTaskInput) ToTask() SyncTask {
 		RemoteUsername:     in.RemoteUsername,
 		RemotePassword:     in.RemotePassword,
 		Include:            in.Include,
+		TagsFilter:         in.TagsFilter,
 		Enabled:            in.Enabled,
 	}
 }

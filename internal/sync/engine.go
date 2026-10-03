@@ -250,6 +250,15 @@ func (e *Engine) runPull(ctx context.Context, task SyncTask, run *SyncRun) error
 		return fmt.Errorf("build remote client: %w", err)
 	}
 
+	// v0.7.21: tags_filter 旁路。某些上游(典型:匿名 TCR / Harbor)
+	// 对 /v2/_catalog 返 401 / insufficient_scope,而 docker pull 走
+	// manifest 直读并不需要 catalog —— 这条路径让用户用「固定若干
+	// (repo, tag) 精确清单」绕过 catalog,直接 fetch manifest。
+	// 空 / 全注释 / 全无效行 → 走回老的 ListRepositories 分支,旧任务行为不变。
+	if specs := ParseTagsFilter(task.TagsFilter); len(specs) > 0 {
+		return e.pullFromSpecs(ctx, rc, run, specs)
+	}
+
 	repos, err := rc.ListRepositories(ctx)
 	if err != nil {
 		return fmt.Errorf("list remote repos: %w", err)
@@ -269,6 +278,43 @@ func (e *Engine) runPull(ctx context.Context, task SyncTask, run *SyncRun) error
 			}
 			e.log.Warn("sync: pull repo failed",
 				"task_id", task.ID, "repo", repoName, "err", err)
+			run.ReposFailed++
+			continue
+		}
+		run.ReposSynced++
+	}
+	return nil
+}
+
+// pullFromSpecs is the v0.7.21 catalog-bypass branch of runPull. Given a
+// parsed TagSpec list, it pulls each (repo, tag) directly via GetManifest
+// without ever asking the remote for /v2/_catalog or /v2/<repo>/tags/list.
+//
+// Per-tag failures don't abort the run — they're recorded as failed
+// sync_run_items rows and counted into ReposFailed, matching the catalog
+// path's contract (v0.6.16). A non-nil error return signals the whole run
+// was aborted (context cancellation only — list-tags errors don't apply
+// here).
+//
+// This is structurally the inner loop of pullRepo with the ListTags step
+// removed; we don't reuse pullRepo because its name and return type both
+// imply "operate on one repo", and feeding it a list of repos feels worse
+// than a sibling function with its own doc.
+func (e *Engine) pullFromSpecs(ctx context.Context, rc *registry.Client, run *SyncRun, specs []TagSpec) error {
+	run.ReposTotal = len(specs)
+	for _, s := range specs {
+		e.progress(ctx, run, s.Repository, s.Tag)
+		startedAt := time.Now().UTC()
+		bytesTotal, tagErr := e.pullTag(ctx, rc, s.Repository, s.Tag)
+		finishedAt := time.Now().UTC()
+		e.recordRunItem(ctx, run.ID, s.Repository, s.Tag, startedAt, finishedAt, bytesTotal, tagErr)
+		if errors.Is(tagErr, context.Canceled) {
+			return fmt.Errorf("run aborted: %w", tagErr)
+		}
+		if tagErr != nil {
+			e.log.Warn("sync: pull tag failed (tags_filter)",
+				"task_id", run.TaskID, "run_id", run.ID,
+				"repo", s.Repository, "tag", s.Tag, "err", tagErr)
 			run.ReposFailed++
 			continue
 		}

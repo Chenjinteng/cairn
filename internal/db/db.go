@@ -25,7 +25,7 @@ import (
 
 // SCHEMA_VERSION is bumped together with new migrations.
 // Bump rule: +1 per migration; never reuse a number; never delete a migration.
-const SCHEMA_VERSION = 11
+const SCHEMA_VERSION = 12
 
 // Db is the SQLite wrapper. All exported methods are safe for concurrent use.
 type Db struct {
@@ -432,6 +432,35 @@ var migrations = map[int]string{
 		counted    INTEGER NOT NULL DEFAULT 0
 	);
 	CREATE INDEX IF NOT EXISTS event_log_at ON event_log(at DESC);
+	`,
+	12: `
+	-- v0.7.21: per-task "exact (repo, tag) spec" list that bypasses /v2/_catalog.
+	--
+	-- Background: some upstreams (e.g. TCR / Harbor behind anonymous access)
+	-- return 401 / insufficient_scope on /v2/_catalog, which broke the engine
+	-- on every run. UAT feedback: operators want to mirror a handful of
+	-- fixed (repo, tag) pairs (e.g. bklite/alpine/openssl:3.5.4) without
+	-- negotiating catalog access with the upstream — they only need the
+	-- manifest for those exact refs, which docker pull does directly.
+	--
+	-- ADD COLUMN, not DROP+CREATE: v6 already rebuilt sync_tasks, and v7+9+10
+	-- added columns incrementally, so any DB at user_version >= 6 has the
+	-- exact required column set. Rebuilding again would CASCADE-delete
+	-- sync_runs / sync_schedules / sync_run_items rows.
+	--
+	-- Format (newline-separated, parser lives in internal/sync/engine.go):
+	--   library/nginx:1.27
+	--   library/redis:7.4-alpine
+	--   # comment lines starting with '#' are skipped (same convention as
+	--   include); bad rows (no colon / empty repo or tag) are silently
+	--   dropped at parse time, the same way filter.go drops bad globs.
+	--
+	-- Engine dispatch (runPull, v0.7.21): if TagsFilter parses to >=1 spec,
+	-- skip ListRepositories + ListTags entirely and pull each (repo, tag)
+	-- directly. Empty / whitespace-only TagsFilter preserves the existing
+	-- catalog → include-glob path; pre-0.7.21 tasks read back with empty
+	-- strings and keep their original behavior.
+	ALTER TABLE sync_tasks ADD COLUMN tags_filter TEXT NOT NULL DEFAULT '';
 	`,
 }
 

@@ -130,6 +130,8 @@ interface FormValues {
   /** 远端 cairn 的 Basic-auth 密码（只在 inline 档渲染）。编辑时可空 = 保留旧值（后端处理）。 */
   remotePassword?: string;
   include: string;
+  /** v0.7.21：换行分隔的 `repo:tag` 精确清单；非空时引擎跳过 catalog,直接按 spec fetch manifest。 */
+  tagsFilter?: string;
   enabled: boolean;
 }
 
@@ -567,6 +569,7 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
     form.setFieldsValue({
       direction: 'pull',
       include: '',
+      tagsFilter: '',
       enabled: true,
     });
     setCredMode('anonymous');  // v0.6.11（SYNC-3）：新建默认匿名,要认证就选「引用凭据」
@@ -595,6 +598,7 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
       /** 编辑时密码留空——后端看到空字符串会保留旧值。UI 不应该假装知道旧密码。 */
       remotePassword: '',
       include: task.include,
+      tagsFilter: task.tagsFilter ?? '',
       enabled: task.enabled,
     });
     setModalOpen(true);
@@ -640,6 +644,11 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
         remotePassword: credMode === 'inline' ? (values.remotePassword ?? '') : '',
         remoteCredentialId: credMode === 'credential' ? (values.remoteCredentialId ?? '') : '',
         include: values.include ?? '',
+        // v0.7.21: tags_filter 与 include 正交——前者跳过 catalog 走精确 spec,
+        // 后者在 catalog 返的 repos 里 glob。两字段都空也能工作,但用户同时配两个
+        // 是奇怪的(后面 UI 想加互斥提示可以再说)。Trim 是因为 antd Input.TextArea
+        // 会在末尾留 `\n`,直接入库会让无意义的空行走 parser。
+        tagsFilter: (values.tagsFilter ?? '').trim(),
         enabled: values.enabled,
       };
       const result = editing
@@ -1680,6 +1689,33 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
             }
           >
             <Input.TextArea rows={3} placeholder={'library/nginx\nlibrary/redis'} />
+          </Form.Item>
+
+          {/*
+            v0.7.21: 精确 (repo, tag) 清单 —— 远端 registry 对匿名账号返 401 insufficient_scope
+            拒列 /v2/_catalog 时(典型: TCR / Harbor),docker pull 能直读 manifest,但
+            cairn 的 sync engine 必须 list catalog 才能按 include glob 过滤。把想同步的
+            精确 ref 写这里,引擎直接 fetch manifest 跳过 catalog。留空 = 走上面的
+            Include 模式(原行为)。
+
+            文案里点出「互斥风格」但实现不强制 —— 用户同时填两个字段时,当前会优先走
+            tags_filter(因为 runPull 入口先看它),include 被忽略。这个判定在 runPull
+            的注释里有写明,文档 CHANGELOG v0.7.21 会再说明一次。
+          */}
+          <Form.Item
+            name="tagsFilter"
+            label="Tags 过滤（精确清单）"
+            extra={
+              <span style={{ fontSize: 12, color: '#999' }}>
+                一行一条 <code>repo:tag</code>（可写 <code>#</code> 开头的注释行）。留空 = 走 Include 模式。
+                典型场景：远端不允许列 catalog，但仍想拉固定的几个镜像。例：<code>bklite/alpine/openssl:3.5.4</code>。
+              </span>
+            }
+          >
+            <Input.TextArea
+              rows={3}
+              placeholder={'bklite/alpine/openssl:3.5.4\n# 注释行会被跳过'}
+            />
           </Form.Item>
 
           <Form.Item name="enabled" label="启用" valuePropName="checked">

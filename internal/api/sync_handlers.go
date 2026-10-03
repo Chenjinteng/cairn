@@ -212,6 +212,7 @@ func (s *SyncHandlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	existing.Direction = in.Direction
 	existing.RemoteURL = in.RemoteURL
 	existing.Include = in.Include
+	existing.TagsFilter = in.TagsFilter // v0.7.21: bypass /v2/_catalog when set
 	existing.Enabled = in.Enabled
 
 	if err := existing.Validate(); err != nil {

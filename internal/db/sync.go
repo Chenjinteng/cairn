@@ -37,6 +37,7 @@ type SyncTaskRow struct {
 	RemotePassword     string
 	RemoteCredentialID string
 	Include            string
+	TagsFilter         string // v0.7.21: per-task (repo, tag) spec list; empty = use catalog path
 	Enabled            bool
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
@@ -99,9 +100,9 @@ func (d *Db) SyncTaskCreate(ctx context.Context, t SyncTaskRow) (int64, error) {
 		enabled = 1
 	}
 	res, err := d.conn.ExecContext(ctx, `
-		INSERT INTO sync_tasks(name, direction, remote_url, remote_username, remote_password, remote_credential_id, include, enabled, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, t.Name, t.Direction, t.RemoteURL, t.RemoteUsername, t.RemotePassword, t.RemoteCredentialID, t.Include, enabled,
+		INSERT INTO sync_tasks(name, direction, remote_url, remote_username, remote_password, remote_credential_id, include, tags_filter, enabled, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, t.Name, t.Direction, t.RemoteURL, t.RemoteUsername, t.RemotePassword, t.RemoteCredentialID, t.Include, t.TagsFilter, enabled,
 		t.CreatedAt.Unix(), t.UpdatedAt.Unix())
 	if err != nil {
 		return 0, err
@@ -120,13 +121,13 @@ func (d *Db) SyncTaskGet(ctx context.Context, id int64) (SyncTaskRow, error) {
 	var enabled int
 	var createdAt, updatedAt int64
 	err := d.conn.QueryRowContext(ctx, `
-		SELECT id, name, direction, remote_url, remote_username, remote_password, remote_credential_id, include, enabled, created_at, updated_at,
+		SELECT id, name, direction, remote_url, remote_username, remote_password, remote_credential_id, include, tags_filter, enabled, created_at, updated_at,
 		       COALESCE((SELECT r.status       FROM sync_runs r WHERE r.task_id = sync_tasks.id ORDER BY r.started_at DESC, r.id DESC LIMIT 1), ''),
 		       COALESCE((SELECT r.id           FROM sync_runs r WHERE r.task_id = sync_tasks.id ORDER BY r.started_at DESC, r.id DESC LIMIT 1), 0),
 		       COALESCE((SELECT r.current_repo FROM sync_runs r WHERE r.task_id = sync_tasks.id ORDER BY r.started_at DESC, r.id DESC LIMIT 1), ''),
 		       COALESCE((SELECT r.current_tag  FROM sync_runs r WHERE r.task_id = sync_tasks.id ORDER BY r.started_at DESC, r.id DESC LIMIT 1), '')
 		FROM sync_tasks WHERE id = ?
-	`, id).Scan(&t.ID, &t.Name, &t.Direction, &t.RemoteURL, &t.RemoteUsername, &t.RemotePassword, &t.RemoteCredentialID, &t.Include, &enabled,
+	`, id).Scan(&t.ID, &t.Name, &t.Direction, &t.RemoteURL, &t.RemoteUsername, &t.RemotePassword, &t.RemoteCredentialID, &t.Include, &t.TagsFilter, &enabled,
 		&createdAt, &updatedAt, &t.LastRunStatus, &t.LastRunID, &t.LastRunCurrentRepo, &t.LastRunCurrentTag)
 	if err != nil {
 		return SyncTaskRow{}, err
@@ -141,7 +142,7 @@ func (d *Db) SyncTaskGet(ctx context.Context, id int64) (SyncTaskRow, error) {
 // as tiebreaker — same-second inserts sort by insertion order).
 func (d *Db) SyncTaskList(ctx context.Context) ([]SyncTaskRow, error) {
 	rows, err := d.conn.QueryContext(ctx, `
-		SELECT id, name, direction, remote_url, remote_username, remote_password, remote_credential_id, include, enabled, created_at, updated_at,
+		SELECT id, name, direction, remote_url, remote_username, remote_password, remote_credential_id, include, tags_filter, enabled, created_at, updated_at,
 		       COALESCE((SELECT r.status       FROM sync_runs r WHERE r.task_id = sync_tasks.id ORDER BY r.started_at DESC, r.id DESC LIMIT 1), ''),
 		       COALESCE((SELECT r.id           FROM sync_runs r WHERE r.task_id = sync_tasks.id ORDER BY r.started_at DESC, r.id DESC LIMIT 1), 0),
 		       COALESCE((SELECT r.current_repo FROM sync_runs r WHERE r.task_id = sync_tasks.id ORDER BY r.started_at DESC, r.id DESC LIMIT 1), ''),
@@ -157,7 +158,7 @@ func (d *Db) SyncTaskList(ctx context.Context) ([]SyncTaskRow, error) {
 		var t SyncTaskRow
 		var enabled int
 		var createdAt, updatedAt int64
-		if err := rows.Scan(&t.ID, &t.Name, &t.Direction, &t.RemoteURL, &t.RemoteUsername, &t.RemotePassword, &t.RemoteCredentialID, &t.Include, &enabled,
+		if err := rows.Scan(&t.ID, &t.Name, &t.Direction, &t.RemoteURL, &t.RemoteUsername, &t.RemotePassword, &t.RemoteCredentialID, &t.Include, &t.TagsFilter, &enabled,
 			&createdAt, &updatedAt, &t.LastRunStatus, &t.LastRunID, &t.LastRunCurrentRepo, &t.LastRunCurrentTag); err != nil {
 			return nil, err
 		}
@@ -178,9 +179,9 @@ func (d *Db) SyncTaskUpdate(ctx context.Context, t SyncTaskRow) error {
 		enabled = 1
 	}
 	res, err := d.conn.ExecContext(ctx, `
-		UPDATE sync_tasks SET name=?, direction=?, remote_url=?, remote_username=?, remote_password=?, remote_credential_id=?, include=?, enabled=?, updated_at=?
+		UPDATE sync_tasks SET name=?, direction=?, remote_url=?, remote_username=?, remote_password=?, remote_credential_id=?, include=?, tags_filter=?, enabled=?, updated_at=?
 		WHERE id=?
-	`, t.Name, t.Direction, t.RemoteURL, t.RemoteUsername, t.RemotePassword, t.RemoteCredentialID, t.Include, enabled,
+	`, t.Name, t.Direction, t.RemoteURL, t.RemoteUsername, t.RemotePassword, t.RemoteCredentialID, t.Include, t.TagsFilter, enabled,
 		t.UpdatedAt.Unix(), t.ID)
 	if err != nil {
 		return err

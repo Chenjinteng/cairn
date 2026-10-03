@@ -6,6 +6,59 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.21] - 2026-10-03
+
+本轮给镜像同步加「精确 (repo, tag) 清单」绕过 `/v2/_catalog` 的能力。
+属既有 sync 机制的过滤维度扩展(不引入新模块,新加一列 + engine 加旁路
+分支 + UI 多一个 textarea)→ 小版本进位 0.7.21。
+
+### 背景
+
+UAT 反馈:某些上游 registry(典型: TCR / Harbor 在匿名账号下)
+对 `/v2/_catalog` 返 `401 insufficient_scope` 或空 token,而 `docker pull`
+只需要直读 manifest 并不需要 catalog。cairn 既有 sync 引擎必须先
+`ListRepositories` 才能按 `include` glob 过滤,**catalog 401 直接把整个
+run 起步就堵死**。
+
+### 新增
+
+- **`sync_tasks.tags_filter TEXT` 列(schema v12)**：newline-分隔的
+  `repo:tag` 精确清单；非空时引擎**完全跳过** `/v2/_catalog` 和
+  `/v2/<name>/tags/list`,按 spec 直接 fetch manifest。空串 = 老路径
+  (catalog → include glob),所以既有任务读回空串行为不变。
+- **`internal/sync/filter.go:ParseTagsFilter` 解析器**:与既有 `Filter`
+  解析器对称风格(空行 / `#` 注释跳过;坏行 silently drop,不 abort
+  整个 run);`strings.Cut(line, ":")` 切第一个冒号 —— tag 里不带冒号,
+  无歧义。
+- **`internal/sync/engine.go:pullFromSpecs`**:`runPull` 入口加分支,
+  `TagsFilter` 解析出 ≥1 个 spec 时走该分支,复用现有 `pullTag` +
+  `recordRunItem`,语义跟 catalog 路径下的「(repo, tag) 一组一组跑」
+  完全一致 (per-tag 失败不 abort,记到 `sync_run_items`)。
+- **UI 编辑 modal**: 「Tags 过滤(精确清单)」 TextArea,放在「Include
+  模式」下方,提示文案点明「远端不允许列 catalog,但仍想拉固定的几个
+  镜像」这一典型场景;提交时 `trim()` 去掉 antd 默认尾换行。
+- **`SyncTask.tagsFilter` / `SyncTaskInput.tagsFilter` 字段**:omitempty
+  序列化;既有列表请求读回空串。
+
+### 单测
+
+- `internal/db/migrate_test.go:TestMigrateFreshDatabase`: `wantTasks`
+  加 `tags_filter`,并断言 TEXT NOT NULL DEFAULT '' 契约。
+- `internal/db/migrate_test.go:TestMigrateV6ToV7…` / `…V7ToV8…`:
+  `user_version` 断言从 `11` → `12`(v6 → v7+v8+v9+v10+v11+v12)。
+- `internal/sync/filter_test.go`(新文件): `TestParseTagsFilter` 13
+  个 case 覆盖 empty / 单条 / 多条 / 注释 / 空行 / trim / no-colon /
+  空 repo / 空 tag / 嵌入冒号等坏行 swallowed 行为;
+  `TestParseTagsFilter_DoesNotMutate` 钉死 parser 只读。
+
+### 互斥
+
+`tags_filter` 与 `include` 字段正交。两者都填时,**`runPull` 入口先看
+`tags_filter`,有 spec 就走精确路径,`include` 被忽略**。UI 没强制互斥
+(两者提示文案都写明「另一个留空 = 走另一模式」),文档本节点明优先级。
+
+---
+
 ## [0.7.20] - 2026-10-03
 
 本轮清理 events handler 里两组「以前是内存的提示」的冗余状态。属既有

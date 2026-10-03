@@ -650,6 +650,8 @@ export interface SyncTask {
   lastRunCurrentTag?: string;
   /** 换行分隔的 glob 模式（`*` 通配），空 = 全匹配。 */
   include: string;
+  /** v0.7.21：换行分隔的 `repo:tag` 精确清单；非空时引擎跳过 /v2/_catalog，直接按 spec fetch manifest。空 = 走老的 catalog 路径。 */
+  tagsFilter?: string;
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
@@ -671,6 +673,8 @@ export interface SyncTaskInput {
   /** v0.6.11：非空 = 引用凭据库；与内联用户名密码互斥。 */
   remoteCredentialId: string;
   include: string;
+  /** v0.7.21：见 SyncTask.tagsFilter。空串 = 走 catalog 路径。 */
+  tagsFilter: string;
   enabled: boolean;
 }
 

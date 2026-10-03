@@ -105,11 +105,12 @@ func TestMigrateFreshDatabase(t *testing.T) {
 		t.Fatalf("user_version = %d, want %d", v, SCHEMA_VERSION)
 	}
 
-	// sync_tasks: the v6 column set plus SYNC-3's remote_credential_id.
+	// sync_tasks: the v6 column set plus SYNC-3's remote_credential_id
+	// plus v0.7.21's tags_filter.
 	wantTasks := []string{
 		"id", "name", "direction", "remote_url", "remote_username",
 		"remote_password", "include", "enabled", "created_at", "updated_at",
-		"remote_credential_id",
+		"remote_credential_id", "tags_filter",
 	}
 	gotTasks := tableColumns(t, d.conn, "sync_tasks")
 	if len(gotTasks) != len(wantTasks) {
@@ -132,6 +133,23 @@ func TestMigrateFreshDatabase(t *testing.T) {
 	}
 	if !ref.hasDflt || strings.Trim(ref.dflt, "'") != "" {
 		t.Errorf("remote_credential_id default = %q (hasDefault=%v), want empty-string default", ref.dflt, ref.hasDflt)
+	}
+	// v0.7.21: tags_filter — same TEXT NOT NULL DEFAULT '' contract as
+	// remote_credential_id; the engine parses it at run time, empty
+	// string preserves the original catalog-path behavior so pre-0.7.21
+	// tasks keep working unchanged.
+	tf, ok := gotTasks["tags_filter"]
+	if !ok {
+		t.Fatal("sync_tasks.tags_filter missing (v0.7.21)")
+	}
+	if !strings.EqualFold(tf.typ, "TEXT") {
+		t.Errorf("tags_filter type = %q, want TEXT", tf.typ)
+	}
+	if !tf.notNull {
+		t.Error("tags_filter must be NOT NULL")
+	}
+	if !tf.hasDflt || strings.Trim(tf.dflt, "'") != "" {
+		t.Errorf("tags_filter default = %q (hasDefault=%v), want empty-string default", tf.dflt, tf.hasDflt)
 	}
 
 	wantRuns := []string{
@@ -226,9 +244,9 @@ func TestMigrateV6ToV7PreservesLegacyInlineTask(t *testing.T) {
 		d.Close()
 		t.Fatalf("user_version: %v", err)
 	}
-	if v != 11 {
+	if v != 12 {
 		d.Close()
-		t.Fatalf("user_version after upgrade = %d, want 11 (v6 → v7+v8+v9+v10+v11 migrations run in one Open)", v)
+		t.Fatalf("user_version after upgrade = %d, want 12 (v6 → v7+v8+v9+v10+v11+v12 migrations run in one Open)", v)
 	}
 
 	var (
@@ -263,8 +281,8 @@ func TestMigrateV6ToV7PreservesLegacyInlineTask(t *testing.T) {
 	if err := d2.conn.QueryRow("PRAGMA user_version").Scan(&v); err != nil {
 		t.Fatalf("user_version after reopen: %v", err)
 	}
-	if v != 11 {
-		t.Fatalf("user_version after reopen = %d, want 11", v)
+	if v != 12 {
+		t.Fatalf("user_version after reopen = %d, want 12", v)
 	}
 	if _, ok := tableColumns(t, d2.conn, "sync_tasks")["remote_credential_id"]; !ok {
 		t.Fatal("remote_credential_id missing after reopen")
@@ -285,9 +303,9 @@ func TestMigrateV7ToV8PreservesLegacyRun(t *testing.T) {
 		d.Close()
 		t.Fatalf("user_version: %v", err)
 	}
-	if v != 11 {
+	if v != 12 {
 		d.Close()
-		t.Fatalf("user_version after upgrade = %d, want 11", v)
+		t.Fatalf("user_version after upgrade = %d, want 12", v)
 	}
 
 	// New columns present + readable.
@@ -339,8 +357,8 @@ func TestMigrateV7ToV8PreservesLegacyRun(t *testing.T) {
 	if err := d2.conn.QueryRow("PRAGMA user_version").Scan(&v); err != nil {
 		t.Fatalf("user_version after reopen: %v", err)
 	}
-	if v != 11 {
-		t.Fatalf("user_version after reopen = %d, want 11", v)
+	if v != 12 {
+		t.Fatalf("user_version after reopen = %d, want 12", v)
 	}
 	if _, ok := tableColumns(t, d2.conn, "sync_runs")["current_repo"]; !ok {
 		t.Fatal("current_repo missing after reopen")
