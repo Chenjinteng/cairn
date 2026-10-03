@@ -811,7 +811,13 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
         [taskId]: { runs: result.data!, loading: false, loaded: true },
       }));
     } else {
-      message.error(`加载历史失败：${result.message}`);
+      // v0.7.26: 轮询路径（force=true）失败静默 —— setInterval 3s 后会重试,
+      // 手机切屏 / VPN 慢速触发的 10s 超时不该作为错误呈现给用户（用户已习惯
+      // self-healing 行为,toast 反而是噪声）。首次手动展开（force=false）失败
+      // 仍然 toast,那是真信号（用户主动操作后的真实失败）。
+      if (!opts?.force) {
+        message.error(`加载历史失败：${result.message}`);
+      }
       setRunsByTaskId((prev) => ({
         ...prev,
         [taskId]: { runs: prev[taskId]?.runs ?? [], loading: false, loaded: true },

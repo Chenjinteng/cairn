@@ -6,6 +6,31 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.26] - 2026-10-04
+
+本轮把 sync 历史 Modal（v0.6.20 改成的 task 行内嵌展开）轮询路径
+的失败 toast 静默掉，去掉手机切屏 / VPN 慢速触发的 10s 超时噪声。
+
+### 改动
+
+- `sync-page.tsx` `loadTaskRuns`：`force=true`（轮询路径）失败不再
+  弹 `message.error`。`force=false`（用户首次展开 task）失败仍然
+  toast —— 那是用户主动操作后的真实失败信号。
+- 行为不变：
+  - 轮询失败时仍把 `loaded=true`（防止 loading 永不清掉），
+    `runs` 保留上一次成功时的旧值；
+  - 3s 后 setInterval 自动重试，self-healing 行为照旧；
+  - 数据无更新但用户不会看到任何提示 —— 这是设计意图，不是 bug。
+
+### 判定要点
+
+- 10s 超时根因是手机切屏后 4G/VPN 重连握手卡住，不是 cairn 慢
+  （`/api/sync/{id}/runs?limit=10` 在 158 上实测 2ms 就返）。
+- 拉宽超时（10s → 30s）或拉长轮询间隔（3s → 5s）只是把噪声往后挪
+  2s，没真修掉 —— 静默轮询失败才是精准去噪。
+
+---
+
 ## [0.7.25] - 2026-10-04
 
 本轮给 `sync_run_items` 加 `timeout_used` 列,把 v0.7.24 引入的「智能
