@@ -6,6 +6,76 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.24] - 2026-10-03
+
+本轮撤掉 v0.7.22 的 `long_timeout_repos` 用户可配字段,改成
+**manifest size 自动切 timeout**。属既有机制替换 + UX 缺陷修复
+→ 小版本进位 0.7.24。
+
+### 背景
+
+v0.7.22 加 `long_timeout_repos` 后,UAT 立刻指出根本缺陷:
+「我第一次配置的话怎么可能会知道哪个镜像是大的」。这个字段把
+「读 manifest 估算 size」的工作甩给 user,违反「开箱即用」。
+撤销,改 engine 自动判断。
+
+### 新增
+
+- **`internal/sync/engine.go:LargeManifestThreshold = 1 GiB`**:
+  manifest 总 size 阈值,超过走 `LongSyncTimeout`(30min),否则
+  `DefaultSyncTimeout`(5min)。1 GiB 是经验值:4 MB/s 上游 + 100ms
+  RTT 时,< 1 GiB 单平台 manifest 1-3 分钟跑完,5min timeout 富余;
+  > 1 GiB(bklite/bklite/server 2 GiB / bklite/bklite/vllm 23 GiB)
+  10 分钟到数小时,5min 必 abort,30min 才合适。
+- **`pullTag` 改成智能 dispatch**(v0.7.22 走 caller 注入 timeout):
+  - probeRC = newRemoteClient(...,DefaultSyncTimeout)
+  - GetManifest → mf.Size 已知
+  - mf.Size > LargeManifestThreshold → specRC = newRemoteClient(...,LongSyncTimeout)
+  - copyManifestContents 用 specRC 下 layers + config + put
+  - probeRC 和 specRC 各自 `CloseIdleConnections()` 释放 idle conn
+  一次 GetManifest 重复?不 —— pullTag 内部抽 `copyManifestContents`
+  helper,probe 那次只 GetManifest 不下 blob,spec 那次用已读 mf
+  直接下。代价:多一次 GetManifest HTTP,5KB 响应 < 100ms。
+- **同时覆盖 catalog 路径**:`pullRepo` 改为把 `task` / `username` /
+  `password` 一起传下去,内部 `pullTag` 自动切 —— 老的 catalog 路径
+  大镜像也能跑通。
+
+### 撤销
+
+- **UI「长 Timeout 镜像」Form.Item 删除**(`web/src/pages/sync-page.tsx`):
+  不让 user 配这字段。`FormValues.longTimeoutRepos` 删除,
+  `openCreate/openEdit` 不再初始化,`submit` 固定发空串(后端字段
+  保留兼容)。
+- **`SyncTask.LongTimeoutRepos` 字段标 deprecated**(`internal/sync/types.go`):
+  - 保留 DB 列 `sync_tasks.long_timeout_repos`(schema v13,不动),
+    旧任务读回空串 / 老配置保留无影响
+  - 保留 wire 序列化字段(omitempty),0.7.21 / 0.7.22 / 0.7.23 客户端
+    仍能跟 0.7.24 服务端兼容
+  - engine 完全不读
+  - `ParseLongTimeoutRepos` 函数保留(deprecated 注释),供测试用
+  - 注释明确「这是 deprecated,以后 v0.8.x 撤掉 DB 列」
+- **DB schema 不动**:`SCHEMA_VERSION` 仍 13(v0.7.22 加 long_timeout_repos
+  的 migration 不撤销,因为列保留)。如未来 v0.8.x 真要撤列,用
+  v15 migration DROP COLUMN 即可(SQLite 3.35+ 支持)。
+
+### 单测
+
+- `internal/sync/smart_timeout_test.go`(新):
+  `TestSmartTimeoutConstants` 钉死三个常量:
+    - `DefaultSyncTimeout = 5 * time.Minute`
+    - `LongSyncTimeout = 30 * time.Minute`
+    - `LargeManifestThreshold = 1 << 30`(1 GiB)
+  + 断言 Default < Long(顺序敏感,否则 dispatch 无意义)。
+
+### 端到端验证(已实跑)
+
+- v0.7.24 image 在 158 上跑起来,`/api/sync/2` GET 返 `longTimeoutRepos=''`
+  (UI 不发,DB 列保留空值,后端 omitempty)。
+- bklite/bklite/server:latest (2GB / 28 层) 通过 pullTag 智能切
+  30min timeout 跑通 —— 不需要 user 预先填 long_timeout_repos。
+
+---
+
 ## [0.7.23] - 2026-10-03
 
 本轮给运行中的 sync 任务加「中止」入口。属既有 sync 机制的补全

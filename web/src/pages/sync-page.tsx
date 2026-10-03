@@ -134,8 +134,6 @@ interface FormValues {
   include: string;
   /** v0.7.21：换行分隔的 `repo:tag` 精确清单；非空时引擎跳过 catalog,直接按 spec fetch manifest。 */
   tagsFilter?: string;
-  /** v0.7.22：逗号分隔的 repo 名；匹配走 30min client timeout,空 = 全部走 5min 默认。 */
-  longTimeoutRepos?: string;
   enabled: boolean;
 }
 
@@ -577,7 +575,6 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
       direction: 'pull',
       include: '',
       tagsFilter: '',
-      longTimeoutRepos: '',
       enabled: true,
     });
     setCredMode('anonymous');  // v0.6.11（SYNC-3）：新建默认匿名,要认证就选「引用凭据」
@@ -607,7 +604,6 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
       remotePassword: '',
       include: task.include,
       tagsFilter: task.tagsFilter ?? '',
-      longTimeoutRepos: task.longTimeoutRepos ?? '',
       enabled: task.enabled,
     });
     setModalOpen(true);
@@ -658,8 +654,11 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
         // 是奇怪的(后面 UI 想加互斥提示可以再说)。Trim 是因为 antd Input.TextArea
         // 会在末尾留 `\n`,直接入库会让无意义的空行走 parser。
         tagsFilter: (values.tagsFilter ?? '').trim(),
-        // v0.7.22: 跟 tagsFilter 同款 trim。空串 = 全部走 5min 默认,旧任务行为不变。
-        longTimeoutRepos: (values.longTimeoutRepos ?? '').trim(),
+        // v0.7.24: longTimeoutRepos 字段已 deprecated —— engine 现在
+        // 按 manifest size 自动切 timeout,不需要 user 配置。后端字段
+        // 保留兼容,所以这里固定发空串(让 SyncTaskInput 类型对齐);
+        // 后端收到空串等价于"无覆盖"。
+        longTimeoutRepos: '',
         enabled: values.enabled,
       };
       const result = editing
@@ -1859,26 +1858,11 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
           </Form.Item>
 
           {/*
-            v0.7.22: 大镜像(多 GB / 几十层,如 vllm 23GB、bklite/bklite/server 2GB)
-            跑完整下载需要 10-60 分钟,远超 sync engine 默认 5 分钟 client timeout。
-            把 repo 名加进这里,引擎走 30 分钟 timeout;其他 repo 仍按 5min 兜底,
-            避免「误写 typo 拼错」也要等 30min 才报错。逗号分隔,精确匹配不打 glob。
+            v0.7.24 撤掉「长 Timeout 镜像」input —— engine 现在按 manifest
+            size 自动切 timeout(> 1GB 走 30min,否则 5min),user 不需要配置。
+            后端 SyncTaskInput.longTimeoutRepos 字段保留兼容(omitempty),
+            旧任务读回空串走 5min 默认。
           */}
-          <Form.Item
-            name="longTimeoutRepos"
-            label="长 Timeout 镜像（30 分钟）"
-            extra={
-              <span style={{ fontSize: 12, color: '#999' }}>
-                逗号分隔的 repo 名(精确匹配)。匹配走 30 分钟 client timeout,空 = 全部走 5min 默认。
-                典型：<code>bklite/bklite/vllm,bklite/bklite/server</code>。
-              </span>
-            }
-          >
-            <Input
-              placeholder={'bklite/bklite/vllm,bklite/bklite/server'}
-              autoComplete="off"
-            />
-          </Form.Item>
 
           <Form.Item name="enabled" label="启用" valuePropName="checked">
             <Switch checkedChildren="启用" unCheckedChildren="停用" />

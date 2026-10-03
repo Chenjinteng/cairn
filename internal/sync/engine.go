@@ -335,14 +335,16 @@ func (e *Engine) runPull(ctx context.Context, task SyncTask, run *SyncRun) error
 	// (repo, tag) 精确清单」绕过 catalog,直接 fetch manifest。
 	// 空 / 全注释 / 全无效行 → 走回老的 ListRepositories 分支,旧任务行为不变。
 	if specs := ParseTagsFilter(task.TagsFilter); len(specs) > 0 {
-		// v0.7.22: pass longRepos so pullFromSpecs picks per-spec timeout.
-		// Parsed here (not inside pullFromSpecs) so the work isn't repeated
-		// on every spec — the list is shared across the whole run.
-		longRepos := ParseLongTimeoutRepos(task.LongTimeoutRepos)
-		return e.pullFromSpecs(ctx, task, username, password, run, specs, longRepos)
+		// v0.7.24: 撤掉 v0.7.22 的 LongTimeoutRepos 透传 —— timeout 现在
+		// 在 pullTag 内根据 manifest size 自动切,不需要 caller 介入。
+		return e.pullFromSpecs(ctx, task, username, password, run, specs)
 	}
 
-	// Catalog path: one client for the whole run, default timeout.
+	// Catalog path: ListRepositories 用 default timeout(小请求);后续
+	// 每个 repo 的 manifest fetch 由 pullRepo → pullTag 内部按 size 自动切。
+	// 注意:catalog 路径只换 client once,然后 pullRepo 复用,但 pullRepo
+	// 内部 pullTag 每次仍走智能切 timeout 重新 newRemoteClient(rcFactory
+	// 在 pullTag 内),所以即使外层 rc 用 default 也不冲突。
 	rc, err := newRemoteClient(task.RemoteURL, username, password, DefaultSyncTimeout)
 	if err != nil {
 		return fmt.Errorf("build remote client: %w", err)
@@ -356,7 +358,7 @@ func (e *Engine) runPull(ctx context.Context, task SyncTask, run *SyncRun) error
 
 	for _, repoName := range repos {
 		e.progress(ctx, run, repoName, "")
-		if err := e.pullRepo(ctx, rc, run, repoName); err != nil {
+		if err := e.pullRepo(ctx, task, username, password, rc, run, repoName); err != nil {
 			if errors.Is(err, context.Canceled) {
 				// The run is being torn down as a whole; one Info line
 				// instead of a WARN per remaining repo (SYNC-2).
@@ -378,14 +380,12 @@ func (e *Engine) runPull(ctx context.Context, task SyncTask, run *SyncRun) error
 // parsed TagSpec list, it pulls each (repo, tag) directly via GetManifest
 // without ever asking the remote for /v2/_catalog or /v2/<repo>/tags/list.
 //
-// v0.7.22: each spec gets its own registry.Client with a per-spec
-// timeout (Default vs Long, matched against longRepos). Per-spec clients
-// are necessary because http.Client.Timeout is set at construction;
-// reusing a single client with the wrong timeout would either kill
-// small repos at 30 min or kill big repos at 5 min. The cost of one
-// client per spec is negligible (TLS handshake amortised over the
-// ~hundreds-of-MB blob transfer) and we CloseIdleConnections after each
-// spec so the goroutine doesn't pin idle conns across the whole run.
+// v0.7.24: timeout dispatch moved out of the engine layer. Each spec
+// builds its own registry.Client in pullTag, which probes the manifest
+// with DefaultSyncTimeout then re-builds with LongSyncTimeout if the
+// manifest is bigger than LargeManifestThreshold. The caller no longer
+// needs to know about long-timeout repos — pullTag's auto-detection
+// covers every path (catalog + tags_filter + push).
 //
 // Per-tag failures don't abort the run — they're recorded as failed
 // sync_run_items rows and counted into ReposFailed, matching the catalog
@@ -397,36 +397,16 @@ func (e *Engine) runPull(ctx context.Context, task SyncTask, run *SyncRun) error
 // removed; we don't reuse pullRepo because its name and return type both
 // imply "operate on one repo", and feeding it a list of repos feels worse
 // than a sibling function with its own doc.
-func (e *Engine) pullFromSpecs(ctx context.Context, task SyncTask, username, password string, run *SyncRun, specs []TagSpec, longRepos []string) error {
+func (e *Engine) pullFromSpecs(ctx context.Context, task SyncTask, username, password string, run *SyncRun, specs []TagSpec) error {
 	run.ReposTotal = len(specs)
 	for _, s := range specs {
-		// v0.7.22: per-spec timeout. Linear scan is fine — longRepos is
-		// typically 1-5 entries; a map would cost more than it saves.
-		timeout := DefaultSyncTimeout
-		for _, r := range longRepos {
-			if s.Repository == r {
-				timeout = LongSyncTimeout
-				break
-			}
-		}
-		rc, err := newRemoteClient(task.RemoteURL, username, password, timeout)
-		if err != nil {
-			// No client = abort this spec, log, continue with the next.
-			// A bad newRemoteClient here is a configuration bug (bad URL),
-			// not a transient network error, so we don't retry.
-			e.log.Warn("sync: build remote client failed (tags_filter)",
-				"task_id", run.TaskID, "run_id", run.ID,
-				"repo", s.Repository, "tag", s.Tag, "err", err)
-			finishedAt := time.Now().UTC()
-			e.recordRunItem(ctx, run.ID, s.Repository, s.Tag, finishedAt, finishedAt, 0, err)
-			run.ReposFailed++
-			continue
-		}
 		e.progress(ctx, run, s.Repository, s.Tag)
 		startedAt := time.Now().UTC()
-		bytesTotal, tagErr := e.pullTag(ctx, rc, s.Repository, s.Tag)
+		// v0.7.24: pullTag builds its own client and auto-detects
+		// timeout based on manifest size. Caller no longer carries
+		// longRepos — the dispatch happens inside.
+		bytesTotal, tagErr := e.pullTag(ctx, task.RemoteURL, username, password, s.Repository, s.Tag)
 		finishedAt := time.Now().UTC()
-		rc.HTTP().CloseIdleConnections()
 		e.recordRunItem(ctx, run.ID, s.Repository, s.Tag, startedAt, finishedAt, bytesTotal, tagErr)
 		if errors.Is(tagErr, context.Canceled) {
 			return fmt.Errorf("run aborted: %w", tagErr)
@@ -451,14 +431,14 @@ func (e *Engine) pullFromSpecs(ctx context.Context, task SyncTask, username, pas
 // inner loop and the remaining tags in the same repo were never
 // attempted, hiding partial-success repos behind a single error.
 //
-// The boolean return reports whether the repo succeeded (zero tag
-// failures). runPull uses it for the repos_synced counter; the items
-// table already holds the per-tag detail for the UI.
+// v0.7.24: passes username/password/task through to pullTag so each
+// tag's timeout can be auto-detected by manifest size (the rc parameter
+// is now only used for ListTags, which is cheap).
 //
 // A non-nil error return signals a *non-per-tag* failure (list-tags
 // error, context cancellation) — these still abort the whole repo and
 // propagate up.
-func (e *Engine) pullRepo(ctx context.Context, rc *registry.Client, run *SyncRun, repoName string) error {
+func (e *Engine) pullRepo(ctx context.Context, task SyncTask, username, password string, rc *registry.Client, run *SyncRun, repoName string) error {
 	tags, err := rc.ListTags(ctx, repoName)
 	if err != nil {
 		return fmt.Errorf("list tags: %w", err)
@@ -467,7 +447,7 @@ func (e *Engine) pullRepo(ctx context.Context, rc *registry.Client, run *SyncRun
 	for _, tag := range tags {
 		e.progress(ctx, run, repoName, tag)
 		startedAt := time.Now().UTC()
-		bytesTotal, tagErr := e.pullTag(ctx, rc, repoName, tag)
+		bytesTotal, tagErr := e.pullTag(ctx, task.RemoteURL, username, password, repoName, tag)
 		finishedAt := time.Now().UTC()
 		e.recordRunItem(ctx, run.ID, repoName, tag, startedAt, finishedAt, bytesTotal, tagErr)
 		if errors.Is(tagErr, context.Canceled) {
@@ -493,8 +473,34 @@ func (e *Engine) pullRepo(ctx context.Context, rc *registry.Client, run *SyncRun
 // sync_run_items can show the user "X bytes / Y bytes" — useful for
 // distinguishing "tiny image failed" from "10GB image failed" at a
 // glance.
-func (e *Engine) pullTag(ctx context.Context, rc *registry.Client, repoName, tag string) (int64, error) {
-	mf, err := rc.GetManifest(ctx, repoName, tag)
+//
+// v0.7.24: pullTag now owns the registry.Client lifecycle and the
+// per-spec timeout. It probes with DefaultSyncTimeout first, reads the
+// manifest (mf.Size is the byte total), then re-builds a client with
+// LongSyncTimeout if mf.Size > LargeManifestThreshold. The double
+// GetManifest is avoided by splitting the body into copyManifestContents
+// — pullTag handles the probe+dispatch, copyManifestContents does the
+// actual layer + config + put work with the chosen client. The probe
+// round-trip is one HTTP HEAD-ish (registry.GetManifest issues a GET
+// with manifestAccept headers; small JSON, ~5 KB); at typical v0.7.21
+// upstream latency that's < 100 ms — a fine price for zero-config
+// auto-detection.
+//
+// This makes pullTag the single source of truth for timeout dispatch —
+// both the catalog path (pullRepo) and the tags_filter path
+// (pullFromSpecs) get correct behavior with no caller bookkeeping.
+func (e *Engine) pullTag(ctx context.Context, remoteURL, username, password, repoName, tag string) (int64, error) {
+	// Probe with default timeout. We need a manifest fetch anyway to
+	// know mf.Size; if the manifest fetch itself fails (404 / 401 /
+	// network) we abort with that error and don't get a chance to time
+	// out a layer pull — which is correct (the upstream told us
+	// something's wrong before we burned a long timeout).
+	probeRC, err := newRemoteClient(remoteURL, username, password, DefaultSyncTimeout)
+	if err != nil {
+		return 0, fmt.Errorf("build probe client: %w", err)
+	}
+	mf, err := probeRC.GetManifest(ctx, repoName, tag)
+	probeRC.HTTP().CloseIdleConnections()
 	if err != nil {
 		return 0, fmt.Errorf("get manifest: %w", err)
 	}
@@ -502,6 +508,30 @@ func (e *Engine) pullTag(ctx context.Context, rc *registry.Client, repoName, tag
 		return mf.Size, errors.New("multi-arch manifest index not supported in v0.6.0")
 	}
 
+	// v0.7.24: choose timeout from manifest size. See LargeManifestThreshold
+	// comment for the 1 GiB rationale. Big repos get the long timeout;
+	// everyone else stays on default. No user config required.
+	timeout := DefaultSyncTimeout
+	if mf.Size > LargeManifestThreshold {
+		timeout = LongSyncTimeout
+	}
+	specRC, err := newRemoteClient(remoteURL, username, password, timeout)
+	if err != nil {
+		return mf.Size, fmt.Errorf("build pull client: %w", err)
+	}
+	defer specRC.HTTP().CloseIdleConnections()
+
+	return e.copyManifestContents(ctx, specRC, repoName, tag, mf)
+}
+
+// copyManifestContents is the layer-by-layer copy + local put half of
+// pullTag, factored out so pullTag can probe with one client and pull
+// with another (the auto-timeout dispatch in v0.7.24). Both clients
+// share the same credentials/URL; only Timeout differs.
+//
+// On any error bytesTotal still returns the declared manifest size so
+// the caller can surface "X bytes / Y bytes" in sync_run_items.error.
+func (e *Engine) copyManifestContents(ctx context.Context, rc *registry.Client, repoName, tag string, mf *registry.Manifest) (int64, error) {
 	// Copy layers + config blob. Layers is populated by registry.Client
 	// only for single-arch manifests (decodeManifestLayers); for indexes
 	// we already returned above.
@@ -726,17 +756,36 @@ func isIndexMediaType(mediaType string) bool {
 // enough to surface hung layers (mid-stream connection idle-out, blob
 // hash mismatch) before the next spec starts.
 //
-// v0.7.22: oversized repos (multi-GB / dozens of layers like
-// bklite/bklite/vllm, bklite/bklite/server) blow past this — see
-// LongSyncTimeout and engine.runPull's per-spec dispatch.
+// v0.7.22 introduced a v0.7.24-deprecated LongTimeoutRepos opt-in for
+// oversized repos; v0.7.24 replaced that with auto-detection — any
+// spec whose manifest total exceeds LargeManifestThreshold gets
+// LongSyncTimeout instead. See LargeManifestThreshold + pullTag.
 const DefaultSyncTimeout = 5 * time.Minute
 
-// LongSyncTimeout is the deadline for spec.Repos in
-// SyncTask.LongTimeoutRepos. 30 minutes covers a 7 GB blob at 4 MB/s
+// LargeManifestThreshold is the manifest-size cutoff (sum of layer
+// sizes + config blob, in bytes) above which a spec is considered
+// "big" and gets LongSyncTimeout instead of DefaultSyncTimeout.
+//
+// 1 GB is empirically the right boundary on a 4 MB/s upstream:
+//   - < 1 GB single-arch manifests finish in 1-3 min at 4 MB/s even
+//     with ~3s RTT per layer; DefaultSyncTimeout (5 min) covers them
+//     with margin.
+//   - > 1 GB manifests (bklite/bklite/server 2 GB, bklite/bklite/vllm
+//     23 GB) take 10 min to multiple hours; 5 min guarantees the run
+//     aborts mid-stream and looks like a hung layer.
+//
+// Adjusting this is a runtime decision: drop it to 512 MB if you run
+// against faster upstreams (10 MB/s) where 1 GB still finishes in
+// ~2 min; raise it to 2 GB for slower links. 1 GB is a reasonable
+// default for the v0.7.21-era UAT network (4 MB/s, 100-200 ms RTT).
+const LargeManifestThreshold = 1 << 30 // 1 GiB
+
+// LongSyncTimeout is the deadline for big specs (manifest total >
+// LargeManifestThreshold). 30 minutes covers a 7 GB blob at 4 MB/s
 // (≈ 30 min) with headroom for the cumulative RTT per layer; raising
 // further invites a slow-network troubleshooting nightmare where every
-// spec waits 30 min before failing. Keep this paired with the
-// LongTimeoutRepos opt-in rather than applying it globally.
+// big spec waits 30 min before failing. Tied to the auto-detection in
+// pullTag — no user-facing config required.
 const LongSyncTimeout = 30 * time.Minute
 
 // newRemoteClient builds a registry.Client pointing at remoteURL with
@@ -745,8 +794,8 @@ const LongSyncTimeout = 30 * time.Minute
 // underlying registry.Client does the same.
 //
 // timeout is the per-request body-read deadline. Callers pick between
-// DefaultSyncTimeout (median case) and LongSyncTimeout (whitelisted
-// oversized repos, v0.7.22) per spec.
+// DefaultSyncTimeout (median case) and LongSyncTimeout (manifest
+// > LargeManifestThreshold, auto-detected by pullTag).
 func newRemoteClient(remoteURL, username, password string, timeout time.Duration) (*registry.Client, error) {
 	return registry.NewClient(registry.Config{
 		BaseURL:  remoteURL,

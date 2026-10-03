@@ -96,7 +96,13 @@ type SyncTask struct {
 	RemotePassword     string    `json:"-"`
 	Include            string    `json:"include"` // newline-separated glob patterns; "" matches all
 	TagsFilter         string    `json:"tagsFilter,omitempty"` // v0.7.21: newline-separated `repo:tag` specs; "" = catalog path
-	LongTimeoutRepos   string    `json:"longTimeoutRepos,omitempty"` // v0.7.22: comma-separated repo names that get 30min client timeout; "" = all repos use 5min
+	// Deprecated (v0.7.24): the engine now auto-detects per-spec
+	// timeout by manifest size (LargeManifestThreshold in engine.go).
+	// Field is kept on the wire + DB only for back-compat — the UI
+	// no longer renders an input for it and the engine never reads
+	// it. Pre-0.7.24 tasks with a non-empty value are silently ignored;
+	// they keep their old behavior (5 min everywhere).
+	LongTimeoutRepos   string    `json:"longTimeoutRepos,omitempty"` // DEPRECATED: see engine auto-timeout.
 	Enabled            bool      `json:"enabled"`
 	CreatedAt          time.Time `json:"createdAt"`
 	UpdatedAt          time.Time `json:"updatedAt"`
@@ -140,7 +146,10 @@ type SyncTaskInput struct {
 	RemotePassword     string    `json:"remotePassword"`
 	Include            string    `json:"include"`
 	TagsFilter         string    `json:"tagsFilter"` // v0.7.21: newline-separated `repo:tag`; empty = catalog path
-	LongTimeoutRepos   string    `json:"longTimeoutRepos"` // v0.7.22: comma-separated repo names; empty = use 5min default
+	// Deprecated (v0.7.24): engine now auto-detects timeout; this
+	// field is preserved for wire / DB compatibility but the UI does
+	// not render it. Engine never reads it.
+	LongTimeoutRepos   string    `json:"longTimeoutRepos"` // DEPRECATED
 	Enabled            bool      `json:"enabled"`
 }
 

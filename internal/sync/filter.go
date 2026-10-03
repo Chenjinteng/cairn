@@ -93,21 +93,15 @@ type TagSpec struct {
 }
 
 // ParseLongTimeoutRepos decodes the per-task long-timeout repo whitelist
-// (v0.7.22) into a list of exact repo names. The engine matches each
-// TagSpec's Repository against this list to decide between the default 5
-// minute client.Timeout and the long 30 minute one — see engine.runPull
-// for the dispatch.
+// (v0.7.22) into a list of exact repo names.
 //
-// Format and tolerance mirror ParseTagsFilter:
-//   - "" or whitespace-only input → nil (every repo uses the default
-//     5min timeout; this is the v0.7.21 behavior, preserved for
-//     pre-0.7.22 tasks that read back with an empty string)
-//   - comma-separated; entries with only whitespace are dropped
-//   - exact name match (no glob) — long timeout needs to be opt-in per
-//     repo, because 30min for hundreds of small repos would mask fast
-//     failures (e.g. 404 on a typo'd spec)
-//   - no de-duplication step: caller checks membership by linear scan
-//     against a typically 1-5 entry list, so the work isn't worth it
+// Deprecated (v0.7.24): the engine now auto-detects per-spec timeout
+// from manifest size (LargeManifestThreshold in engine.go), so the
+// longRepos parameter is no longer consulted by any code path. This
+// function is kept around for the few callers that still reference it
+// (tests, future "manual override" work) and for back-compat decoding
+// of stored task.LongTimeoutRepos strings. New code should not depend
+// on it.
 func ParseLongTimeoutRepos(spec string) []string {
 	if strings.TrimSpace(spec) == "" {
 		return nil
