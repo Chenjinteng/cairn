@@ -47,9 +47,15 @@ ARG NPM_REGISTRY
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
 ARG NO_PROXY
+# v0.7.29: 把 NPM_REGISTRY 同时 export 成 COREPACK_NPM_REGISTRY 和
+# npm_config_registry —— 之前只在第一个 RUN 里 export,所以 web-builder
+# 的第二个 RUN(``RUN pnpm build``)走默认 registry.npmjs.org 下载
+# pnpm binary,公司网络拦截下会卡死。现在 ENV 在 stage 全程生效。
 ENV HTTP_PROXY=${HTTP_PROXY} \
     HTTPS_PROXY=${HTTPS_PROXY} \
-    NO_PROXY=${NO_PROXY}
+    NO_PROXY=${NO_PROXY} \
+    COREPACK_NPM_REGISTRY=${NPM_REGISTRY} \
+    npm_config_registry=${NPM_REGISTRY}
 
 WORKDIR /web
 
