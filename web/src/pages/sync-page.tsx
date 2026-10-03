@@ -1005,6 +1005,15 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
       title: '名称',
       dataIndex: 'name',
       key: 'name',
+      // v0.7.28: 加 width + ellipsis,避免长任务名(例如「Sync BK-LITE 系列」)把
+      // 行内 chip 挤成多行 —— 上一版同时显示「运行中」+ 「正在拉取 (repo:tag)」
+      // 两个 chip 时,窄列下任务名会被字符级 wrap 撑出 3+ 行。
+      //
+      // 现在列表行**只**显示「运行中」chip;「正在拉取 (repo:tag)」挪到展开行
+      // 的顶部横幅(只有真正点了 + 才看得到),不再占任务列表行的横向空间。
+      // 「已停用」chip 仍然在列表行,窄列 ellipsis 截断任务名但不截断 chip。
+      width: 240,
+      ellipsis: true,
       render: (name: string, row) => (
         <Space size={4} align="center">
           <SwapOutlined />
@@ -1012,14 +1021,6 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
           {/* v0.6.11（SYNC-1/4）：以 DB 为准的「运行中」标记——刷新页面后依然在。 */}
           {row.lastRunStatus === 'running' && (
             <Tag color="processing" icon={<ClockCircleOutlined />}>运行中</Tag>
-          )}
-          {/* v0.6.11：当前正在拉的 (repo, tag) — 解「卡住了?」的可视化。*/}
-          {row.lastRunStatus === 'running' && row.lastRunCurrentRepo && (
-<Tooltip title={`当前正在拉取${row.lastRunCurrentTag ? ` ${row.lastRunCurrentRepo}:${row.lastRunCurrentTag}` : ` ${row.lastRunCurrentRepo} (列出 tag 中)`}`}>
-              <Tag color="blue" style={{ fontFamily: 'monospace', fontSize: 11 }}>
-<SyncOutlined spin /> {row.lastRunCurrentRepo}{row.lastRunCurrentTag ? `:${row.lastRunCurrentTag}` : ''}
-              </Tag>
-            </Tooltip>
           )}
           {!row.enabled && <Tag color="default">已停用</Tag>}
         </Space>
@@ -1536,6 +1537,46 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
                  * /api/sync/{taskId}/runs/{runId}/items。
                  */
                 <div className="expanded-row-anim">
+                {/*
+                 * v0.7.28: 任务列表行只显示「运行中」chip,「正在拉取 (repo:tag)」
+                 * 挪到展开区顶部横幅 —— 只有用户主动点 + 展开时才能看到,不挤占
+                 * 任务列表的横向空间。配合 task 名称列 width:240 + ellipsis:true,
+                 * 长任务名不会再被 chip 撑成 3+ 行 wrap。
+                 *
+                 * currentRepo / currentTag 来自后端 lastRunCurrentRepo /
+                 * lastRunCurrentTag,SyncRunUpdateProgress 每个 (repo, tag) 切换
+                 * 时写入,以 DB 为准 —— 3s 轮询 + 刷新页面都看得到正确状态。
+                 */}
+                {task.lastRunStatus === 'running' && task.lastRunCurrentRepo && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      margin: '0 0 8px 4px',
+                      padding: '6px 10px',
+                      background: 'rgba(13, 148, 136, 0.06)',
+                      borderLeft: '3px solid var(--primary, #0d9488)',
+                      borderRadius: '0 4px 4px 0',
+                      fontSize: 12,
+                    }}
+                  >
+                    <SyncOutlined spin style={{ color: 'var(--primary, #0d9488)' }} />
+                    <span style={{ color: '#666' }}>正在同步:</span>
+                    <code style={{ fontFamily: 'ui-monospace, monospace', color: '#14171e' }}>
+                      {task.lastRunCurrentRepo}{task.lastRunCurrentTag ? `:${task.lastRunCurrentTag}` : ''}
+                    </code>
+                    {/*
+                     * 列出 tag 阶段(repo 已知但 tag 还没解析):tag 为空,提示用户
+                     * 这是「正在列 tag」不是「卡住了」。
+                     */}
+                    {!task.lastRunCurrentTag && (
+                      <span style={{ color: '#999', fontSize: 11 }}>
+                        (正在列出 tag)
+                      </span>
+                    )}
+                  </div>
+                )}
                 {/*
                  * v0.6.30: 「仅保留最近 10 条历史」提示 —— 后端 CreateRun 末尾 trim,
                  * 每个 task 只留最近 10 条 sync_runs(CASCADE 带走 run_items)。

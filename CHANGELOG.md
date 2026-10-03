@@ -6,6 +6,37 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.28] - 2026-10-04
+
+本轮调整同步任务列表的「运行中」chip 布局:列表行只显示「运行中」chip,
+「正在拉取 (repo:tag)」挪到展开行顶部横幅。配合名称列 width:240 +
+ellipsis:true,长任务名(如「Sync BK-LITE 系列」)不再被 chip 撑成 3+ 行
+字符级 wrap。
+
+### 改动
+
+- `sync-page.tsx` 任务列表「名称」列:
+  - 加 `width: 240` + `ellipsis: true`,长任务名单行截断显示。
+  - **删除**「当前正在拉取 (repo:tag)」chip —— 上一版同时塞「运行中」+
+    「repo:tag」两个 chip,窄列下任务名被字符级 wrap 撑成 3+ 行。
+  - 保留「运行中」chip + 「已停用」chip。
+- `sync-page.tsx` 任务列表展开行顶部横幅:
+  - 新增「正在同步: repo:tag」chip 横幅(`SyncOutlined spin` + primary
+    浅色背景),只有 `lastRunStatus === 'running' && lastRunCurrentRepo`
+    才显示。
+  - tag 为空时附「(正在列出 tag)」灰字,提示用户「不是卡住了,是在列
+    tag」。
+
+### 行为不变
+
+- 3s 轮询逻辑不变 — 横幅 chip 跟着 `lastRunCurrentRepo/Tag` 自动更新。
+- 后端 SQL 不变 — `lastRunCurrentRepo/Tag` 字段早已在 SyncTask 类型里,
+  这只是 UI 重新分配显示位置。
+- 任务行的「运行中」chip 行为不变 —— 仍然以 DB 的 `lastRunStatus` 为准,
+  刷新页面后依然认得「还在跑」。
+
+---
+
 ## [0.7.27] - 2026-10-04
 
 本轮给智能 timeout 加第三档：**超大镜像 (>10 GiB) → 2 小时 deadline**。
