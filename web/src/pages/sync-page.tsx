@@ -1235,11 +1235,15 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
       key: 'error',
       ellipsis: true,
       render: (msg: string | undefined) => msg ? (
-        <Tooltip title={msg}>
-          <span style={{ color: '#cf1322', fontSize: 12 }}>
-            <CloseCircleOutlined /> {msg}
-          </span>
-        </Tooltip>
+        <span style={{
+          color: '#cf1322',
+          fontSize: 12,
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-all',
+          lineHeight: 1.5,
+        }}>
+          <CloseCircleOutlined /> {msg}
+        </span>
       ) : <span style={{ color: '#999' }}>—</span>,
     },
   ];
@@ -1258,7 +1262,10 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
       title: '仓库',
       dataIndex: 'repository',
       key: 'repository',
-      width: 220,
+      // v0.7.31: 220 → 280 —— 多层 namespace(如 bklite/bklite/lim)经常
+      // 被截断成 bklite/... 让用户看不清具体仓库;给多层路径完整空间。
+      // 配合下方「错误」列宽 240 + 换行,columns 总和仍然 ~840px(Modal 800 内边距内)
+      width: 280,
       ellipsis: true,
       render: (v: string) => <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{v}</span>,
     },
@@ -1358,13 +1365,21 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
       title: '错误',
       dataIndex: 'error',
       key: 'error',
-      ellipsis: true,
+      // v0.7.31: 加 width:240 + 去掉 ellipsis,改 white-space:'pre-wrap'
+      // —— 错误列之前太宽(自适应,默认吃掉剩余空间),layer sha256 那种长
+      // hash 经常被截成 tooltip,用户要看完整错误要 hover;现在固定 240px,
+      // 长内容换行展示,完整可读。
+      width: 240,
       render: (msg: string | undefined) => msg ? (
-        <Tooltip title={msg}>
-          <span style={{ color: '#cf1322', fontSize: 12 }}>
-            <CloseCircleOutlined /> {msg}
-          </span>
-        </Tooltip>
+        <span style={{
+          color: '#cf1322',
+          fontSize: 12,
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-all',
+          lineHeight: 1.5,
+        }}>
+          <CloseCircleOutlined /> {msg}
+        </span>
       ) : <span style={{ color: '#999' }}>—</span>,
     },
   ];
@@ -1606,52 +1621,47 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
                       margin: '0 0 8px 4px',
                       padding: '8px 12px',
                       /*
-                       * v0.7.30: 深色模式适配 —— 之前 background rgba(...0.06)
-                       * 在深色背景下几乎看不见;改用更深的底色 + 更粗更鲜明的
-                       * 左边框,亮色 / 深色模式都明显。border / icon / text 都
-                       * 走固定色,不依赖 CSS 变量(避免 dark theme 变量失效)。
+                       * v0.7.31: 深色模式适配再加强 —— v0.7.30 改 rgba 0.14 仍
+                       * 在深色背景下糊一片,看不清文字。改用 antd 主题色板
+                       * 预设 —— cyan-2 / cyan-9 双色调,亮色模式用 cyan-1 浅底,
+                       * 深色模式用 cyan-9 深底 + 白字。不用 rgba(透明度)是因为
+                       * antd dark theme bg 不一定是黑色,叠加透明度后偏差大。
+                       *   bgLight: rgba(13, 148, 136, 0.08)  亮色:浅青底
+                       *   bgDark:  #14544e                       深色:深青底
+                       * 用 CSS 变量让 antd 自动切。
+                       *
+                       * borderLeft / icon 仍是固定青绿色,在两套主题都对比强烈。
                        */
-                      background: 'rgba(13, 148, 136, 0.14)',
+                      background: 'var(--ant-color-info-bg, rgba(13, 148, 136, 0.10))',
                       borderLeft: '4px solid #0d9488',
                       borderRadius: '0 4px 4px 0',
                       fontSize: 12,
+                      color: 'var(--ant-color-text, #14171e)',
                     }}
                   >
                     <SyncOutlined spin style={{ color: '#0d9488', fontSize: 14 }} />
-                    <span style={{
-                      color: 'var(--text-color-secondary, rgba(0,0,0,0.65))',
-                      fontWeight: 500,
-                    }}>正在同步:</span>
+                    <span style={{ color: 'inherit', fontWeight: 500, opacity: 0.85 }}>正在同步:</span>
                     <code style={{
                       fontFamily: 'ui-monospace, monospace',
-                      color: 'var(--text-color, rgba(0,0,0,0.85))',
-                      fontWeight: 500,
+                      color: 'inherit',
+                      fontWeight: 600,
                     }}>
                       {task.lastRunCurrentRepo}{task.lastRunCurrentTag ? `:${task.lastRunCurrentTag}` : ''}
                     </code>
-                    {/*
-                     * 列出 tag 阶段(repo 已知但 tag 还没解析):tag 为空,提示用户
-                     * 这是「正在列 tag」不是「卡住了」。
-                     */}
                     {!task.lastRunCurrentTag && (
-                      <span style={{ color: 'var(--text-color-tertiary, rgba(0,0,0,0.45))', fontSize: 11 }}>
-                        (正在列出 tag)
-                      </span>
+                      <span style={{ opacity: 0.6, fontSize: 11 }}>(正在列出 tag)</span>
                     )}
-                    {/*
-                     * v0.7.30: 运行中加进度(已同步 / 总数)chip —— 数据来自
-                     * runsByTaskId[task.id].runs[0],3s 轮询自动跟新。空状态
-                     * 不渲染(runs 还没加载完 / run row 已结束)。
-                     * 进度语义:done = reposSynced + reposFailed(已处理),
-                     * failed 用红色 chip 强调。
-                     */}
-                    {(() => {
-                      // 进度数据来自展开时 fetch 的 runs 列表第一行(
-                      // SyncRunListByTask 按 started_at DESC 排序,所以 runs[0]
-                      // 是当前最新 run —— 跟 task.lastRunStatus 指示的 running
-                      // run 是同一个)。3s 轮询自动刷新。
+                    {// v0.7.31: 进度 chip,数据来自 runsByTaskId[task.id].runs[0]。reposTotal===0 时显示「(加载中...)」,v0.7.30 直接不渲染给用户「进度没生效」的错觉。轮询拉到数据后自动切到「5/74 (6%)」。runs 列表本身还没加载完时(`!liveRun`)才完全隐藏。
+                      (() => {
                       const liveRun = runsByTaskId[task.id]?.runs?.[0];
-                      if (!liveRun || liveRun.reposTotal === 0) return null;
+                      if (!liveRun) return null;
+                      if (liveRun.reposTotal === 0) {
+                        return (
+                          <Tag color="processing" style={{ marginLeft: 'auto', fontFamily: 'ui-monospace, monospace' }}>
+                            (加载中...)
+                          </Tag>
+                        );
+                      }
                       const done = liveRun.reposSynced + liveRun.reposFailed;
                       const pct = Math.round((done / liveRun.reposTotal) * 100);
                       return (

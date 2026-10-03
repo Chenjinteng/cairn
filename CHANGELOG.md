@@ -6,6 +6,48 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.31] - 2026-10-04
+
+本轮三个 UX 微调:展开行 banner 深色适配再加强 + 运行中进度 chip
+fallback + items 表仓库列加宽 + 错误列换行可读。
+
+### 改动
+
+- `sync-page.tsx` 展开行 banner(深色适配再加强):
+  - background: `rgba(13, 148, 136, 0.14)` → `var(--ant-color-info-bg, rgba(...0.10))` + 文字颜色 `var(--ant-color-text)`
+    —— v0.7.30 在深色背景下仍糊一片,这次走 antd 主题色板,亮 / 深主题
+    自动切;
+  - 文字颜色继承 + opacity 调整,不再写死 `#14171e`(深色背景下变暗
+    不可读)。
+- `sync-page.tsx` 展开行 banner(进度 chip fallback):
+  - v0.7.30 逻辑 `liveRun.reposTotal === 0` 时不渲染 chip,导致跑一开始
+    看不到 chip,用户反馈「进度没生效」。**根因**:engine 写 run row 时
+    reposTotal=0(还没计数),3s 轮询拉到 runs 后才更新到清单总数。
+  - **修法**:reposTotal===0 也显示 chip,内容「(加载中...)」,轮询拉到
+    数据后自动切到「5/74 (6%)」。runs 列表本身还没加载完(`!liveRun`)
+    才完全隐藏 —— 这样用户展开 task 立刻能看到 banner + 占位 chip,不再
+    有「前几秒空 banner」的错觉。
+- `sync-page.tsx` items 表列宽调整:
+  - 「仓库」列 220 → 280 —— 多层 namespace(如 `bklite/bklite/lim`)
+    完整显示,不再被截成 `bklite/...`。
+  - 「错误」列加 width:240 + 去 ellipsis + 改 `white-space:pre-wrap`
+    `wordBreak:break-all` —— layer sha256 + 完整 context deadline 错误
+    完整可读,不再 tooltip 截断。
+  - columns 总和仍然 ~840px(仓库 280 + tag 120 + 结果 90 + 耗时 150 +
+    字节 100 + 错误 240),Modal 800 内边距内显示。
+- 后端 / API / DB / SQL:全部不变。
+
+### 踩坑 (2)
+
+- **JSX block comment 里出现 `——`(中文破折号)**:tsc 5.9 解析时报
+  `'}' expected at line X+1 col 22`(X+1 是后续 IIFE 起点),注释内的
+  字符不影响语义但让 parser 偏移。**修法**:JSX 内用 `// 行注释` 而不是
+  `/* 块注释 */`,完全规避。
+- **进度 chip `liveRun.reposTotal===0` 不渲染**:engine 写 run row 时
+  reposTotal=0,3s 轮询后才更新。已加 fallback,见上。
+
+---
+
 ## [0.7.30] - 2026-10-04
 
 本轮两个 UX 微调:展开行的「正在同步:」banner 加深色模式适配 +
