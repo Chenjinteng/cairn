@@ -255,6 +255,18 @@ func (s *Store) UpdateRunProgress(ctx context.Context, runID int64, repo, tag st
 	return s.db.SyncRunUpdateProgress(ctx, runID, repo, tag)
 }
 
+// UpdateRunCounters persists the in-flight summary counters (total /
+// synced / failed) for a running run so the UI banner can show live
+// "5/74 (6%)" progress instead of "(加载中...)". v0.7.33.
+//
+// Called once after ReposTotal is determined and once per repo
+// completion; errors are surfaced to the caller (the engine wraps it
+// in a log-and-swallow pattern — counter writes are best-effort UI
+// hints, never a correctness signal).
+func (s *Store) UpdateRunCounters(ctx context.Context, runID int64, total, synced, failed int) error {
+	return s.db.SyncRunUpdateCounters(ctx, runID, total, synced, failed)
+}
+
 // ListRunsByTask returns up to `limit` runs for a task, newest first.
 // limit<=0 means "all" — UI passes 50 by convention; older history is
 // v0.6.2+ retention cleanup territory.

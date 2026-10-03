@@ -333,6 +333,35 @@ func (d *Db) SyncRunUpdateProgress(ctx context.Context, id int64, currentRepo, c
 	return nil
 }
 
+// SyncRunUpdateCounters writes the three summary counters
+// (repos_total / repos_synced / repos_failed) for the given run id.
+// Used by the engine between repos during iteration so the UI banner
+// can show "5/74 (6%)" instead of "(加载中...)" while the run is in
+// flight (v0.7.33).
+//
+// Called once after ReposTotal is known (to surface the denominator
+// immediately) and once after every repo completes (to bump the
+// numerator + failed). Like SyncRunUpdateProgress, this is a single-row
+// UPDATE; status / finished_at / current_repo / current_tag are
+// untouched, so concurrent reads still get a consistent snapshot.
+func (d *Db) SyncRunUpdateCounters(ctx context.Context, id int64, total, synced, failed int) error {
+	res, err := d.conn.ExecContext(ctx, `
+		UPDATE sync_runs SET repos_total=?, repos_synced=?, repos_failed=?
+		WHERE id=?
+	`, total, synced, failed, id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // SyncRunListByTask returns runs for a task, newest first. limit<=0
 // means no limit; the UI passes 10 (recent runs only — older runs are
 // trimmed by SyncRunTrimOlder after each new run, so 10 covers everything

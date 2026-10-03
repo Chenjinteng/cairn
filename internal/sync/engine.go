@@ -263,6 +263,20 @@ func (e *Engine) progress(ctx context.Context, run *SyncRun, repo, tag string) {
 	}
 }
 
+// flushCounters persists the in-flight summary counters so the UI
+// banner can show live "5/74 (6%)" instead of "(加载中...)" while a run
+// is iterating (v0.7.33). Called once after ReposTotal is known and
+// once after each repo completes. Like progress, errors are logged
+// and swallowed — counter writes are best-effort UI hints.
+func (e *Engine) flushCounters(ctx context.Context, run *SyncRun) {
+	if err := e.store.UpdateRunCounters(ctx, run.ID, run.ReposTotal, run.ReposSynced, run.ReposFailed); err != nil {
+		e.log.Warn("sync: write counters failed",
+			"task_id", run.TaskID, "run_id", run.ID,
+			"total", run.ReposTotal, "synced", run.ReposSynced, "failed", run.ReposFailed,
+			"err", err)
+	}
+}
+
 func (e *Engine) iterate(ctx context.Context, task SyncTask, run *SyncRun) (runErr error) {
 	defer func() {
 		if rec := recover(); rec != nil {
@@ -355,6 +369,7 @@ func (e *Engine) runPull(ctx context.Context, task SyncTask, run *SyncRun) error
 	}
 	repos = NewFilter(task.Include).Apply(repos)
 	run.ReposTotal = len(repos)
+	e.flushCounters(ctx, run)
 
 	for _, repoName := range repos {
 		e.progress(ctx, run, repoName, "")
@@ -369,9 +384,11 @@ func (e *Engine) runPull(ctx context.Context, task SyncTask, run *SyncRun) error
 			e.log.Warn("sync: pull repo failed",
 				"task_id", task.ID, "repo", repoName, "err", err)
 			run.ReposFailed++
+			e.flushCounters(ctx, run)
 			continue
 		}
 		run.ReposSynced++
+		e.flushCounters(ctx, run)
 	}
 	return nil
 }
@@ -399,6 +416,7 @@ func (e *Engine) runPull(ctx context.Context, task SyncTask, run *SyncRun) error
 // than a sibling function with its own doc.
 func (e *Engine) pullFromSpecs(ctx context.Context, task SyncTask, username, password string, run *SyncRun, specs []TagSpec) error {
 	run.ReposTotal = len(specs)
+	e.flushCounters(ctx, run)
 	for _, s := range specs {
 		e.progress(ctx, run, s.Repository, s.Tag)
 		startedAt := time.Now().UTC()
@@ -420,9 +438,11 @@ func (e *Engine) pullFromSpecs(ctx context.Context, task SyncTask, username, pas
 				"task_id", run.TaskID, "run_id", run.ID,
 				"repo", s.Repository, "tag", s.Tag, "err", tagErr)
 			run.ReposFailed++
+			e.flushCounters(ctx, run)
 			continue
 		}
 		run.ReposSynced++
+		e.flushCounters(ctx, run)
 	}
 	return nil
 }
@@ -631,6 +651,7 @@ func (e *Engine) runPush(ctx context.Context, task SyncTask, run *SyncRun) error
 	}
 	repos = NewFilter(task.Include).Apply(repos)
 	run.ReposTotal = len(repos)
+	e.flushCounters(ctx, run)
 
 	for _, repoName := range repos {
 		e.progress(ctx, run, repoName, "")
@@ -643,9 +664,11 @@ func (e *Engine) runPush(ctx context.Context, task SyncTask, run *SyncRun) error
 			e.log.Warn("sync: push repo failed",
 				"task_id", task.ID, "repo", repoName, "err", err)
 			run.ReposFailed++
+			e.flushCounters(ctx, run)
 			continue
 		}
 		run.ReposSynced++
+		e.flushCounters(ctx, run)
 	}
 	return nil
 }

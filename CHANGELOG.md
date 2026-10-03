@@ -6,6 +6,64 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.33] - 2026-10-04
+
+v0.7.31 加的 banner 进度 chip fallback「(加载中...)」一直不变成
+真实数字 + 「成功 0」一直 0。user 反馈后才定位到根因。
+
+### 根因
+
+`engine` 在内存里维护 `run.ReposTotal / ReposSynced / ReposFailed`,
+但只通过 `UpdateRunProgress`(v0.6.9 引入)写 `current_repo /
+current_tag` 两个字段 —— 后端注入到 SQL 的 UPDATE 子句明确排除了
+这三个 counter:`SyncRunUpdateProgress` 注释里写得很清楚
+"counters / status / finished_at are untouched"。结果:
+
+- `run.ReposTotal = len(repos)` 在 catalog / tags_filter / push 三处
+  跑过之后,DB 里 `repos_total` 永远是 0,UI 拉到 `runs[0].reposTotal===0`
+  → 触发 v0.7.31 加的 fallback 「(加载中...)」一直不消失;
+- `run.ReposSynced++ / ReposFailed++` 在循环里跑,DB 里也永远是 0,
+  UI 「成功 0」就一直 0。
+
+只有 run 结束时 `UpdateRun` 写一次 terminal state(DB 里 counter
+才落到终值),所以跑完才有「5/74 / 5 成功 0 失败」这种数字。
+
+### 改动
+
+- 新 DB 函数 `db.SyncRunUpdateCounters`(single-row UPDATE,只写
+  `repos_total / repos_synced / repos_failed` 三列,不动其他列):
+  注释里说明 "called once after ReposTotal is known and once per
+  repo completion, like SyncRunUpdateProgress"。
+- `sync.Store.UpdateRunCounters` wrapper(同 progress() 风格)。
+- `engine.flushCounters(ctx, run)` 方法:调 store,失败 log+slog
+  WARN swallow(counter 写是 best-effort UI hint,跟 `progress` 一致)。
+- 三处 engine 路径各加 3 次 flushCounters 调用:
+  - `run.ReposTotal = len(...)` 之后立刻 flush 一次(写 total,UI
+    立刻看到「N」分母);
+  - `run.ReposFailed++ / run.ReposSynced++` 之后各 flush 一次
+    (写 numerator,banner 从「N/N」一路爬到「N/N (100%)」)。
+
+### 改动文件
+
+- `internal/db/sync.go` — 新 SyncRunUpdateCounters 函数 + 注释。
+- `internal/sync/store.go` — 新 Store.UpdateRunCounters wrapper。
+- `internal/sync/engine.go` — 新 Engine.flushCounters helper;
+  catalog / tags_filter / push 三条路径各 3 处调用。
+
+### 性能
+
+每次 repo 完成一次单行 UPDATE,N 个 repo = N 次写。比 `progress()`
+每次切 (repo, tag) 都写频率低一个数量级(同步 N 个 repo 通常有
+数十到数百个 tag)。SQLite 单文件 + serial write 不构成锁竞争
+问题。fail 路径不写额外 DB 操作(sync_run_items 已经记了)。
+
+### 兼容
+
+DB schema 不变(SQL 不变)。counter 写只是新增一行 UPDATE,不影响
+任何已有字段。
+
+---
+
 ## [0.7.32] - 2026-10-04
 
 v0.7.31 改了 items 表的「仓库」列宽 + 「错误」列换行,但忘了
