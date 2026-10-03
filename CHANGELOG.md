@@ -6,6 +6,45 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.27] - 2026-10-04
+
+本轮给智能 timeout 加第三档：**超大镜像 (>10 GiB) → 2 小时 deadline**。
+
+### 背景
+
+v0.7.24 / v0.7.25 的两档 timeout (5min / 30min) 在 158 UAT 上跑
+bklite/bklite/vllm 24 GiB 仍然不够 —— 单个 layer 在 30 分钟内读不完
+body,per-request body-read timeout abort 整 sync。截图实测:跑了
+72 分钟(4316s)失败,bytesTotal=24 GiB,0/24 GiB,错误
+`context deadline exceeded (Client.Timeout or context cancellation
+while reading body)`。
+
+### 改动
+
+- 新增常量 `ExtraLargeManifestThreshold = 10 GiB` / `ExtraLongSyncTimeout = 2h`。
+- `pullTag` 三档决策:
+  - `mf.Size > 10 GiB` → 2h,`timeoutUsed = "extra"`
+  - `mf.Size > 1 GiB && mf.Size ≤ 10 GiB` → 30min,`timeoutUsed = "long"`
+  - 其他 → 5min,`timeoutUsed = "default"`
+- UI chip 升级:
+  - `"extra"` → 红色 `<Tag color="red">2h</Tag>` (比「30min」橙色更警示)
+  - `"long"` → 橙色 `<Tag color="orange">30min</Tag>` (现有)
+  - 其他 → 无 chip
+- 「耗时」列宽 130 → 150,容纳更长的「2h」chip。
+- `smart_timeout_test.go`: 新增 `TestSmartTimeoutDispatch` 走 7 个边界
+  case (zero / 1 GiB 边界 / 8 GiB / 10 GiB 边界 / 24 GiB 等),保证 future
+  edit 不会悄悄改边界。
+
+### 边界选择依据
+
+- 1-10 GiB (server:latest 2 GB / mlflow 864 MB / fusion-collector 1.4 GB) →
+  30min 够下完,经验证。
+- >10 GiB (vllm 24 GB) → 单层就可能超过 30min,必须 2h。
+- >10 GiB 走 2h 是「保底」不是「日常」:绝大多数镜像仍是 30min 内。
+- 4h/8h 不做:跟「真 hang」难以区分,运维排障更麻烦。真的 4h+ 用户中止重跑。
+
+---
+
 ## [0.7.26] - 2026-10-04
 
 本轮把 sync 历史 Modal（v0.6.20 改成的 task 行内嵌展开）轮询路径

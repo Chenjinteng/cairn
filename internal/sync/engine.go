@@ -524,9 +524,20 @@ func (e *Engine) pullTag(ctx context.Context, remoteURL, username, password, rep
 	// can show an orange chip — operators staring at a "running" run
 	// row need to know whether the engine is on the 5min clock or the
 	// 30min clock to decide "is this hung?" correctly.
+	//
+	// v0.7.27: add a third tier for >10 GiB manifests (ExtraLongSyncTimeout
+	// = 2h). LongSyncTimeout 30min isn't enough for 24 GiB images — a
+	// single layer can take >30min to download on a slow link and the
+	// per-request body read aborts the whole sync. The chip escalates
+	// from orange "30min" to red "2h" so operators see "this is the long
+	// tail" at a glance.
 	timeout := DefaultSyncTimeout
 	timeoutUsed := "default"
-	if mf.Size > LargeManifestThreshold {
+	switch {
+	case mf.Size > ExtraLargeManifestThreshold:
+		timeout = ExtraLongSyncTimeout
+		timeoutUsed = "extra"
+	case mf.Size > LargeManifestThreshold:
 		timeout = LongSyncTimeout
 		timeoutUsed = "long"
 	}
@@ -811,14 +822,45 @@ const LargeManifestThreshold = 1 << 30 // 1 GiB
 // pullTag — no user-facing config required.
 const LongSyncTimeout = 30 * time.Minute
 
+// v0.7.27: 三档扩展。LongSyncTimeout (30min) 经验证不够 —— 158 UAT 上
+// bklite/bklite/vllm 24 GiB 跑了 72 分钟还是失败,因为单个 HTTP 请求
+// 拉层卡 30 分钟内读不完 body (per-request body-read timeout)。
+//
+// ExtraLargeManifestThreshold / ExtraLongSyncTimeout 给超大镜像 (manifest
+// > 10 GiB) 第三档:2 小时 deadline。chip 在 UI 上变红色「2h」,运维一眼
+// 看出「这是超大镜像,跑两小时正常」。
+//
+// 为什么 10 GiB 切:
+//
+//   - 1-10 GiB (server:latest 2 GB / mlflow 864 MB / fusion-collector
+//     1.4 GB) → 30 分钟内能下完,30min 够。
+//   - > 10 GiB (vllm 24 GB) → 单层就可能卡超过 30min,必须给 2h。
+//   - > 10 GiB 走 2h 是「保底」,不是「日常」:绝大多数镜像还是 30min 内。
+//
+// 为什么是 2h 不是更长:
+//
+//   - vllm 24 GiB / 5 MB/s ≈ 80 分钟全量,2h 留 ~50% 余量。
+//   - 再往上拉(4h / 8h)就跟「真 hang」难以区分了,运维排障更麻烦。
+//   - 真正需要 4h+ 的场景让用户在 UI 中止后重跑 + 看 chip。
+//
+// 这只是 per-HTTP-request body read timeout(registry.Client.Timeout
+// 字段),不是整 sync 的总预算 —— 单个 layer 卡超过 2h 才 abort 整个
+// sync,符合「超大镜像保护」。
+const (
+	ExtraLargeManifestThreshold = 10 << 30 // 10 GiB
+	ExtraLongSyncTimeout        = 2 * time.Hour
+)
+
 // newRemoteClient builds a registry.Client pointing at remoteURL with
 // the destination's Basic-auth credentials stamped on every outbound
 // request. Both fields empty = anonymous (skip auth header); the
 // underlying registry.Client does the same.
 //
 // timeout is the per-request body-read deadline. Callers pick between
-// DefaultSyncTimeout (median case) and LongSyncTimeout (manifest
-// > LargeManifestThreshold, auto-detected by pullTag).
+// DefaultSyncTimeout (median case), LongSyncTimeout (manifest
+// > LargeManifestThreshold), or ExtraLongSyncTimeout (manifest
+// > ExtraLargeManifestThreshold, v0.7.27) — all auto-detected by
+// pullTag from manifest size.
 func newRemoteClient(remoteURL, username, password string, timeout time.Duration) (*registry.Client, error) {
 	return registry.NewClient(registry.Config{
 		BaseURL:  remoteURL,

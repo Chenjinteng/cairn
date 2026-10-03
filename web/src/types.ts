@@ -721,8 +721,11 @@ export type SyncRunItemState = 'succeeded' | 'failed' | 'cancelled';
  * v0.7.25: 后端把 pullTag 的 timeout 决策（"default" 5min vs "long" 30min）
  * 也写到了 sync_run_items.timeout_used，让 UI 知道一个长跑任务究竟是卡住了
  * 还是只是用了 long deadline。空字符串=legacy / push / 未知（保持 no-chip）。
+ *
+ * v0.7.27: 加第三档 "extra"（2h, manifest > 10 GiB）—— 24 GiB 类超大镜像
+ * 30min 拉不完，per-request body-read timeout abort 整 sync。
  */
-export type SyncRunItemTimeout = '' | 'default' | 'long';
+export type SyncRunItemTimeout = '' | 'default' | 'long' | 'extra';
 
 export interface SyncRunItem {
   id: number;

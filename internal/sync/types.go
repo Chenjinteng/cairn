@@ -274,11 +274,14 @@ type SyncRunItem struct {
 	BytesTotal int64      `json:"bytesTotal"`
 	StartedAt  time.Time  `json:"startedAt"`
 	FinishedAt *time.Time `json:"finishedAt,omitempty"`
-	// TimeoutUsed is which sync timeout the engine picked for this pull
-	// (v0.7.25): "" (legacy default), "default" (5min), "long" (30min,
-	// manifest > 1 GiB). UI renders an orange chip next to duration
-	// when == "long" so the operator can tell a big-image pull from a
-	// hung one. Empty is the no-chip case.
+	// TimeoutUsed is which sync timeout the engine picked for this pull:
+	//   - ""        (v0.7.25- legacy / push / unknown — no chip)
+	//   - "default" (v0.7.25+ 5min, manifest ≤ 1 GiB — no chip)
+	//   - "long"    (v0.7.25+ 30min, 1 GiB < manifest ≤ 10 GiB — orange "30min")
+	//   - "extra"   (v0.7.27+ 2h, manifest > 10 GiB — red "2h",超大镜像专用)
+	//
+	// 三档让运维一眼看出「普通大镜像(30min)」vs「超大镜像(2h)」,避免
+	// 24 GiB 类镜像跑过 30min 误判为 hang。
 	TimeoutUsed string `json:"timeoutUsed,omitempty"`
 }
 
