@@ -6,6 +6,30 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.15] - 2026-10-03
+
+本轮修一个 UX bug —— 删历史任务(SQLite 里的)时返 `pull: job not found`。
+原因是 `DeletePullJob` handler 只走 `Executor.Delete`,而 Executor 内存
+里没这个 ID(历史任务重启后内存清零)→ 一律报 not found。属缺陷修复 →
+小版本进位 0.7.15。
+
+### 修复
+
+- **后端 · `internal/db/db.go` 新增 `PullJobDelete(ctx, id) (bool, error)`**(v0.7.15)。
+  返 (是否真的删了行, error) — handler 用 bool 决定 200 / 404。
+- **后端 · `internal/api/handlers_extra.go` `DeletePullJob` 内存 miss → DB 兜底**(v0.7.15)。
+  原顺序:`Executor.Delete` 返 ErrJobNotFound 直接 404。
+  新顺序:`Executor.Delete` 返 ErrJobNotFound 时 fallback 到 `e.DB.PullJobDelete`,
+  真的不在才 404。
+
+### 新增(单测)
+
+- `internal/db/pull_jobs_test.go` 加 `TestPullJobDelete` —— 三组断言:
+  存在 row 删 → true + no error;同 ID 再删 → false + no error;未知 ID 删 →
+  false + no error。handler 拿这个 bool 决定 200 vs 404。
+
+---
+
 ## [0.7.14] - 2026-10-03
 
 本轮补一个 UX 缺口 —— 历史任务(从 SQLite reload 的)在 UI 展开时 phases 永远空,

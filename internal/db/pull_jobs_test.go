@@ -161,3 +161,53 @@ func TestParseTimeOrZero_ToleratesMalformedInput(t *testing.T) {
 		}
 	}
 }
+
+// TestPullJobDelete covers the v0.7.15 regression: deleting a history
+// (SQLite-only) job must succeed, not bubble up "pull job not found".
+// Returns true when the row existed, false when the ID is unknown —
+// the handler uses the bool to decide between 200 and 404.
+func TestPullJobDelete(t *testing.T) {
+	d := newTestDB(t)
+	ctx := context.Background()
+
+	row := PullJobRow{
+		ID:        "job-delete-me",
+		SourceRef: "library/alpine:3.19",
+		DestRepo:  "library/alpine",
+		DestTag:   "3.19",
+		State:     "succeeded",
+		StartedAt: time.Date(2026, 10, 3, 9, 0, 0, 0, time.UTC),
+		EndedAt:   time.Date(2026, 10, 3, 9, 1, 0, 0, time.UTC),
+		CreatedAt: time.Date(2026, 10, 3, 9, 0, 0, 0, time.UTC),
+	}
+	if err := d.PullJobRecord(ctx, row); err != nil {
+		t.Fatalf("PullJobRecord: %v", err)
+	}
+
+	deleted, err := d.PullJobDelete(ctx, "job-delete-me")
+	if err != nil {
+		t.Fatalf("PullJobDelete (existing): %v", err)
+	}
+	if !deleted {
+		t.Error("PullJobDelete on existing row returned false, want true")
+	}
+
+	// Idempotency: a second delete on the same id returns false (no rows
+	// affected), no error — that's how the handler decides "404" vs "200".
+	deleted, err = d.PullJobDelete(ctx, "job-delete-me")
+	if err != nil {
+		t.Fatalf("PullJobDelete (repeat): %v", err)
+	}
+	if deleted {
+		t.Error("PullJobDelete on missing row returned true, want false")
+	}
+
+	// Unknown id from the start: same — false, no error.
+	deleted, err = d.PullJobDelete(ctx, "never-existed")
+	if err != nil {
+		t.Fatalf("PullJobDelete (unknown): %v", err)
+	}
+	if deleted {
+		t.Error("PullJobDelete on unknown id returned true, want false")
+	}
+}

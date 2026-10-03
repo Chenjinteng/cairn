@@ -428,6 +428,25 @@ type PullJobRow struct {
 	CreatedAt  time.Time
 }
 
+// PullJobDelete removes one history row by ID. Returns true if a row
+// was actually deleted, false if the ID didn't exist.
+//
+// v0.7.15: the API used to fail with "pull job not found" whenever the
+// caller tried to remove a SQLite-only job (i.e. one the executor had
+// forgotten after a restart). DeletePullJob in handlers_extra now
+// falls through to this when Executor.Delete returns ErrJobNotFound.
+func (d *Db) PullJobDelete(ctx context.Context, id string) (bool, error) {
+	res, err := d.conn.ExecContext(ctx, `DELETE FROM pull_jobs WHERE id = ?`, id)
+	if err != nil {
+		return false, fmt.Errorf("db: pull_jobs delete: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("db: pull_jobs rows affected: %w", err)
+	}
+	return n > 0, nil
+}
+
 // PullJobsList returns every row in pull_jobs, newest first by started_at.
 // Used by ListPullJobs at API time to fold SQLite history into the live
 // memory view — without this, a container restart would surface as an

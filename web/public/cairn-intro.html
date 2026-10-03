@@ -82,6 +82,11 @@
   JobPhases 组件的「phases 空 + fromHistory=true → 显示『历史记录只保留汇总;
   阶段明细仅在失败/取消的任务上保存』提示」分支终于能触发;之前后端没标这个
   字段,展开历史任务一片空白让人误以为坏了。
+
+  v0.7.15: 删历史任务 fix —— DeletePullJob 之前只走 Executor.Delete 内存路径,
+  重启后内存清零,删 SQLite 里的历史 job 一律返 pull: job not found。
+  加 db.PullJobDelete(ctx, id) → (bool, error),handler 在 Executor.Delete
+  返 ErrJobNotFound 时 fallback 到 DB.Delete;DB 也没才真 404。
 -->
 <style>
   :root {

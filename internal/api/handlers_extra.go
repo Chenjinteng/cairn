@@ -413,11 +413,17 @@ func (e *ExtraHandlers) DeletePullJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := chiURLParam(r, "id")
-	if err := e.Executor.Delete(id); err != nil {
-		if errors.Is(err, pull.ErrJobNotFound) {
-			writeError(w, r, http.StatusNotFound, err)
-			return
-		}
+	// Live job: terminal-state check + memory eviction. History job
+	// (SQLite-only, no memory entry): Executor.Delete returns
+	// ErrJobNotFound — fall through to the DB layer so the user can
+	// still scrub a long-forgotten row.
+	err := e.Executor.Delete(id)
+	if err == nil {
+		// 200 + body (not 204): the UI's api() helper rejects empty bodies.
+		writeJSON(w, http.StatusOK, map[string]any{"id": id})
+		return
+	}
+	if !errors.Is(err, pull.ErrJobNotFound) {
 		if errors.Is(err, pull.ErrJobNotTerminal) {
 			writeError(w, r, http.StatusConflict, err)
 			return
@@ -425,7 +431,20 @@ func (e *ExtraHandlers) DeletePullJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, err)
 		return
 	}
-	// 200 + body (not 204): the UI's api() helper rejects empty bodies.
+	// Memory miss — try the SQLite history table.
+	if e.DB == nil {
+		writeError(w, r, http.StatusNotFound, err)
+		return
+	}
+	deleted, dbErr := e.DB.PullJobDelete(r.Context(), id)
+	if dbErr != nil {
+		writeError(w, r, http.StatusInternalServerError, dbErr)
+		return
+	}
+	if !deleted {
+		writeError(w, r, http.StatusNotFound, pull.ErrJobNotFound)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": id})
 }
 
