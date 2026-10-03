@@ -1450,10 +1450,45 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
           <div style={{ padding: 16, color: '#999' }}>加载中…</div>
         )}
         {state && loadedCount === 0 && total === 0 && !loading && (
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description="该 run 没有明细（旧版本引擎或运行中尚未落库）"
-          />
+          /*
+           * v0.7.35: 失败 run + 0 条 item + 没有 currentRepo(说明没机会
+           * 进入 repo 循环),原来是「该 run 没有明细(旧版本引擎或
+           * 运行中尚未落库)」误导文案 —— 真实原因通常是:
+           *   - catalog 路径 ListRepositories 失败(401 / 网络)
+           *   - tags_filter 路径的 spec 解析阶段失败
+           *   - push 路径的 local.Repositories 失败
+           * 这三种全在 ListRepositories 调用前/后立刻 return,一条
+           * sync_run_items 都没写过。当前 repo/tag 都是空。
+           *
+           * 这种情况下不再套 Empty,改成直接显示 run.error,错误就地
+           * 可见,不必再去翻 runs 表的「错误」列。
+           */
+          run.status === 'failed' && !run.currentRepo ? (
+            <div style={{ padding: '12px 4px', color: '#999' }}>
+              <div style={{ marginBottom: run.error ? 6 : 0 }}>
+                拉取列表阶段就失败了，未拉取任何 repo(下方是失败原因)。
+              </div>
+              {run.error ? (
+                <div
+                  className="mono"
+                  style={{
+                    color: '#cf1322',
+                    fontSize: 12,
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-all',
+                    lineHeight: 1.5,
+                  }}
+                >
+                  {run.error}
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description="该 run 没有明细（旧版本引擎或运行中尚未落库）"
+            />
+          )
         )}
         {state && (loadedCount > 0 || total > 0) && (
           <>

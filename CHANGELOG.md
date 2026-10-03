@@ -6,6 +6,58 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.35] - 2026-10-04
+
+镜像同步页 runs 表展开行里,run 失败 + 0 条 item 时不再显示
+误导文案,改成直接展示 run.error。
+
+### 问题
+
+展开一个失败的 run,如果它一条 item 都没有,UI 会显示
+**「该 run 没有明细(旧版本引擎或运行中尚未落库)」**。
+
+两种说法都不对:
+
+- "旧版本引擎"早就不存在了(0.6.x 之后所有 run 都写 item)。
+- "运行中尚未落库"也站不住 —— 状态已经是 `failed`,run 已结束。
+
+真实原因是 `engine.runPull` 在 ListRepositories 阶段就退出了
+**根本没机会写 item**。典型路径:
+
+- catalog 路径:`rc.ListRepositories(ctx)` 返 401 / 网络错,
+  直接 `return fmt.Errorf("list remote repos: %w", err)`,
+  一次 repo 都没尝试。
+- tags_filter 路径:spec 解析阶段失败(specs 为空 / 解析错)。
+- push 路径:`e.local.Repositories(ctx)` 失败。
+
+三种情况都是 **currentRepo / currentTag 都为空字符串**(还没进
+repo 循环)+ `repos_total === 0`(item 表空空如也)。
+
+### 修法
+
+纯 UI 改,不动后端 / DB / schema。empty state 分两种:
+
+- `run.status === 'failed' && !run.currentRepo` → 替代 Empty 组件,
+  改为两行:
+  1. 一句中文说明「拉取列表阶段就失败了,未拉取任何 repo(下方是失败原因)」
+  2. 把 `run.error` 用 mono 字体 + 红色 + `pre-wrap` + `break-all`
+     直接渲染出来,跟 runs 表「错误」列同款样式。
+- 其他 0 条 → 保留原 Empty 描述(理论上 `status === 'running'`
+  时还会命中,此刻 item 还没落库,文案还成立)。
+
+### 改动文件
+
+- `web/src/pages/sync-page.tsx` — `renderExpandedItems` 内 empty
+  state 三元替换。
+- 后端 / API / DB / SQL:全部不变。
+
+### 用户体验
+
+之前:错误必须翻到 runs 表的「错误」列看。
+现在:展开 run 就能直接读到,定位更快。
+
+---
+
 ## [0.7.34] - 2026-10-04
 
 凭据管理页两个收口:新增/编辑弹窗加「测试连接」按钮(跟 proxies
