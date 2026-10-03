@@ -371,3 +371,154 @@ func TestPullJobCancel(t *testing.T) {
 		t.Errorf("PullJobCancel(unknown): flipped = true, want false")
 	}
 }
+
+// TestPullJobBlobsRecord covers v0.7.18: blob detail persistence. Three
+// phases recorded, then re-recorded with different status — the upsert
+// shape must replace existing rows for the same (job_id, blob_index).
+// Then read back via PullJobBlobsList and assert ordering matches the
+// blob_index column.
+func TestPullJobBlobsRecord(t *testing.T) {
+	d := newTestDB(t)
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	job := PullJobRow{
+		ID: "job-blobs", SourceRef: "lib/x:1", DestRepo: "lib/x", DestTag: "1",
+		State: "succeeded", StartedAt: now, EndedAt: now, CreatedAt: now,
+	}
+	if err := d.PullJobRecord(ctx, job); err != nil {
+		t.Fatalf("PullJobRecord: %v", err)
+	}
+
+	rows := []PullJobBlobRow{
+		{JobID: "job-blobs", Index: 0, Name: "manifest", Digest: "sha256:m", Size: 1024, Status: "success", Message: ""},
+		{JobID: "job-blobs", Index: 1, Name: "blob:0", Digest: "sha256:a", Size: 2048, Status: "success", Message: ""},
+		{JobID: "job-blobs", Index: 2, Name: "blob:1", Digest: "sha256:b", Size: 4096, Status: "skipped", Message: "already present"},
+	}
+	if err := d.PullJobBlobsRecord(ctx, rows); err != nil {
+		t.Fatalf("PullJobBlobsRecord: %v", err)
+	}
+
+	got, err := d.PullJobBlobsList(ctx, "job-blobs")
+	if err != nil {
+		t.Fatalf("PullJobBlobsList: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("len = %d, want 3", len(got))
+	}
+	for i := range got {
+		if got[i].Index != i {
+			t.Errorf("got[%d].Index = %d, want %d", i, got[i].Index, i)
+		}
+		if got[i].JobID != "job-blobs" {
+			t.Errorf("got[%d].JobID = %q", i, got[i].JobID)
+		}
+	}
+	if got[0].Digest != "sha256:m" || got[2].Status != "skipped" {
+		t.Errorf("got[0].Digest=%q, got[2].Status=%q", got[0].Digest, got[2].Status)
+	}
+
+	// Upsert: replace blob 1's status (simulating re-write of an
+	// in-progress job). Verify the upsert path keeps blob 0/2 intact.
+	rows[1].Status = "failed"
+	rows[1].Message = "synthetic failure"
+	if err := d.PullJobBlobsRecord(ctx, rows); err != nil {
+		t.Fatalf("PullJobBlobsRecord (re-write): %v", err)
+	}
+	got, _ = d.PullJobBlobsList(ctx, "job-blobs")
+	if len(got) != 3 {
+		t.Fatalf("len after upsert = %d, want 3 (no duplicates)", len(got))
+	}
+	if got[1].Status != "failed" || got[1].Message != "synthetic failure" {
+		t.Errorf("blob 1 not updated: %+v", got[1])
+	}
+	if got[0].Status != "success" || got[2].Status != "skipped" {
+		t.Errorf("upsert touched unrelated rows: %+v / %+v", got[0], got[2])
+	}
+
+	// Cascade: deleting the parent pull_jobs row takes the blobs with it.
+	if _, err := d.PullJobDelete(ctx, "job-blobs"); err != nil {
+		t.Fatalf("PullJobDelete: %v", err)
+	}
+	got, _ = d.PullJobBlobsList(ctx, "job-blobs")
+	if len(got) != 0 {
+		t.Errorf("after parent delete blobs len = %d, want 0 (cascade)", len(got))
+	}
+}
+
+// TestEventLogRecordAndEnforceLimit covers v0.7.18: event_log row insert
+// + the 200-row retention cap. 250 rows in → 50 rows out, keeping the
+// newest by at DESC. Pre-v0.7.18 the ring was in-memory only.
+func TestEventLogRecordAndEnforceLimit(t *testing.T) {
+	d := newTestDB(t)
+	ctx := context.Background()
+
+	base := time.Date(2026, 10, 3, 10, 0, 0, 0, time.UTC)
+	for i := 0; i < 250; i++ {
+		if err := d.EventLogRecord(ctx, EventLogRow{
+			At:        base.Add(time.Duration(i) * time.Second),
+			EventAt:   base.Add(time.Duration(i) * time.Second),
+			EventID:   "evt-" + base.Add(time.Duration(i)*time.Second).Format("150405.000000000"),
+			Action:    "pull",
+			Method:    "HEAD",
+			MediaType: "application/vnd.docker.distribution.manifest.v2+json",
+			Repository: "lib/x",
+			Tag:       "1",
+			UserAgent: "docker/24.0",
+			Addr:      "10.0.0.1:1234",
+			Host:      "registry.example",
+			Counted:   true,
+		}); err != nil {
+			t.Fatalf("EventLogRecord[%d]: %v", i, err)
+		}
+	}
+
+	rows, err := d.EventLogList(ctx, 0)
+	if err != nil {
+		t.Fatalf("EventLogList: %v", err)
+	}
+	if len(rows) != 250 {
+		t.Fatalf("pre-cap len = %d, want 250", len(rows))
+	}
+	if !rows[0].At.After(rows[len(rows)-1].At) {
+		t.Errorf("EventLogList ordering: at DESC broken (newest=%v oldest=%v)",
+			rows[0].At, rows[len(rows)-1].At)
+	}
+
+	// Cap to 200 (matches the in-memory recentCap). Expect 50 deletions.
+	n, err := d.EventLogEnforceLimit(ctx, 200)
+	if err != nil {
+		t.Fatalf("EventLogEnforceLimit: %v", err)
+	}
+	if n != 50 {
+		t.Errorf("deleted = %d, want 50 (250 - 200)", n)
+	}
+
+	rows, _ = d.EventLogList(ctx, 0)
+	if len(rows) != 200 {
+		t.Errorf("post-cap len = %d, want 200", len(rows))
+	}
+	// Newest is base + 249s (the last one inserted); oldest kept is
+	// base + 50s (the 51st from the bottom).
+	if !rows[0].At.Equal(base.Add(249 * time.Second)) {
+		t.Errorf("newest kept = %v, want %v", rows[0].At, base.Add(249*time.Second))
+	}
+	if !rows[len(rows)-1].At.Equal(base.Add(50 * time.Second)) {
+		t.Errorf("oldest kept = %v, want %v", rows[len(rows)-1].At, base.Add(50*time.Second))
+	}
+
+	// limit <= 0 is a no-op.
+	n, err = d.EventLogEnforceLimit(ctx, 0)
+	if err != nil {
+		t.Errorf("EventLogEnforceLimit(0): %v", err)
+	}
+	if n != 0 {
+		t.Errorf("EventLogEnforceLimit(0) deleted %d, want 0", n)
+	}
+
+	// EventLogList with limit arg honours it.
+	rows, _ = d.EventLogList(ctx, 5)
+	if len(rows) != 5 {
+		t.Errorf("EventLogList(5) = %d rows, want 5", len(rows))
+	}
+}

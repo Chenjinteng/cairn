@@ -459,6 +459,31 @@ func (e *Executor) executeOne(parent context.Context, j *Job) {
 			CreatedAt:  snap.CreatedAt,
 			Error:      snap.Error,
 		})
+		// v0.7.18: also persist per-blob detail (j.view.Phases) so the
+		// UI's expanded row keeps showing the per-layer digest / size
+		// after a restart. Previously this lived only in memory and
+		// every history row's expansion went blank. The phase list is
+		// captured by snap (under the lock, before unlock), so we can
+		// iterate it freely outside the lock now.
+		if len(snap.Phases) > 0 {
+			blobRows := make([]db.PullJobBlobRow, len(snap.Phases))
+			for i, p := range snap.Phases {
+				var size int64
+				if p.TotalBytes != nil {
+					size = *p.TotalBytes
+				}
+				blobRows[i] = db.PullJobBlobRow{
+					JobID:   snap.ID,
+					Index:   i,
+					Name:    p.Name,
+					Digest:  p.Digest,
+					Size:    size,
+					Status:  p.Status,
+					Message: p.Message,
+				}
+			}
+			_ = e.DB.PullJobBlobsRecord(recordCtx, blobRows)
+		}
 		cancelRec()
 	}
 }

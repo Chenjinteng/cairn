@@ -342,9 +342,52 @@ func (e *ExtraHandlers) ListPullJobs(w http.ResponseWriter, r *http.Request) {
 				// Without this flag the JobPhases component fell through to
 				// its empty branch and rendered nothing for fromHistory===undefined,
 				// leaving the user staring at a blank row.
-				view := uiJobView(dbPullJobToView(row))
-				view["fromHistory"] = true
-				out = append(out, view)
+				//
+				// v0.7.18: load the persisted blob rows so the expanded
+				// row's per-layer detail (digest / size / status) keeps
+				// showing on a cold start. Pre-v0.7.18 history rows
+				// (created by older builds) have no blobs on disk and
+				// fall through to the empty-Phases hint via fromHistory.
+				view := pull.JobView{ID: row.ID}
+				blobs, blobErr := e.DB.PullJobBlobsList(r.Context(), row.ID)
+				if blobErr == nil && len(blobs) > 0 {
+					view.Phases = make([]pull.Phase, 0, len(blobs))
+					for _, b := range blobs {
+						var total *int64
+						if b.Size > 0 {
+							sz := b.Size
+							total = &sz
+						}
+						view.Phases = append(view.Phases, pull.Phase{
+							Name:       b.Name,
+							Digest:     b.Digest,
+							Status:     b.Status,
+							Bytes:      b.Size,
+							TotalBytes: total,
+							Message:    b.Message,
+						})
+					}
+				}
+				// Carry over the rest of the row data (state / times /
+				// sourceRef / bytes / error). Phases was deliberately left
+				// nil above so uiJobView's uiPhases() turns the empty
+				// slice into []any{} rather than null — same contract as
+				// dbPullJobToView, just with our pre-loaded blobs.
+				base := dbPullJobToView(row)
+				view.SourceRef = base.SourceRef
+				view.DestRepo = base.DestRepo
+				view.DestTag = base.DestTag
+				view.State = base.State
+				view.StartedAt = base.StartedAt
+				view.EndedAt = base.EndedAt
+				view.CreatedAt = base.CreatedAt
+				view.BytesDone = base.BytesDone
+				view.BytesTotal = base.BytesTotal
+				view.Error = base.Error
+
+				rowView := uiJobView(view)
+				rowView["fromHistory"] = true
+				out = append(out, rowView)
 			}
 		}
 		// PullJobsList failure is non-fatal: live jobs still render.

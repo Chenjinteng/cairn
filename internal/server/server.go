@@ -438,6 +438,18 @@ func (r *Runtime) retentionLoop(ctx context.Context) {
 			slog.Info("pull history cap", "deleted", m, "limit", historyLimit)
 		}
 
+		// v0.7.18: event_log cap. 200 matches the in-memory ring
+		// (recentCap default = 200), so a cold start that falls back to
+		// disk sees the same number of rows the ring would have shown.
+		cleanupCtx3, cancel3 := context.WithTimeout(context.Background(), 30*time.Second)
+		e, eErr := r.DB.EventLogEnforceLimit(cleanupCtx3, eventLogLimit)
+		cancel3()
+		if eErr != nil {
+			slog.Warn("event log cap failed", "err", eErr, "limit", eventLogLimit)
+		} else if e > 0 {
+			slog.Info("event log cap", "deleted", e, "limit", eventLogLimit)
+		}
+
 		timer.Reset(interval)
 	}
 }
@@ -447,6 +459,14 @@ func (r *Runtime) retentionLoop(ctx context.Context) {
 // enough that an operator scrubbing the history can see what happened
 // last week. 50 was the explicit product call in v0.7.16.
 const historyLimit = 50
+
+// v0.7.18: event_log retention cap. Mirrors the in-memory recentCap = 200
+// default in internal/events/events.go:NewHandler — when the ring is
+// empty after a restart, RecentEvents() falls back to event_log and the
+// UI sees the same number of items it always did. Hardcoded; surfacing
+// on the settings page would invite noise (the operator only said
+// "200 条左右" once).
+const eventLogLimit = 200
 
 // Stop tears down background goroutines + the HTTP server with a 30s grace.
 func (r *Runtime) Stop() {

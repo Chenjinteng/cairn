@@ -6,6 +6,40 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.18] - 2026-10-03
+
+本轮把两类原本只在内存、重启就丢的数据持久化到 SQLite: 拉取历史的
+blob 详情 + 镜像热度的最近事件。属新增一整个模块 (新表 + 新 API +
+新 retention),按 AGENTS.md 「新增一整个模块 → 中版本」默认应进
+v0.8.0。**本轮按用户拍板走小版本 v0.7.18**,与 AGENTS.md 默认规则
+不同 —— 若日后想统一回滚到中版本节奏,可以重命名发布 v0.8.0
+(commit history 完整,可重打 tag)。
+
+### 新增
+
+- **`pull_job_blobs` 表**: 每个 pull 任务的 blob / config / child-manifests 阶段明细 (name / digest / size / status / message),按 (pull_job_id, blob_index) 复合主键。executeOne 翻 state 之后一并 insert。50 条历史 × ~20 blob ≈ 1k 行,体量 ~150 KB。
+  - `db.PullJobBlobsRecord(ctx, []PullJobBlobRow)`: 批量 upsert,支持重写(per-blob ON CONFLICT UPDATE)。
+  - `db.PullJobBlobsList(ctx, jobID)`: 读单个 job 的 blob 列表,按 blob_index 升序。
+- **`event_log` 表**: 镜像热度「最近事件」面板的持久化。`id` 自增,`at` 时间倒序索引。appendRecent 在 ring 写入之外顺手 EventLogRecord(锁外写盘,慢 SQLite 不会阻塞 ring reader)。
+  - `db.EventLogRecord(ctx, EventLogRow)`: 单行 insert。
+  - `db.EventLogList(ctx, limit)`: 倒序读,limit <= 0 返全量。
+  - `db.EventLogEnforceLimit(ctx, limit)`: 200 行硬封顶,跟 PullJobsEnforceLimit 同 pattern。
+- **API 层**: `GET /api/pull/jobs` 对 DB history row 多调一次 `PullJobBlobsList`,把 blob phase 注入 view,UI 端展开行保留每层 sha256 / size。`RecentEvents()` 内存 ring 为空时 fallback DB,冷启动仍能看到最近 200 条。
+- **retention**: `server.go:retentionLoop` 多了 `EventLogEnforceLimit(200)` 调用,跟 `PullJobsEnforceLimit(50)` 同循环(24h 周期 + 30s 首跑 settle)。
+
+### 修复
+
+- **拉取历史展开行永远是空**: 之前 j.view.Phases 只在内存里,Job evict 后丢;历史 row 的「blob #3 sha256:...」展开永远不显示。现在 PullJobBlobsRecord 把 Phases 持久化,v0.7.18+ 写的 history row 展开完整。**pre-v0.7.18 row 没 blob 数据**(升级前已经存的),展开会触发「历史记录只保留汇总;阶段明细仅在失败 / 取消的任务上保存」fromHistory 提示。
+- **重启后「最近事件」面板清空**: 之前 recentCap = 200 内存 ring,容器重启 ring 全没。现在 event_log 持久化 + RecentEvents fallback。pre-v0.7.18 事件不在 event_log 里(ring 早丢了),恢复不了 —— 只能看到 v0.7.18 之后的事件。
+
+### 数据库
+
+- **migration 11**: 新增 `pull_job_blobs` 和 `event_log` 两张表。SCHEMA_VERSION 10 → 11。
+- `internal/db/migrate_test.go`: 老的「v6 → v7+v8+v9+v10」断言更新到 v11。
+- `parseTimeOrZeroOrNil`: 新加 helper,跟 `parseTimeOrZero` 同语义但返 error,EventLogList 用它处理 RFC3339Nano 时间戳。
+
+---
+
 ## [0.7.17] - 2026-10-03
 
 本轮修「取消拉取返 pull job not found」bug。两条叠加: 落库时机错(写的是

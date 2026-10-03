@@ -453,20 +453,66 @@ func (h *Handler) recordClient(ua string, now time.Time, counted bool) {
 // appendRecent pushes an event into the bounded ring; oldest evicted when full.
 func (h *Handler) appendRecent(ev RecentEvent) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if len(h.recent) >= h.recentCap {
 		h.recent = h.recent[1:]
 	}
 	h.recent = append(h.recent, ev)
+	h.mu.Unlock()
+	// v0.7.18: persist to event_log so the heat UI's "最近事件" panel
+	// survives a restart. Disk I/O runs *after* the ring lock so a slow
+	// SQLite can't wedge concurrent readers. Best-effort: a failed write
+	// is logged and the ring still has the entry for this session.
+	if h.Store != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := h.Store.EventLogRecord(ctx, db.EventLogRow{
+			At: ev.At, EventAt: ev.EventAt, EventID: ev.ID,
+			Action: ev.Action, Method: ev.Method, MediaType: ev.MediaType,
+			Repository: ev.Repository, Tag: ev.Tag,
+			UserAgent: ev.UserAgent, Addr: ev.Addr, Host: ev.Host,
+			Actor: ev.Actor, Reason: ev.Reason,
+			Counted: ev.Counted,
+		})
+		cancel()
+		if err != nil {
+			slog.Warn("events: event_log insert failed", "err", err)
+		}
+	}
 }
 
 // RecentEvents returns a snapshot copy of the in-memory ring (newest first).
+//
+// v0.7.18: falls back to event_log when the ring is empty (cold start,
+// before any new event has been received this session). Reads at most
+// recentCap rows so the UI sees the same number of items it did before.
 func (h *Handler) RecentEvents() []RecentEvent {
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	out := make([]RecentEvent, len(h.recent))
-	for i, ev := range h.recent {
-		out[len(h.recent)-1-i] = ev
+	ring := append([]RecentEvent(nil), h.recent...)
+	h.mu.Unlock()
+	if len(ring) > 0 {
+		out := make([]RecentEvent, len(ring))
+		for i, ev := range ring {
+			out[len(ring)-1-i] = ev
+		}
+		return out
+	}
+	if h.Store == nil {
+		return nil
+	}
+	rows, err := h.Store.EventLogList(context.Background(), h.recentCap)
+	if err != nil {
+		slog.Warn("events: event_log list failed", "err", err)
+		return nil
+	}
+	out := make([]RecentEvent, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, RecentEvent{
+			At: r.At, EventAt: r.EventAt, ID: r.EventID,
+			Action: r.Action, Method: r.Method, MediaType: r.MediaType,
+			Repository: r.Repository, Tag: r.Tag,
+			UserAgent: r.UserAgent, Addr: r.Addr, Host: r.Host,
+			Actor: r.Actor, Reason: r.Reason,
+			Counted: r.Counted,
+		})
 	}
 	return out
 }

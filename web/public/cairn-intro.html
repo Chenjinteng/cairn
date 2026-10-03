@@ -99,6 +99,14 @@
   只查内存 e.jobs,这个 id 早就 evict 没了。挪 PullJobRecord 到 executeOne
   翻 state 之后 + Cancel API 在 e.jobs 找不到时 fallback 到新加的
   db.PullJobCancel(ctx, id) 把 row 翻 cancelled 返 200,UI 不再弹「not found」。
+
+  v0.7.18: 持久化原本只在内存的两类数据 —— 拉取历史的 blob 详情 + 镜像热度
+  的最近事件。新增 pull_job_blobs / event_log 两张表 (migration 11),
+  executeOne 翻 state 之后一并写 blob phase;appendRecent 顺手写 event_log。
+  retentionLoop 加 EventLogEnforceLimit(200) 跟 PullJobsEnforceLimit(50)
+  同循环。重启后历史行展开仍显示「blob #3 sha256:...」,「最近事件」面板
+  不会清空。**按用户拍板走小版本,与 AGENTS.md 默认「新增模块 → 中版本」
+  规则不同**;若日后想统一回滚到中版本节奏,可重打 v0.8.0 tag。
 -->
 <style>
   :root {
@@ -516,7 +524,7 @@
       <h1 class="wordmark">Cairn<span class="dot">.</span></h1>
       <div class="tagline">Lightweight Container Image Infrastructure</div>
       <div class="tagline-cn">轻量级容器镜像基础设施平台</div>
-      <div class="version-badge">v<span data-cairn-version>0.7.17</span> · 单进程单二进制</div>
+      <div class="version-badge">v<span data-cairn-version>0.7.18</span> · 单进程单二进制</div>
       <div class="chips">
         <span class="chip">单进程单二进制</span>
         <span class="chip">scratch 镜像 ~15 MB</span>

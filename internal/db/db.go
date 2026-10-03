@@ -25,7 +25,7 @@ import (
 
 // SCHEMA_VERSION is bumped together with new migrations.
 // Bump rule: +1 per migration; never reuse a number; never delete a migration.
-const SCHEMA_VERSION = 10
+const SCHEMA_VERSION = 11
 
 // Db is the SQLite wrapper. All exported methods are safe for concurrent use.
 type Db struct {
@@ -374,6 +374,65 @@ var migrations = map[int]string{
 	);
 	CREATE INDEX IF NOT EXISTS sync_run_items_run ON sync_run_items(run_id);
 	`,
+	11: `
+	-- v0.7.18: persist two state categories that previously lived only in
+	-- memory and disappeared on restart.
+	--
+	-- 1. pull_job_blobs: per-blob detail for a pull job (digest + size +
+	--    status). Before this migration, j.view.Phases was in-memory only;
+	--    after a container restart the history rows in pull_jobs still
+	--    appeared (v0.7.12 onwards) but the UI's expanded detail ("blob
+	--    #3 sha256:abcd 16.4 MB / 16.4 MB success") showed nothing for
+	--    every row except the one the executor still held in memory.
+	--    Operators asked to keep this — the total volume is small
+	--    (50 history rows × ~20 blobs ≈ 1k rows, ~150 KB) and it's the
+	--    only way to see what a past pull actually transferred.
+	--
+	--    WITHOUT ROWID composite primary key (pull_job_id, blob_index)
+	--    matches how the writer iterates j.view.Phases in order; blob_index
+	--    is the slice position at record time, not a synthetic id. ON
+	--    DELETE CASCADE on pull_job_id takes the rows with the parent
+	--    pull_jobs row (PullJobsEnforceLimit and PullJobDelete both rely
+	--    on this).
+	--
+	-- 2. event_log: per-event log for the heat UI's "最近事件" panel.
+	--    The in-memory ring (recentCap = 200) was the only source before;
+	--    after a restart it was empty and operators couldn't see what
+	--    happened yesterday. event_log keeps the most recent ~200 rows
+	--    on disk and the EventLogEnforceLimit retention pass prunes
+	--    anything older than that — symmetric to PullJobsEnforceLimit.
+	--    Rows are inserted in event-receive order; the index on at DESC
+	--    supports the "newest first" read in /api/stats/events.
+	CREATE TABLE IF NOT EXISTS pull_job_blobs (
+		pull_job_id TEXT    NOT NULL,
+		blob_index  INTEGER NOT NULL,
+		name        TEXT    NOT NULL DEFAULT '',
+		digest      TEXT    NOT NULL DEFAULT '',
+		size        INTEGER NOT NULL DEFAULT 0,
+		status      TEXT    NOT NULL DEFAULT '',
+		message     TEXT    NOT NULL DEFAULT '',
+		PRIMARY KEY (pull_job_id, blob_index),
+		FOREIGN KEY(pull_job_id) REFERENCES pull_jobs(id) ON DELETE CASCADE
+	) WITHOUT ROWID;
+	CREATE TABLE IF NOT EXISTS event_log (
+		id         INTEGER PRIMARY KEY,
+		at         TEXT    NOT NULL,
+		event_at   TEXT    NOT NULL DEFAULT '',
+		event_id   TEXT    NOT NULL DEFAULT '',
+		action     TEXT    NOT NULL DEFAULT '',
+		method     TEXT    NOT NULL DEFAULT '',
+		media_type TEXT    NOT NULL DEFAULT '',
+		repository TEXT    NOT NULL DEFAULT '',
+		tag        TEXT    NOT NULL DEFAULT '',
+		useragent  TEXT    NOT NULL DEFAULT '',
+		addr       TEXT    NOT NULL DEFAULT '',
+		host       TEXT    NOT NULL DEFAULT '',
+		actor      TEXT    NOT NULL DEFAULT '',
+		reason     TEXT    NOT NULL DEFAULT '',
+		counted    INTEGER NOT NULL DEFAULT 0
+	);
+	CREATE INDEX IF NOT EXISTS event_log_at ON event_log(at DESC);
+	`,
 }
 
 // ActivityIncrement applies one heat increment. Used by events.aggregator.
@@ -578,6 +637,22 @@ func parseTimeOrZero(s string) time.Time {
 		return time.Time{}
 	}
 	return t
+}
+
+// parseTimeOrZeroOrNil accepts the RFC3339Nano string used in event_log
+// and returns (time.Time, nil) on success or (zero, parse-error) on
+// failure. Returning the error lets callers decide whether an unparsable
+// timestamp should skip the row or zero the field silently — EventLogList
+// chooses the latter so a single corrupt row doesn't kill the whole list.
+func parseTimeOrZeroOrNil(s string) (time.Time, error) {
+	if s == "" {
+		return time.Time{}, nil
+	}
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return t, nil
 }
 
 // ActivitySummary is the JSON shape returned by /api/stats/summary.
@@ -1065,6 +1140,214 @@ func (d *Db) SetSetting(ctx context.Context, key, value string) error {
 func (d *Db) DeleteSetting(ctx context.Context, key string) error {
 	_, err := d.conn.ExecContext(ctx, "DELETE FROM settings WHERE key = ?", key)
 	return err
+}
+
+// PullJobBlobRow mirrors pull.Phase for the blob / config / child-manifests
+// steps that the pull executor records once a job reaches a terminal state.
+// `Index` is the position in j.view.Phases at the moment of recording;
+// matches the order the UI shows when the row is expanded.
+type PullJobBlobRow struct {
+	JobID   string
+	Index   int
+	Name    string
+	Digest  string
+	Size    int64
+	Status  string
+	Message string
+}
+
+// PullJobBlobsRecord persists a batch of blob rows for one job, replacing
+// any rows that already exist for (job_id, index). Idempotent: calling
+// twice for the same job keeps the second batch (the executor only calls
+// this once per terminal job, but the upsert shape lets the operator's
+// "rebuild history" future feature be safe to re-run).
+//
+// v0.7.18: this is the on-disk counterpart of j.view.Phases. Before this
+// migration, blob detail lived only in memory and disappeared when the
+// executor forgot the job — every past pull in the history list showed
+// an empty expanded row.
+func (d *Db) PullJobBlobsRecord(ctx context.Context, rows []PullJobBlobRow) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO pull_job_blobs
+		    (pull_job_id, blob_index, name, digest, size, status, message)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(pull_job_id, blob_index) DO UPDATE SET
+		    name = excluded.name,
+		    digest = excluded.digest,
+		    size = excluded.size,
+		    status = excluded.status,
+		    message = excluded.message
+	`)
+	if err != nil {
+		return fmt.Errorf("db: pull_job_blobs prepare: %w", err)
+	}
+	defer stmt.Close()
+	for _, r := range rows {
+		if _, err := stmt.ExecContext(ctx,
+			r.JobID, r.Index, r.Name, r.Digest, r.Size, r.Status, r.Message,
+		); err != nil {
+			return fmt.Errorf("db: pull_job_blobs insert: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
+// PullJobBlobsList returns the blob rows for one job in slice order
+// (blob_index ASC). Returns nil + nil if the job has no recorded blobs
+// (e.g. a pre-v0.7.18 history row).
+func (d *Db) PullJobBlobsList(ctx context.Context, jobID string) ([]PullJobBlobRow, error) {
+	rows, err := d.conn.QueryContext(ctx, `
+		SELECT pull_job_id, blob_index, name, digest, size, status, message
+		  FROM pull_job_blobs
+		 WHERE pull_job_id = ?
+		 ORDER BY blob_index ASC
+	`, jobID)
+	if err != nil {
+		return nil, fmt.Errorf("db: pull_job_blobs list: %w", err)
+	}
+	defer rows.Close()
+	var out []PullJobBlobRow
+	for rows.Next() {
+		var r PullJobBlobRow
+		if err := rows.Scan(&r.JobID, &r.Index, &r.Name, &r.Digest, &r.Size, &r.Status, &r.Message); err != nil {
+			return nil, fmt.Errorf("db: pull_job_blobs scan: %w", err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("db: pull_job_blobs iterate: %w", err)
+	}
+	return out, nil
+}
+
+// EventLogRow is one entry in the heat UI's "最近事件" panel.
+//
+// v0.7.18: identical JSON shape to events.RecentEvent (one fewer hop when
+// the API layer is just proxying to JSON). The mapping is mechanical —
+// see internal/api/handlers_stats.go where RecentEvents reads from this
+// table to fall back to disk when the in-memory ring is empty.
+type EventLogRow struct {
+	At        time.Time
+	EventAt   time.Time
+	EventID   string
+	Action    string
+	Method    string
+	MediaType string
+	Repository string
+	Tag       string
+	UserAgent string
+	Addr      string
+	Host      string
+	Actor     string
+	Reason    string
+	Counted   bool
+}
+
+// EventLogRecord writes one row to event_log. The caller supplies
+// EventAt / At as RFC3339; the receiver does no time parsing.
+func (d *Db) EventLogRecord(ctx context.Context, r EventLogRow) error {
+	counted := 0
+	if r.Counted {
+		counted = 1
+	}
+	_, err := d.conn.ExecContext(ctx, `
+		INSERT INTO event_log
+		    (at, event_at, event_id, action, method, media_type,
+		     repository, tag, useragent, addr, host, actor, reason, counted)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, r.At.UTC().Format(time.RFC3339Nano),
+		r.EventAt.UTC().Format(time.RFC3339Nano),
+		r.EventID, r.Action, r.Method, r.MediaType,
+		r.Repository, r.Tag, r.UserAgent, r.Addr, r.Host,
+		r.Actor, r.Reason, counted)
+	if err != nil {
+		return fmt.Errorf("db: event_log insert: %w", err)
+	}
+	return nil
+}
+
+// EventLogList returns up to `limit` rows from event_log in at-DESC
+// order. limit <= 0 returns all rows (use with care on long-lived DBs).
+func (d *Db) EventLogList(ctx context.Context, limit int) ([]EventLogRow, error) {
+	q := `SELECT at, event_at, event_id, action, method, media_type,
+	             repository, tag, useragent, addr, host, actor, reason, counted
+	        FROM event_log
+	       ORDER BY at DESC`
+	args := []any{}
+	if limit > 0 {
+		q += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := d.conn.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("db: event_log list: %w", err)
+	}
+	defer rows.Close()
+	var out []EventLogRow
+	for rows.Next() {
+		var (
+			r       EventLogRow
+			at, eat string
+			counted int
+		)
+		if err := rows.Scan(&at, &eat, &r.EventID, &r.Action, &r.Method,
+			&r.MediaType, &r.Repository, &r.Tag, &r.UserAgent, &r.Addr,
+			&r.Host, &r.Actor, &r.Reason, &counted); err != nil {
+			return nil, fmt.Errorf("db: event_log scan: %w", err)
+		}
+		if t, perr := parseTimeOrZeroOrNil(at); perr == nil {
+			r.At = t
+		}
+		if t, perr := parseTimeOrZeroOrNil(eat); perr == nil {
+			r.EventAt = t
+		}
+		r.Counted = counted != 0
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("db: event_log iterate: %w", err)
+	}
+	return out, nil
+}
+
+// EventLogEnforceLimit caps event_log to `limit` rows, keeping the newest
+// ones (by at DESC). Mirrors PullJobsEnforceLimit: same single-statement
+// pattern, same atomic DELETE.
+//
+// v0.7.18: the in-memory ring (recentCap = 200) had no on-disk
+// counterpart, so a restart wiped "最近事件" clean. 200 is the same
+// number the ring uses, matching what the UI was already rendering
+// before the restart.
+//
+// limit <= 0 is a no-op.
+func (d *Db) EventLogEnforceLimit(ctx context.Context, limit int) (int64, error) {
+	if limit <= 0 {
+		return 0, nil
+	}
+	res, err := d.conn.ExecContext(ctx, `
+		DELETE FROM event_log
+		WHERE id NOT IN (
+		    SELECT id FROM event_log
+		    ORDER BY at DESC
+		    LIMIT ?
+		)
+	`, limit)
+	if err != nil {
+		return 0, fmt.Errorf("db: event_log enforce limit: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("db: event_log enforce limit rows: %w", err)
+	}
+	return n, nil
 }
 
 func ensureParent(path string) error {
