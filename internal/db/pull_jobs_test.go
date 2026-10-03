@@ -522,3 +522,60 @@ func TestEventLogRecordAndEnforceLimit(t *testing.T) {
 		t.Errorf("EventLogList(5) = %d rows, want 5", len(rows))
 	}
 }
+
+
+// TestEventLogCount covers v0.7.20: EventLogCount returns Total /
+// Accepted (counted=1) / Rejected (counted=0). Insert a mix of counted
+// rows + a couple of zero-counted rows and assert the split.
+func TestEventLogCount(t *testing.T) {
+	d := newTestDB(t)
+	ctx := context.Background()
+
+	for i := 0; i < 5; i++ {
+		if err := d.EventLogRecord(ctx, EventLogRow{
+			At: time.Now().UTC().Add(time.Duration(i) * time.Second),
+			EventID: "evt-ok-" + string(rune('a'+i)),
+			Action:  "pull",
+			Counted: true,
+		}); err != nil {
+			t.Fatalf("EventLogRecord ok: %v", err)
+		}
+	}
+	for i := 0; i < 3; i++ {
+		if err := d.EventLogRecord(ctx, EventLogRow{
+			At: time.Now().UTC().Add(time.Duration(10+i) * time.Second),
+			EventID: "evt-rej-" + string(rune('a'+i)),
+			Action:  "pull",
+			Counted: false,
+		}); err != nil {
+			t.Fatalf("EventLogRecord rej: %v", err)
+		}
+	}
+
+	counts, err := d.EventLogCount(ctx)
+	if err != nil {
+		t.Fatalf("EventLogCount: %v", err)
+	}
+	if counts.Total != 8 {
+		t.Errorf("Total = %d, want 8", counts.Total)
+	}
+	if counts.Accepted != 5 {
+		t.Errorf("Accepted = %d, want 5", counts.Accepted)
+	}
+	if counts.Rejected != 3 {
+		t.Errorf("Rejected = %d, want 3", counts.Rejected)
+	}
+	// Empty DB returns 0s without error.
+	d2, err := Open(tempDBPath(t, "empty.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer d2.Close()
+	c2, err := d2.EventLogCount(ctx)
+	if err != nil {
+		t.Fatalf("EventLogCount on empty: %v", err)
+	}
+	if c2.Total != 0 || c2.Accepted != 0 || c2.Rejected != 0 {
+		t.Errorf("empty counts = %+v, want all zero", c2)
+	}
+}

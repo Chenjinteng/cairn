@@ -955,9 +955,10 @@ export default function StatsPage({
                   界面会继续说旧数字，而且不报错。
                 */}
                 <div style={{ fontSize: 12, color: 'var(--color-text-3)', marginBottom: 8 }}>
-                  这张表只保留最近 {eventTotals?.bufferSize ?? 0} 条，且<strong>只存在内存里</strong>
-                  {' '}—— 服务重启就清空，也没有更早的历史。想看更早的请用上面的「见过的客户端」
-                  （它落盘，重启不丢）。
+                  这张表只保留最近 {eventTotals?.bufferSize ?? 0} 条，存到本地 SQLite
+                  的 event_log 表里 —— 服务重启不丢，但每 24h 由 retentionLoop
+                  跑一次 EventLogEnforceLimit 把超过 {eventTotals?.bufferSize ?? 200}
+                  条的最老事件清掉。
                 </div>
                 {/*
                  * v0.6.23: PageLoading 改成 position: absolute 覆盖在 Collapse

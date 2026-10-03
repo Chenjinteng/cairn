@@ -1350,6 +1350,38 @@ func (d *Db) EventLogEnforceLimit(ctx context.Context, limit int) (int64, error)
 	return n, nil
 }
 
+// EventLogCounts groups the totals /api/stats/events returns. accepted
+// is COUNT WHERE counted=1 (events that hit heat); rejected is COUNT
+// WHERE counted=0 (events that didn't, e.g. failed signature). self /
+// ignored were tracked as atomic counters pre-v0.7.20; resurrecting
+// them needs an event_log schema bump, so for now they're always 0 in
+// the API output — the StatsEvents handler stamps them as zero so the
+// UI shape stays stable.
+type EventLogCounts struct {
+	Total    int64 // COUNT(*)
+	Accepted int64 // COUNT(*) WHERE counted = 1
+	Rejected int64 // COUNT(*) WHERE counted = 0
+}
+
+// EventLogCount returns one COUNT(*) over event_log, plus the
+// counted=1 / counted=0 split. Single transaction so the totals agree
+// at the same instant (the two queries see the same row set).
+//
+// v0.7.20: replaces the in-memory atomic counters on Handler; SQLite
+// is fast enough that an aggregation query per /api/stats/events call
+// is cheaper than maintaining dual state and worrying about restart
+// inconsistency.
+func (d *Db) EventLogCount(ctx context.Context) (EventLogCounts, error) {
+	var c EventLogCounts
+	if err := d.conn.QueryRowContext(ctx,
+		`SELECT COUNT(*), COALESCE(SUM(counted), 0) FROM event_log`,
+	).Scan(&c.Total, &c.Accepted); err != nil {
+		return c, fmt.Errorf("db: event_log count: %w", err)
+	}
+	c.Rejected = c.Total - c.Accepted
+	return c, nil
+}
+
 func ensureParent(path string) error {
 	dir := filepath.Dir(path)
 	if dir == "" || dir == "." {

@@ -49,9 +49,14 @@ func TestIngestLocal_CountsPull(t *testing.T) {
 	if !h.IngestLocal(ev) {
 		t.Fatalf("IngestLocal returned false on a counted event")
 	}
-	tot := h.SnapshotTotals()
-	if tot.Accepted != 1 {
-		t.Errorf("accepted = %d, want 1", tot.Accepted)
+	// v0.7.20: Accepted / Rejected now live in event_log, derived via
+	// COUNT(*) / SUM(counted) on each /api/stats/events call.
+	counts, err := d.EventLogCount(context.Background())
+	if err != nil {
+		t.Fatalf("EventLogCount: %v", err)
+	}
+	if counts.Accepted != 1 {
+		t.Errorf("accepted = %d, want 1", counts.Accepted)
 	}
 	rows, err := d.GetSeries(context.Background(), time.Unix(0, 0), 100)
 	if err != nil {
@@ -75,7 +80,10 @@ func TestIngestLocal_RespectsKillSwitch(t *testing.T) {
 	if h.IngestLocal(ev) {
 		t.Fatalf("IngestLocal returned true while kill switch was on")
 	}
-	tot := h.SnapshotTotals()
+	tot, err := d.EventLogCount(context.Background())
+	if err != nil {
+		t.Fatalf("EventLogCount: %v", err)
+	}
 	if tot.Accepted != 0 {
 		t.Errorf("accepted = %d, want 0 (kill switch on)", tot.Accepted)
 	}
@@ -113,9 +121,16 @@ func TestIngestLocal_IgnoreRuleFolds(t *testing.T) {
 	if h.IngestLocal(ev) {
 		t.Fatalf("IngestLocal returned true on an ignored UA")
 	}
-	tot := h.SnapshotTotals()
-	if tot.Accepted != 0 || tot.Ignored != 1 {
-		t.Errorf("totals = %+v, want Accepted=0 Ignored=1", tot)
+	// v0.7.20: ignored events do not land in event_log (was previously
+	// folded into an atomic counter that the new SQLite path doesn't
+	// replace yet). Verify both that the SQLite heat table is empty
+	// AND that event_log got no row.
+	counts, err := d.EventLogCount(context.Background())
+	if err != nil {
+		t.Fatalf("EventLogCount: %v", err)
+	}
+	if counts.Total != 0 {
+		t.Errorf("event_log total = %d, want 0 (ignored UA must NOT land)", counts.Total)
 	}
 	rows, err := d.GetSeries(context.Background(), time.Unix(0, 0), 100)
 	if err != nil {
@@ -137,12 +152,15 @@ func TestIngestLocal_SelfPushCounted(t *testing.T) {
 	if !h.IngestLocal(ev) {
 		t.Fatalf("self PUT should be counted")
 	}
-	tot := h.SnapshotTotals()
-	if tot.Accepted != 1 {
-		t.Errorf("accepted = %d, want 1 (self PUT counts)", tot.Accepted)
+	// v0.7.20: self PUT still counts (event_log.counted = 1); the
+	// separate `self` field on the old atomic counter is gone for
+	// now (see CHANGELOG v0.7.20 — needs event_log schema bump).
+	counts, err := d.EventLogCount(context.Background())
+	if err != nil {
+		t.Fatalf("EventLogCount: %v", err)
 	}
-	if tot.Self != 0 {
-		t.Errorf("self counter = %d, want 0 (PUT is not folded)", tot.Self)
+	if counts.Accepted != 1 {
+		t.Errorf("accepted = %d, want 1 (self PUT counts)", counts.Accepted)
 	}
 	rows, err := d.GetSeries(context.Background(), time.Unix(0, 0), 100)
 	if err != nil {
@@ -163,9 +181,12 @@ func TestIngestLocal_WrongMethodRejected(t *testing.T) {
 	if h.IngestLocal(ev) {
 		t.Fatalf("IngestLocal returned true on a GET event")
 	}
-	tot := h.SnapshotTotals()
+	tot, err := d.EventLogCount(context.Background())
+	if err != nil {
+		t.Fatalf("EventLogCount: %v", err)
+	}
 	if tot.Accepted != 0 || tot.Rejected != 1 {
-		t.Errorf("totals = %+v, want Accepted=0 Rejected=1", tot)
+		t.Errorf("counts = %+v, want Accepted=0 Rejected=1", tot)
 	}
 	rows, err := d.GetSeries(context.Background(), time.Unix(0, 0), 100)
 	if err != nil {

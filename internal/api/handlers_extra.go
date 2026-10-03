@@ -1724,14 +1724,31 @@ func (e *ExtraHandlers) StatsRepositories(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, out)
 }
 
+// StatsEvents returns the recent-event list plus aggregated totals.
+//
+// v0.7.20: source of truth is event_log (a SQLite table). The
+// previous in-memory ring + atomic counters were redundant; this
+// handler now derives totals from a single COUNT / SUM query against
+// the table.
+//
+// self and ignored stay in the response as zeros (pre-v0.7.20 shape
+// preserved so the UI doesn't have to change). Resurrecting them
+// needs an event_log schema bump (add is_self / ignored_reason
+// columns) and is on hold — see CHANGELOG v0.7.20.
 func (e *ExtraHandlers) StatsEvents(w http.ResponseWriter, r *http.Request) {
 	limit := parseLimit(r, 50)
 	items := []any{}
+	bufferSize := 0
 	totals := map[string]any{
-		"accepted": int64(0), "rejected": int64(0), "buffered": 0,
-		"bufferSize": 0, "self": int64(0), "ignored": int64(0),
+		"accepted":   int64(0),
+		"rejected":   int64(0),
+		"buffered":   0,
+		"bufferSize": 0,
+		"self":       int64(0),
+		"ignored":    int64(0),
 	}
 	if e.Events != nil {
+		bufferSize = e.Events.EventLogCap()
 		evs := e.Events.RecentEvents()
 		if limit > 0 && limit < len(evs) {
 			evs = evs[:limit]
@@ -1739,13 +1756,14 @@ func (e *ExtraHandlers) StatsEvents(w http.ResponseWriter, r *http.Request) {
 		for _, ev := range evs {
 			items = append(items, ev)
 		}
-		t := e.Events.SnapshotTotals()
-		totals["accepted"] = t.Accepted
-		totals["rejected"] = t.Rejected
-		totals["buffered"] = t.Buffered
-		totals["bufferSize"] = t.BufferSize
-		totals["self"] = t.Self
-		totals["ignored"] = t.Ignored
+		totals["bufferSize"] = bufferSize
+		totals["buffered"] = len(evs)
+	}
+	if e.DB != nil {
+		if c, err := e.DB.EventLogCount(r.Context()); err == nil {
+			totals["accepted"] = c.Accepted
+			totals["rejected"] = c.Rejected
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"items":  items,

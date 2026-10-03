@@ -6,6 +6,55 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.20] - 2026-10-03
+
+本轮清理 events handler 里两组「以前是内存的提示」的冗余状态。属既有
+清理机制简化 → 小版本进位 0.7.20。
+
+### 删除
+
+- **`Handler.recent []RecentEvent` 内存 ring**: v0.7.18 之后 event_log 表
+  持久化最近事件,ring 是冗余副本。`RecentEvents()` 改为纯 DB 读
+  (`h.Store.EventLogList`),冷启动 / 热启动行为一致。
+- **`Handler.accepted / rejected / selfFolded / ignoredFold atomic.Int64` 计数**:
+  永远只活在内存,重启清零。StatsEvents handler 现在用一条 SQL
+  (`SELECT COUNT(*), SUM(counted) FROM event_log`) 替代。accepted / rejected
+  数据完整;**self / ignored 永久返 0**,因为 event_log schema 还没存这两个
+  维度(列),需要 schema bump 加 `is_self` / `ignored_reason` 才能复活。
+- **`Handler.SnapshotTotals()` 方法**: 配合上面 counters 被删,StatsEvents
+  handler 自己读 DB。
+- **`appendRecent()` 函数**: 改名 `recordEventLog`,逻辑只剩「写 event_log
+  表」,不再有 ring 双写。
+
+### 保留
+
+- **`Handler.clients` per-UA map**: 5s flush event_seen,重启从 DB load,
+  是 hot-cache 模式。读频高 (每次 ingest + 每次 StatsClients 请求),
+  保留有意义。
+
+### API
+
+- `/api/stats/events` 形状不变 (`{ items: [...], totals: { accepted, rejected,
+  buffered, bufferSize, self, ignored } }`)。`accepted / rejected` 走 DB,
+  `bufferSize` 走 `Handler.EventLogCap()` (= 200),`buffered` 走当前查询
+  返回行数,`self / ignored` 保持字段名返 0 (向后兼容,前端文案更新)。
+
+### 单测
+
+- `internal/events/local_test.go`: 5 个 SnapshotTotals 用法全部迁移到
+  `db.EventLogCount(ctx)`。
+- `internal/db/pull_jobs_test.go:TestEventLogCount`: 混合 counted=true /
+  counted=false 8 行,断言 Total / Accepted / Rejected 划分正确;空表
+  返 (0,0,0)。
+
+### 前端
+
+- `web/src/pages/stats-page.tsx`: 文案「只存在内存里, 服务重启就清空」
+  改为「存到本地 SQLite 的 event_log 表里, 服务重启不丢, 24h 由
+  retentionLoop 清掉超过 N 条的最老事件」。
+
+---
+
 ## [0.7.19] - 2026-10-03
 
 本轮新增 OpenAPI / Swagger UI 文档子系统。属新增一整个模块 (新包

@@ -41,7 +41,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/Chenjinteng/cairn/internal/db"
@@ -210,30 +209,32 @@ func VerifySignature(token string, header string, body []byte) bool {
 // Handler is the HTTP handler for the notification webhook.
 //
 // Verifies signature, applies ShouldCount, persists increments via
-// db.Db.ActivityIncrement, and maintains three in-memory views:
-//   - recent ring (per-event debug panel, /api/stats/events items)
-//   - lifetime counters (totals: accepted/rejected/self/ignored)
+// db.Db.ActivityIncrement, and maintains one in-memory view:
 //   - per-client aggregate (/api/stats/clients)
+//
+// v0.7.20: removed the recent-event ring and the accepted/rejected/
+// selfFolded/ignoredFold atomic counters. Both were in-memory only and
+// lost on restart; the SQLite event_log table (added in v0.7.18) is the
+// single source of truth for event-level data, so the ring was a
+// redundant copy. RecentEvents() now reads event_log directly via
+// h.Store.EventLogList, and StatsEvents() derives totals from
+// COUNT(*) / COUNT(*) WHERE counted=1 SQL queries against the same table.
+// self / ignored counts are no longer tracked (the event_log row that
+// would carry those flags doesn't exist; resurrecting them needs a
+// schema bump and can wait).
 type Handler struct {
 	Store *db.Db
 	Token string
 
 	// enabled (v0.5.4) is an optional live predicate consulted on every
 	// request. nil means "always enabled". server.go installs
-	// cfg.AllowRegistryEvents so flipping allow.registry_events on
-	// the settings page starts/stops ingestion without a restart.
+	// cfg.AllowRegistryEvents so flipping allow.registry_events on the
+	// settings page starts/stops ingestion without a restart.
 	enabled func() bool
 
 	mu        sync.Mutex
 	ignoreUAs []string
-	recent    []RecentEvent
-	recentCap int
 	clients   map[string]*clientAgg
-
-	accepted    atomic.Int64 // counted → heat + ring
-	rejected    atomic.Int64 // not counted, not ignored, not self-read → ring
-	selfFolded  atomic.Int64 // self UA reads, folded (no ring)
-	ignoredFold atomic.Int64 // hit ignore rule, folded (no ring)
 }
 
 // RecentEvent is the public view of an event; its JSON shape is exactly
@@ -292,17 +293,16 @@ type Totals struct {
 	Ignored    int64 `json:"ignored"`
 }
 
-// NewHandler wires a Handler. recentCap is the size of the debug ring.
+// NewHandler wires a Handler. The recentCap argument was retired in v0.7.20
+// along with the in-memory ring it controlled; the events table is the
+// single source of truth now. Kept as a positional int for caller
+// compatibility (server.go still compiles unchanged) but the value
+// is ignored.
 func NewHandler(store *db.Db, token string, ignoreUAs []string, recentCap int) *Handler {
-	if recentCap <= 0 {
-		recentCap = 200
-	}
 	h := &Handler{
 		Store:     store,
 		Token:     token,
 		ignoreUAs: append([]string{}, ignoreUAs...),
-		recent:    make([]RecentEvent, 0, recentCap),
-		recentCap: recentCap,
 		clients:   map[string]*clientAgg{},
 	}
 	// v0.5.52: load persisted client aggregates at startup so the
@@ -450,55 +450,43 @@ func (h *Handler) recordClient(ua string, now time.Time, counted bool) {
 	c.dirty = true
 }
 
-// appendRecent pushes an event into the bounded ring; oldest evicted when full.
-func (h *Handler) appendRecent(ev RecentEvent) {
-	h.mu.Lock()
-	if len(h.recent) >= h.recentCap {
-		h.recent = h.recent[1:]
+// recordEventLog persists one event to event_log. v0.7.20: the
+// previous in-memory ring is gone; this is now the only place that
+// captures event-level data. Disk I/O runs without holding the
+// per-client map lock so a slow SQLite doesn't wedge concurrent
+// readers. Best-effort: a failed write is logged but doesn't block
+// the event pipeline.
+func (h *Handler) recordEventLog(ev RecentEvent) {
+	if h.Store == nil {
+		return
 	}
-	h.recent = append(h.recent, ev)
-	h.mu.Unlock()
-	// v0.7.18: persist to event_log so the heat UI's "最近事件" panel
-	// survives a restart. Disk I/O runs *after* the ring lock so a slow
-	// SQLite can't wedge concurrent readers. Best-effort: a failed write
-	// is logged and the ring still has the entry for this session.
-	if h.Store != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		err := h.Store.EventLogRecord(ctx, db.EventLogRow{
-			At: ev.At, EventAt: ev.EventAt, EventID: ev.ID,
-			Action: ev.Action, Method: ev.Method, MediaType: ev.MediaType,
-			Repository: ev.Repository, Tag: ev.Tag,
-			UserAgent: ev.UserAgent, Addr: ev.Addr, Host: ev.Host,
-			Actor: ev.Actor, Reason: ev.Reason,
-			Counted: ev.Counted,
-		})
-		cancel()
-		if err != nil {
-			slog.Warn("events: event_log insert failed", "err", err)
-		}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	err := h.Store.EventLogRecord(ctx, db.EventLogRow{
+		At: ev.At, EventAt: ev.EventAt, EventID: ev.ID,
+		Action: ev.Action, Method: ev.Method, MediaType: ev.MediaType,
+		Repository: ev.Repository, Tag: ev.Tag,
+		UserAgent: ev.UserAgent, Addr: ev.Addr, Host: ev.Host,
+		Actor: ev.Actor, Reason: ev.Reason,
+		Counted: ev.Counted,
+	})
+	cancel()
+	if err != nil {
+		slog.Warn("events: event_log insert failed", "err", err)
 	}
 }
 
-// RecentEvents returns a snapshot copy of the in-memory ring (newest first).
+// RecentEvents returns the most-recent N events from event_log.
 //
-// v0.7.18: falls back to event_log when the ring is empty (cold start,
-// before any new event has been received this session). Reads at most
-// recentCap rows so the UI sees the same number of items it did before.
+// v0.7.20: pure DB read. The previous in-memory ring (200-cap) was
+// redundant once event_log was persisted (v0.7.18); cutting it makes
+// the cold-start path identical to the warm path, and the UI keeps
+// seeing the same number of items (cap = eventLogLimit / 200,
+// matching retentionLoop).
 func (h *Handler) RecentEvents() []RecentEvent {
-	h.mu.Lock()
-	ring := append([]RecentEvent(nil), h.recent...)
-	h.mu.Unlock()
-	if len(ring) > 0 {
-		out := make([]RecentEvent, len(ring))
-		for i, ev := range ring {
-			out[len(ring)-1-i] = ev
-		}
-		return out
-	}
 	if h.Store == nil {
 		return nil
 	}
-	rows, err := h.Store.EventLogList(context.Background(), h.recentCap)
+	rows, err := h.Store.EventLogList(context.Background(), h.EventLogCap())
 	if err != nil {
 		slog.Warn("events: event_log list failed", "err", err)
 		return nil
@@ -516,6 +504,12 @@ func (h *Handler) RecentEvents() []RecentEvent {
 	}
 	return out
 }
+
+// EventLogCap is the limit RecentEvents passes to EventLogList. Exposed
+// so /api/stats/events can echo it back as `bufferSize` (the UI shows
+// "最近 X 条" using this value; before v0.7.20 it was the in-memory
+// ring cap).
+func (h *Handler) EventLogCap() int { return 200 }
 
 // processOne runs the per-event pipeline (ShouldCount → recordClient →
 // ring → ActivityIncrement). Returns true iff the event was counted
@@ -559,17 +553,19 @@ func (h *Handler) processOne(ctx context.Context, ev Event, now time.Time, ignor
 
 	switch {
 	case dec.Count:
-		// Counted events always enter the ring — including self PUTs,
-		// so "why did heat change" stays answerable.
-		h.accepted.Add(1)
-		h.appendRecent(recent)
+		// Counted events (incl. self PUTs) hit event_log so the
+		// heat UI's "最近事件" panel shows them. v0.7.20: only
+		// counted=true rows land in event_log now; ignored and
+		// self paths are folded silently (no row).
+		h.recordEventLog(recent)
 	case dec.Ignored:
-		h.ignoredFold.Add(1) // folded; keeps the ring free for new clients
+		// folded; no ring / no event_log row.
 	case self:
-		h.selfFolded.Add(1) // self reads (rescans): pure noise, folded
+		// folded; no ring / no event_log row.
 	default:
-		h.rejected.Add(1)
-		h.appendRecent(recent)
+		// Rejected (failed signature / unknown UA, etc.): still
+		// useful for the "最近事件" debug panel, so persist.
+		h.recordEventLog(recent)
 	}
 
 	if !dec.Count {
@@ -650,22 +646,6 @@ func (h *Handler) RunFlushLoop(ctx context.Context, interval time.Duration) {
 		case <-t.C:
 			h.flushSeen(ctx)
 		}
-	}
-}
-
-// SnapshotTotals returns the lifetime counters plus current ring occupancy.
-func (h *Handler) SnapshotTotals() Totals {
-	h.mu.Lock()
-	buffered := len(h.recent)
-	size := h.recentCap
-	h.mu.Unlock()
-	return Totals{
-		Accepted:   h.accepted.Load(),
-		Rejected:   h.rejected.Load(),
-		Buffered:   buffered,
-		BufferSize: size,
-		Self:       h.selfFolded.Load(),
-		Ignored:    h.ignoredFold.Load(),
 	}
 }
 
