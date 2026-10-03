@@ -1604,16 +1604,29 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
                       alignItems: 'center',
                       gap: 8,
                       margin: '0 0 8px 4px',
-                      padding: '6px 10px',
-                      background: 'rgba(13, 148, 136, 0.06)',
-                      borderLeft: '3px solid var(--primary, #0d9488)',
+                      padding: '8px 12px',
+                      /*
+                       * v0.7.30: 深色模式适配 —— 之前 background rgba(...0.06)
+                       * 在深色背景下几乎看不见;改用更深的底色 + 更粗更鲜明的
+                       * 左边框,亮色 / 深色模式都明显。border / icon / text 都
+                       * 走固定色,不依赖 CSS 变量(避免 dark theme 变量失效)。
+                       */
+                      background: 'rgba(13, 148, 136, 0.14)',
+                      borderLeft: '4px solid #0d9488',
                       borderRadius: '0 4px 4px 0',
                       fontSize: 12,
                     }}
                   >
-                    <SyncOutlined spin style={{ color: 'var(--primary, #0d9488)' }} />
-                    <span style={{ color: '#666' }}>正在同步:</span>
-                    <code style={{ fontFamily: 'ui-monospace, monospace', color: '#14171e' }}>
+                    <SyncOutlined spin style={{ color: '#0d9488', fontSize: 14 }} />
+                    <span style={{
+                      color: 'var(--text-color-secondary, rgba(0,0,0,0.65))',
+                      fontWeight: 500,
+                    }}>正在同步:</span>
+                    <code style={{
+                      fontFamily: 'ui-monospace, monospace',
+                      color: 'var(--text-color, rgba(0,0,0,0.85))',
+                      fontWeight: 500,
+                    }}>
                       {task.lastRunCurrentRepo}{task.lastRunCurrentTag ? `:${task.lastRunCurrentTag}` : ''}
                     </code>
                     {/*
@@ -1621,10 +1634,36 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
                      * 这是「正在列 tag」不是「卡住了」。
                      */}
                     {!task.lastRunCurrentTag && (
-                      <span style={{ color: '#999', fontSize: 11 }}>
+                      <span style={{ color: 'var(--text-color-tertiary, rgba(0,0,0,0.45))', fontSize: 11 }}>
                         (正在列出 tag)
                       </span>
                     )}
+                    {/*
+                     * v0.7.30: 运行中加进度(已同步 / 总数)chip —— 数据来自
+                     * runsByTaskId[task.id].runs[0],3s 轮询自动跟新。空状态
+                     * 不渲染(runs 还没加载完 / run row 已结束)。
+                     * 进度语义:done = reposSynced + reposFailed(已处理),
+                     * failed 用红色 chip 强调。
+                     */}
+                    {(() => {
+                      // 进度数据来自展开时 fetch 的 runs 列表第一行(
+                      // SyncRunListByTask 按 started_at DESC 排序,所以 runs[0]
+                      // 是当前最新 run —— 跟 task.lastRunStatus 指示的 running
+                      // run 是同一个)。3s 轮询自动刷新。
+                      const liveRun = runsByTaskId[task.id]?.runs?.[0];
+                      if (!liveRun || liveRun.reposTotal === 0) return null;
+                      const done = liveRun.reposSynced + liveRun.reposFailed;
+                      const pct = Math.round((done / liveRun.reposTotal) * 100);
+                      return (
+                        <Tag
+                          color={liveRun.reposFailed > 0 ? 'warning' : 'processing'}
+                          style={{ marginLeft: 'auto', fontFamily: 'ui-monospace, monospace' }}
+                        >
+                          {done}/{liveRun.reposTotal} ({pct}%)
+                          {liveRun.reposFailed > 0 && ` · ${liveRun.reposFailed} 失败`}
+                        </Tag>
+                      );
+                    })()}
                   </div>
                 )}
                 {/*

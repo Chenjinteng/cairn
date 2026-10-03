@@ -6,6 +6,36 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.30] - 2026-10-04
+
+本轮两个 UX 微调:展开行的「正在同步:」banner 加深色模式适配 +
+运行中加进度 chip(已同步 / 总数)。
+
+### 改动
+
+- `sync-page.tsx` 展开行 banner(深色模式适配):
+  - background: `rgba(13, 148, 136, 0.06)` → `rgba(13, 148, 136, 0.14)` —— 深色背景下更明显
+  - borderLeft: `3px solid var(--primary)` → `4px solid #0d9488` —— 粗一点 + 固定色(避免 dark theme 变量失效)
+  - padding: `6px 10px` → `8px 12px` —— 更宽敞
+  - icon / text 颜色走固定 `#0d9488` / `var(--text-color, ...)` —— 适配主题
+- `sync-page.tsx` 展开行 banner(运行中进度 chip):
+  - 右侧加 `<Tag color="processing">5/74 (6%)</Tag>` —— 数据来自 `runsByTaskId[task.id].runs[0]`(已 fetch 的 run 列表第一行),`3s` 轮询自动跟新。
+  - `done = reposSynced + reposFailed`(已处理的),`pct = round(done / reposTotal * 100)`。
+  - 失败项 > 0 时 chip 变橙色 + 附「X 失败」尾注。
+  - runs 还没加载完 或 run row reposTotal === 0 时不渲染(running 早期 / 已结束的旧 run)。
+- 后端 / API / DB / SQL:全部不变。
+
+### 行为
+
+- 进度数据**只在展开行 banner 显示**(任务列表行不显示)—— banner 本身
+  只在 `task.lastRunStatus === 'running' && lastRunCurrentRepo` 才出现,
+  进度 chip 是 banner 的附属,条件一致。
+- `runs[0]` 是 `SyncRunListByTask` 按 `started_at DESC` 排序的第一行,
+  跟 `task.lastRunStatus` 指示的 running run 是同一条;3s 轮询会自动刷新
+  整个 banner(repo 跳 + 进度跳)。
+
+---
+
 ## [0.7.29] - 2026-10-04
 
 本轮解决 sync items 表 70+ 镜像只失败 1 个时定位困难的痛点:
