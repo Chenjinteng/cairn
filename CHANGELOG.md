@@ -6,6 +6,21 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.14] - 2026-10-03
+
+本轮补一个 UX 缺口 —— 历史任务(从 SQLite reload 的)在 UI 展开时 phases 永远空,
+因为成功任务不存阶段明细。JobPhases 组件已经有「`fromHistory + phases.length === 0`
+显示提示」逻辑,只是后端没标 fromHistory。属既有 UI 体验补全 → 小版本进位 0.7.14。
+
+### 新增
+
+- **后端 · `internal/api/handlers_extra.go` `ListPullJobs` 给 DB row 加 `fromHistory: true`**(v0.7.14)。
+  JobPhases 组件的早就有分支:`phases.length === 0 && fromHistory` → 显示
+  「历史记录只保留汇总;阶段明细仅在失败 / 取消的任务上保存」提示。
+  之前后端没标这个字段,展开历史任务显示一片空白让人误以为坏了。
+
+---
+
 ## [0.7.13] - 2026-10-03
 
 本轮修 v0.7.12 引入的 UI 崩溃 bug —— `dbPullJobToView` 直接返 raw

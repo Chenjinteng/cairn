@@ -335,7 +335,15 @@ func (e *ExtraHandlers) ListPullJobs(w http.ResponseWriter, r *http.Request) {
 				// frontend gets the same shape it always did. Skipping uiJobView
 				// marshalled Phases as null, which then crashed the row's
 				// "running phase" find() in the UI.
-				out = append(out, uiJobView(dbPullJobToView(row)))
+				//
+				// v0.7.14: flag history rows so the UI can show a "phases
+				// not retained" hint instead of an empty expanded panel.
+				// Without this flag the JobPhases component fell through to
+				// its empty branch and rendered nothing for fromHistory===undefined,
+				// leaving the user staring at a blank row.
+				view := uiJobView(dbPullJobToView(row))
+				view["fromHistory"] = true
+				out = append(out, view)
 			}
 		}
 		// PullJobsList failure is non-fatal: live jobs still render.
