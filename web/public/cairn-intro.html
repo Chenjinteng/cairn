@@ -107,6 +107,46 @@
   同循环。重启后历史行展开仍显示「blob #3 sha256:...」,「最近事件」面板
   不会清空。**按用户拍板走小版本,与 AGENTS.md 默认「新增模块 → 中版本」
   规则不同**;若日后想统一回滚到中版本节奏,可重打 v0.8.0 tag。
+
+  v0.7.19 hotfix 1-4: 文档 API + Swagger UI 接入 —— `docs.Mount` 在生产 chi
+  `/api` 子树下挂载路径 `/api/docs`(docs.Mount 内部用 `/api/docs` 绝对路径,
+  需镜像生产 Route 嵌套;hotfix 改 docs.Mount 路径 + 测试加 `newTestRouter`
+  helper 镜像生产嵌套)、swagger-ui 静态资源 / openapi.yaml bare colon /
+  OpenAPI 3.0 semantic validation;测试必须镜像生产 Route 嵌套,否则 docs.
+  Mount 路径在生产变成 `/api/api/docs` 404。
+
+  v0.7.20: 砍 events 内存 ring + atomic 计数器 —— 持久化到 event_log 之后
+  in-memory ring 是双份内存浪费,改成 atomic int64 + 单调序列号读侧,内存
+  占用从 O(N) 降到 O(1)。
+
+  v0.7.21: 同步任务加 `tags_filter` 精确清单 —— 旁路 `/v2/_catalog`(Docker
+  Hub 几万仓库 + mirror 镜像清单响应经常卡顿),sync_tasks.tags_filter 列
+  (schema v12),pullTag 走 GetManifest 直接拉;UI「Tags 过滤」TextArea
+  + 实时解析预览。运维场景:大 mirror 同步从「拉十几分钟 / 可能超时」变成
+  「按需拉 / 秒级返回」。
+
+  v0.7.22: 大镜像 long_timeout_repos + tags_filter 实时解析预览 —— 「长
+  Timeout 镜像」Input(列仓库名换行,匹配走 30 分钟 deadline)+ 复用 v0.7.21
+  的解析预览体验;engine 接受 longRepos 透传给 registry client。
+
+  v0.7.23: 运行中 sync 任务可中止 —— Engine.Cancel(taskID) + cancels map
+  + cancelMu + execute terminal write 改用 background ctx(避免 cancel 后
+  UpdateRun 失败)+ POST /sync/{id}/cancel API + UI「中止」按钮 +
+  handleCancel。运维场景:大镜像拉 5 分钟不动,不想等 timeout 直接点中止。
+
+  v0.7.24: 撤掉 v0.7.22 long_timeout_repos(标 deprecated)+ 智能 timeout
+  —— engine.pullTag probe GetManifest 拿 mf.Size,> 1 GiB 自动切 30 分钟
+  deadline,无须用户配置。LongTimeoutRepos 字段保留 wire/DB 兼容。
+
+  v0.7.25: 智能 timeout 决策落库 + UI chip —— sync_run_items.timeout_used
+  列(schema v13 → v14,迁移即加列),"default" / "long" 透传到 API;UI
+  耗时列宽 90 → 130,long 的 item 画橙色「30min」chip,running 状态也展示
+  —— 切回 UI 看大镜像拉取不再怀疑 hang。
+
+  v0.7.26: 静默轮询路径的 10s 超时 toast —— 手机切屏 / VPN 慢速触发的
+  listSyncRuns 超时是预期 abort,3s setInterval 自愈;轮询路径(force=true)
+  失败不弹 toast,首次手动展开失败仍 toast(那是真信号)。精准去噪,不动
+  超时/轮询间隔。
 -->
 <style>
   :root {
@@ -524,7 +564,7 @@
       <h1 class="wordmark">Cairn<span class="dot">.</span></h1>
       <div class="tagline">Lightweight Container Image Infrastructure</div>
       <div class="tagline-cn">轻量级容器镜像基础设施平台</div>
-      <div class="version-badge">v<span data-cairn-version>0.7.18</span> · 单进程单二进制</div>
+      <div class="version-badge">v<span data-cairn-version>0.7.26</span> · 单进程单二进制</div>
       <div class="chips">
         <span class="chip">单进程单二进制</span>
         <span class="chip">scratch 镜像 ~15 MB</span>
@@ -743,7 +783,7 @@ curl -fsS http://localhost:8787/healthz</pre>
     <span>
       <a href="https://github.com/Chenjinteng/cairn" target="_blank" rel="noopener">⭐ GitHub · github.com/Chenjinteng/cairn</a>
     </span>
-    <span>v<span data-cairn-version>0.7.0</span> · <a href="/">管理控制台 →</a></span>
+    <span>v<span data-cairn-version>0.7.26</span> · <a href="/">管理控制台 →</a></span>
   </footer>
 
 </div>
