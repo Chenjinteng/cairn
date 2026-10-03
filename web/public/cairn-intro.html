@@ -87,6 +87,10 @@
   重启后内存清零,删 SQLite 里的历史 job 一律返 pull: job not found。
   加 db.PullJobDelete(ctx, id) → (bool, error),handler 在 Executor.Delete
   返 ErrJobNotFound 时 fallback 到 DB.Delete;DB 也没才真 404。
+
+  v0.7.16: 拉取历史 50 条上限 —— 之前 pull_jobs 只按时间窗口清(activity_daily /
+  event_seen 的 retentionDays),不停累积。加 db.PullJobsEnforceLimit(ctx, 50),
+  retentionLoop 24h 跑一次,只留最新 50 条。硬编码不暴露设置项。
 -->
 <style>
   :root {

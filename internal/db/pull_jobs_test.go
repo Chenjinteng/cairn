@@ -211,3 +211,66 @@ func TestPullJobDelete(t *testing.T) {
 		t.Error("PullJobDelete on unknown id returned true, want false")
 	}
 }
+
+// TestPullJobsEnforceLimit covers v0.7.16: pull_jobs had no cap, every
+// terminal job accumulated forever. The retentionLoop now caps at 50;
+// 60 rows in → 10 rows out, keeping the newest 50 by started_at.
+func TestPullJobsEnforceLimit(t *testing.T) {
+	d := newTestDB(t)
+	ctx := context.Background()
+
+	// Insert 60 jobs spaced 1 minute apart so started_at is unique and
+	// we can identify which 10 get pruned deterministically.
+	base := time.Date(2026, 10, 3, 9, 0, 0, 0, time.UTC)
+	for i := 0; i < 60; i++ {
+		row := PullJobRow{
+			ID:        "job-" + strings.Repeat("x", i+1),
+			SourceRef: "library/x:1",
+			DestRepo:  "library/x",
+			DestTag:   "1",
+			State:     "succeeded",
+			StartedAt: base.Add(time.Duration(i) * time.Minute),
+			EndedAt:   base.Add(time.Duration(i)*time.Minute + time.Minute),
+			CreatedAt: base.Add(time.Duration(i) * time.Minute),
+		}
+		if err := d.PullJobRecord(ctx, row); err != nil {
+			t.Fatalf("PullJobRecord[%d]: %v", i, err)
+		}
+	}
+
+	n, err := d.PullJobsEnforceLimit(ctx, 50)
+	if err != nil {
+		t.Fatalf("PullJobsEnforceLimit: %v", err)
+	}
+	if n != 10 {
+		t.Errorf("deleted = %d, want 10 (60 - 50 cap)", n)
+	}
+
+	rows, err := d.PullJobsList(ctx, 0)
+	if err != nil {
+		t.Fatalf("PullJobsList after cap: %v", err)
+	}
+	if len(rows) != 50 {
+		t.Errorf("row count after cap = %d, want 50", len(rows))
+	}
+	// PullJobsList orders started_at DESC — newest first. So rows[0] is
+	// the newest kept (base + 59min) and rows[len-1] is the oldest kept
+	// (base + 10min). The first 10 inserted (base + 0min..9min) are gone.
+	if !rows[0].StartedAt.Equal(base.Add(59 * time.Minute)) {
+		t.Errorf("newest kept row started at %v, want %v (base+59m)",
+			rows[0].StartedAt, base.Add(59*time.Minute))
+	}
+	if !rows[len(rows)-1].StartedAt.Equal(base.Add(10 * time.Minute)) {
+		t.Errorf("oldest kept row started at %v, want %v (base+10m)",
+			rows[len(rows)-1].StartedAt, base.Add(10*time.Minute))
+	}
+
+	// limit <= 0 is a no-op.
+	n, err = d.PullJobsEnforceLimit(ctx, 0)
+	if err != nil {
+		t.Errorf("PullJobsEnforceLimit(0): %v", err)
+	}
+	if n != 0 {
+		t.Errorf("PullJobsEnforceLimit(0) deleted %d rows, want 0", n)
+	}
+}

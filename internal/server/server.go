@@ -377,6 +377,12 @@ func (r *Runtime) Start(ctx context.Context) error {
 // 24h. The setting is re-read on each pass, so changing it on the
 // settings page takes effect on the next pass without a restart.
 //
+// v0.7.16: also caps pull_jobs at historyLimit (50) so the history
+// table doesn't grow unbounded — distinct from the time-based
+// retention above because pull_jobs isn't partitioned by date; one
+// operator spamming the UI could still create thousands of rows inside
+// the retention window.
+//
 // The DB call gets its own short-lived context: using r.PullCtx directly
 // would turn a normal shutdown into a scary "cleanup failed" warning.
 func (r *Runtime) retentionLoop(ctx context.Context) {
@@ -413,9 +419,29 @@ func (r *Runtime) retentionLoop(ctx context.Context) {
 				"cutoff", cutoff.Format("2006-01-02"),
 				"retention_days", days)
 		}
+
+		// Pull history cap. 50 matches the product call — see CHANGELOG
+		// v0.7.16. Hardcoded rather than configurable: the operator only
+		// asked for "保留 50 条就行" — surfacing it on the settings page
+		// adds noise without benefit.
+		cleanupCtx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
+		m, mErr := r.DB.PullJobsEnforceLimit(cleanupCtx2, historyLimit)
+		cancel2()
+		if mErr != nil {
+			slog.Warn("pull history cap failed", "err", mErr, "limit", historyLimit)
+		} else if m > 0 {
+			slog.Info("pull history cap", "deleted", m, "limit", historyLimit)
+		}
+
 		timer.Reset(interval)
 	}
 }
+
+// historyLimit is the cap on rows in pull_jobs. Keep small enough that
+// the UI stays responsive (every page load re-reads all rows); large
+// enough that an operator scrubbing the history can see what happened
+// last week. 50 was the explicit product call in v0.7.16.
+const historyLimit = 50
 
 // Stop tears down background goroutines + the HTTP server with a 30s grace.
 func (r *Runtime) Stop() {

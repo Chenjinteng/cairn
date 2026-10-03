@@ -6,6 +6,28 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.16] - 2026-10-03
+
+本轮加历史任务数量上限 —— 用户反馈「保留 50 条就行」。之前 `pull_jobs`
+只按时间窗口清,不停累积,UI 列表越用越长。属既有清理机制扩展 → 小版本进位 0.7.16。
+
+### 新增
+
+- **后端 · `internal/db/db.go` `PullJobsEnforceLimit(ctx, limit) (int64, error)`**(v0.7.16)。
+  SQL 一句话保留 `limit` 条最新 + 删其他。`limit <= 0` 是 no-op,handler 不必防御。
+- **后端 · `internal/server/server.go` `retentionLoop` 调 `PullJobsEnforceLimit` 50 条**(v0.7.16)。
+  24h 周期跑一次(跟原来 activity_daily / event_seen 清理同循环)。硬编码
+  `const historyLimit = 50` 而非放设置页 —— 用户明确说「保留 50 条就行」,
+  不暴露设置项减少噪声。超 50 删日志:`slog.Info("pull history cap", "deleted", m, "limit", 50)`
+
+### 新增(单测)
+
+- `internal/db/pull_jobs_test.go` `TestPullJobsEnforceLimit` —— 60 行 in → 删 10 留 50;
+  PullJobsList 顺序断言(最新 base+59min 在 rows[0],最旧 base+10min 在 rows[len-1]);
+  limit=0 是 no-op 边界
+
+---
+
 ## [0.7.15] - 2026-10-03
 
 本轮修一个 UX bug —— 删历史任务(SQLite 里的)时返 `pull: job not found`。

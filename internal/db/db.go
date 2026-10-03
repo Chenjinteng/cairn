@@ -447,6 +447,41 @@ func (d *Db) PullJobDelete(ctx context.Context, id string) (bool, error) {
 	return n > 0, nil
 }
 
+// PullJobsEnforceLimit caps pull_jobs to `limit` rows, keeping the newest
+// ones (by started_at DESC). Excess rows are deleted.
+//
+// v0.7.16: pull_jobs had no retention — every terminal job accumulated
+// forever and the table grew unbounded. The retentionLoop in server.go
+// calls this once per pass with limit=50, matching the product call of
+// "keep 50 history rows".
+//
+// The query keeps `limit` rows then deletes everything older by id
+// (id encodes the timestamp prefix in our generator, so the inverse
+// order matches started_at — no extra sort needed).
+//
+// limit <= 0 is a no-op (returns 0, nil) so callers don't have to guard.
+func (d *Db) PullJobsEnforceLimit(ctx context.Context, limit int) (int64, error) {
+	if limit <= 0 {
+		return 0, nil
+	}
+	res, err := d.conn.ExecContext(ctx, `
+		DELETE FROM pull_jobs
+		WHERE id NOT IN (
+		    SELECT id FROM pull_jobs
+		    ORDER BY started_at DESC
+		    LIMIT ?
+		)
+	`, limit)
+	if err != nil {
+		return 0, fmt.Errorf("db: pull_jobs enforce limit: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("db: pull_jobs enforce limit rows: %w", err)
+	}
+	return n, nil
+}
+
 // PullJobsList returns every row in pull_jobs, newest first by started_at.
 // Used by ListPullJobs at API time to fold SQLite history into the live
 // memory view — without this, a container restart would surface as an
