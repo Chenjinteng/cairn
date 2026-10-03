@@ -4,9 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Chenjinteng/cairn/internal/db"
 )
 
 // The UI binds to these exact JSON keys (web/src/types.ts PullPhase);
@@ -134,6 +138,141 @@ func TestExecuteOneCancelledMarksPhases(t *testing.T) {
 	}
 	if got.Phases[0].Status != PhaseFailed || got.Phases[0].Message != "Task cancelled" {
 		t.Fatalf("cancelled straggler = %+v", got.Phases[0])
+	}
+}
+
+// tempPullDB returns an opened *db.Db whose file lives in t.TempDir() and
+// is removed on test cleanup. Used by the v0.7.17 record-on-cancel test.
+func tempPullDB(t *testing.T) *db.Db {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "pull.db")
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Close()
+		_ = os.Remove(path)
+	})
+	return d
+}
+
+// TestExecuteOneRecordsTerminalCancelled is the v0.7.17 regression. Before
+// the fix, PullJobRecord fired inside RunOne right after PutManifest, with
+// j.view.State still "running" — so a job cancelled after the manifest
+// write but before executeOne's state flip persisted a row with state =
+// "running" that survived the in-memory eviction and re-surfaced as a
+// ghost "拉取中" entry the UI couldn't actually cancel.
+//
+// The fix moved PullJobRecord into executeOne, after the state flip. This
+// test cancels mid-flight and asserts the persisted row carries state =
+// "cancelled" (not "running").
+func TestExecuteOneRecordsTerminalCancelled(t *testing.T) {
+	started := make(chan struct{})
+	e := NewExecutor(2, func(ctx context.Context, j *Job) error {
+		updatePhase(j, 0, func(p *Phase) { p.Status = PhaseRunning })
+		close(started)
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	e.DB = tempPullDB(t)
+
+	v := e.Submit(NewJob{SourceRef: "alpine:3.19"})
+	done := make(chan struct{})
+	go func() {
+		e.executeOne(context.Background(), e.jobs[v.ID])
+		close(done)
+	}()
+	<-started
+	if err := e.Cancel(v.ID); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("executeOne did not return after cancel")
+	}
+
+	// Give the deferred record call a tick to commit. The record uses
+	// its own 5s context, so it can't hang the test indefinitely, but
+	// SQLite writes complete synchronously inside ExecContext — the
+	// done signal above is sufficient.
+	rows, err := e.DB.PullJobsList(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("PullJobsList: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("PullJobsList rows = %d, want 1", len(rows))
+	}
+	if rows[0].State != "cancelled" {
+		t.Errorf("persisted state = %q, want cancelled (v0.7.17 regression: was 'running')", rows[0].State)
+	}
+	if rows[0].ID != v.ID {
+		t.Errorf("persisted id = %q, want %q", rows[0].ID, v.ID)
+	}
+}
+
+// TestExecuteOneRecordsTerminalFailed covers the failed-path side of the
+// same fix: a job that errors out (transfer fail, manifest write fail,
+// etc.) must persist with state = "failed", never "running".
+func TestExecuteOneRecordsTerminalFailed(t *testing.T) {
+	wantErr := errors.New("synthetic transfer failure")
+	e := NewExecutor(2, func(ctx context.Context, j *Job) error {
+		updatePhase(j, 0, func(p *Phase) { p.Status = PhaseRunning })
+		return wantErr
+	})
+	e.DB = tempPullDB(t)
+
+	v := e.Submit(NewJob{SourceRef: "alpine:3.19"})
+	done := make(chan struct{})
+	go func() {
+		e.executeOne(context.Background(), e.jobs[v.ID])
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("executeOne did not return")
+	}
+
+	rows, err := e.DB.PullJobsList(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("PullJobsList: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	if rows[0].State != "failed" {
+		t.Errorf("persisted state = %q, want failed", rows[0].State)
+	}
+	if rows[0].Error != wantErr.Error() {
+		t.Errorf("persisted error = %q, want %q", rows[0].Error, wantErr.Error())
+	}
+}
+
+// TestExecuteOneNoDBNoCrash pins the nil-DB path: pre-v0.7.17 behaviour
+// (in-memory only, no history) must still work. e.DB = nil should make
+// the record call a no-op, not panic.
+func TestExecuteOneNoDBNoCrash(t *testing.T) {
+	e := NewExecutor(2, func(ctx context.Context, j *Job) error {
+		updatePhase(j, 0, func(p *Phase) { p.Status = PhaseRunning })
+		return nil
+	})
+	// Deliberately no e.DB.
+
+	v := e.Submit(NewJob{SourceRef: "alpine:3.19"})
+	done := make(chan struct{})
+	go func() {
+		e.executeOne(context.Background(), e.jobs[v.ID])
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("executeOne did not return")
+	}
+	if got := e.Get(v.ID); got.State != StateSucceeded {
+		t.Errorf("state = %s, want succeeded", got.State)
 	}
 }
 

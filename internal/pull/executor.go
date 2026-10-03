@@ -343,26 +343,10 @@ func (o *Orchestrator) RunOne(ctx context.Context, j *Job) error {
 	}
 	j.MutexHeld(func(vv *JobView) { vv.FinalDigest = written })
 
-	if o.DB != nil {
-		vv := j.View()
-		row := db.PullJobRow{
-			ID:         vv.ID,
-			SourceRef:  vv.SourceRef,
-			DestRepo:   destRepo,
-			DestTag:    destTag,
-			// v0.7.12: was hardcoded string(StateSucceeded) regardless of
-			// outcome — failed / cancelled jobs never reached the history
-			// table, so ListPullJobs (which reads memory only) showed an
-			// empty list after a restart. Use the job's actual state now.
-			State:      string(vv.State),
-			BytesDone:  vv.BytesDone,
-			BytesTotal: vv.BytesTotal,
-			StartedAt:  vv.StartedAt,
-			EndedAt:    vv.EndedAt,
-			CreatedAt:  vv.CreatedAt,
-		}
-		_ = o.DB.PullJobRecord(ctx, row)
-	}
+	// v0.7.17: terminal-state recording moved to Executor.executeOne
+	// (right after the state flip). Recording here, before the flip,
+	// persisted "running" rows that survived a restart and reappeared
+	// as ghost "拉取中" rows the UI couldn't actually cancel.
 	return nil
 }
 

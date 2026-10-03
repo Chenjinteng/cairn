@@ -274,3 +274,100 @@ func TestPullJobsEnforceLimit(t *testing.T) {
 		t.Errorf("PullJobsEnforceLimit(0) deleted %d rows, want 0", n)
 	}
 }
+
+// TestPullJobCancel covers v0.7.17: Cancel() must flip a "running" or
+// "queued" row to "cancelled" (the v0.7.17 Cancel API fallback path).
+// Already-terminal rows must be left alone — flipping a "succeeded" row
+// would be a regression that hides real history from the operator.
+func TestPullJobCancel(t *testing.T) {
+	d := newTestDB(t)
+	ctx := context.Background()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	mk := func(id, state string) PullJobRow {
+		return PullJobRow{
+			ID:        id,
+			SourceRef: "library/x:1",
+			DestRepo:  "library/x",
+			DestTag:   "1",
+			State:     state,
+			StartedAt: now.Add(-time.Minute),
+			EndedAt:   now, // pre-cancel; PullJobCancel must overwrite
+			CreatedAt: now.Add(-time.Minute),
+		}
+	}
+
+	// Pre-cancel the row's state must be in {running, queued} for the
+	// UPDATE to take effect. The regression we're guarding against is
+	// "PullJobCancel touched a succeeded/failed/cancelled row".
+	for _, state := range []string{"running", "queued"} {
+		row := mk("job-"+state, state)
+		if err := d.PullJobRecord(ctx, row); err != nil {
+			t.Fatalf("PullJobRecord(%s): %v", state, err)
+		}
+		flipped, err := d.PullJobCancel(ctx, row.ID)
+		if err != nil {
+			t.Fatalf("PullJobCancel(%s): %v", state, err)
+		}
+		if !flipped {
+			t.Errorf("PullJobCancel(%s): flipped = false, want true", state)
+		}
+		rows, err := d.PullJobsList(ctx, 0)
+		if err != nil {
+			t.Fatalf("PullJobsList: %v", err)
+		}
+		var got *PullJobRow
+		for i := range rows {
+			if rows[i].ID == row.ID {
+				got = &rows[i]
+				break
+			}
+		}
+		if got == nil {
+			t.Fatalf("PullJobsList: row %s not found after cancel", row.ID)
+		}
+		if got.State != "cancelled" {
+			t.Errorf("after cancel state = %q, want cancelled", got.State)
+		}
+		// ended_at should be the *current* time (PullJobCancel writes
+		// time.Now()), not the pre-cancel endedAt — operators see this
+		// in the history list as "cancelled at HH:MM". Use !Before so
+		// same-second writes don't flake on coarse clocks.
+		if got.EndedAt.Before(now) {
+			t.Errorf("after cancel ended_at = %v, want >= %v", got.EndedAt, now)
+		}
+	}
+
+	// Already-terminal rows must NOT be flipped. The handler relies on
+	// this to keep "succeeded" / "failed" rows honest — otherwise the
+	// UI would erase a successful pull the moment someone clicks a
+	// stale Cancel button on it.
+	for _, state := range []string{"succeeded", "failed", "cancelled"} {
+		row := mk("job-terminal-"+state, state)
+		if err := d.PullJobRecord(ctx, row); err != nil {
+			t.Fatalf("PullJobRecord(%s): %v", state, err)
+		}
+		flipped, err := d.PullJobCancel(ctx, row.ID)
+		if err != nil {
+			t.Fatalf("PullJobCancel(%s): %v", state, err)
+		}
+		if flipped {
+			t.Errorf("PullJobCancel(%s) flipped terminal row — must not", state)
+		}
+		rows, _ := d.PullJobsList(ctx, 0)
+		for _, r := range rows {
+			if r.ID == row.ID && r.State != state {
+				t.Errorf("terminal row %s state changed: got %q want %q", state, r.State, state)
+			}
+		}
+	}
+
+	// Unknown id: not flipped, no error.
+	flipped, err := d.PullJobCancel(ctx, "job-does-not-exist")
+	if err != nil {
+		t.Errorf("PullJobCancel(unknown): %v", err)
+	}
+	if flipped {
+		t.Errorf("PullJobCancel(unknown): flipped = true, want false")
+	}
+}

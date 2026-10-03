@@ -412,6 +412,37 @@ func (d *Db) PullJobRecord(ctx context.Context, j PullJobRow) error {
 	return err
 }
 
+// PullJobCancel marks a row as cancelled, but only if it is still in a
+// pre-terminal state ("running" or "queued"). Returns (true, nil) when
+// the row was updated, (false, nil) when the row didn't exist or was
+// already terminal. v0.7.17: lets the Cancel API recover from ghost
+// "running" rows that older code paths left in pull_jobs before the
+// state flip — those rows were no longer in the executor's e.jobs map,
+// so calling Executor.Cancel(id) returned ErrJobNotFound. This method
+// is the fallback for exactly that case.
+//
+// A non-existent row is indistinguishable from "already terminal" to
+// the caller; both are no-ops (the UI will simply not find the row to
+// cancel). When the row IS flipped, ended_at is set to now so the
+// history list renders the cancellation time honestly.
+func (d *Db) PullJobCancel(ctx context.Context, id string) (bool, error) {
+	res, err := d.conn.ExecContext(ctx, `
+		UPDATE pull_jobs
+		   SET state = 'cancelled',
+		       ended_at = ?
+		 WHERE id = ?
+		   AND state IN ('running', 'queued')
+	`, time.Now().UTC().Format(time.RFC3339), id)
+	if err != nil {
+		return false, fmt.Errorf("db: pull_jobs cancel: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("db: pull_jobs cancel rows: %w", err)
+	}
+	return n > 0, nil
+}
+
 // PullJobRow is the SQL-side view of a pull job. Mirrors pull.Job but
 // without the mutex / cancelFn (which aren't meaningful on disk).
 type PullJobRow struct {

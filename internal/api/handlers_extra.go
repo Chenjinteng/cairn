@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"sort"
@@ -397,7 +398,55 @@ func (e *ExtraHandlers) CancelPullJob(w http.ResponseWriter, r *http.Request) {
 	id := chiURLParam(r, "id")
 	if err := e.Executor.Cancel(id); err != nil {
 		if errors.Is(err, pull.ErrJobNotFound) {
-			writeError(w, r, http.StatusNotFound, err)
+			// v0.7.17: fallback to the SQLite history. Older versions
+			// of Cairn recorded jobs with state="running" (the row was
+			// written before executeOne flipped the job's state). After
+			// a restart those rows surface as ghost "拉取中" entries
+			// in the UI's history list, the operator clicks Cancel,
+			// the executor doesn't know the id (it lives only on disk
+			// now), and the response is the unhelpful "pull job not
+			// found". PullJobCancel flips the row to "cancelled" if
+			// it's still in a pre-terminal state, so the operator's
+			// intent goes through.
+			if e.DB == nil {
+				writeError(w, r, http.StatusNotFound, err)
+				return
+			}
+			cancelCtx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+			flipped, flipErr := e.DB.PullJobCancel(cancelCtx, id)
+			cancel()
+			if flipErr != nil {
+				slog.Warn("pull job cancel db fallback failed", "id", id, "err", flipErr)
+				writeError(w, r, http.StatusNotFound, err)
+				return
+			}
+			if !flipped {
+				// Row wasn't in pull_jobs, or was already terminal —
+				// either way, there is nothing to cancel from the
+				// caller's perspective.
+				writeError(w, r, http.StatusNotFound, err)
+				return
+			}
+			// Re-read the row so the UI gets the up-to-date view
+			// (state, endedAt).
+			rows, listErr := e.DB.PullJobsList(r.Context(), 0)
+			if listErr == nil {
+				for _, row := range rows {
+					if row.ID == id {
+						view := uiJobView(dbPullJobToView(row))
+						view["fromHistory"] = true
+						writeJSON(w, http.StatusOK, view)
+						return
+					}
+				}
+			}
+			// The flip succeeded but we couldn't re-read the row
+			// (very unlikely). Echo a minimal success body so the UI
+			// can refresh without showing "not found".
+			writeJSON(w, http.StatusOK, map[string]any{
+				"id":     id,
+				"status": "cancelled",
+			})
 			return
 		}
 		writeError(w, r, http.StatusBadRequest, err)

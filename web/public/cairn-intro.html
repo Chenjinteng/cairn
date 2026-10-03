@@ -91,6 +91,14 @@
   v0.7.16: 拉取历史 50 条上限 —— 之前 pull_jobs 只按时间窗口清(activity_daily /
   event_seen 的 retentionDays),不停累积。加 db.PullJobsEnforceLimit(ctx, 50),
   retentionLoop 24h 跑一次,只留最新 50 条。硬编码不暴露设置项。
+
+  v0.7.17: 修「取消拉取返 pull job not found」—— PullJobRecord 之前在
+  RunOne 末尾调,但 job state 翻到 terminal 在 executeOne 拿到 RunOne 返回
+  后才发生,所以写盘时 state 仍是 running。重启后 DB 留 stale running row,
+  UI 端按 status==='running' 渲染「拉取中」+ 取消按钮,但 Executor.Cancel
+  只查内存 e.jobs,这个 id 早就 evict 没了。挪 PullJobRecord 到 executeOne
+  翻 state 之后 + Cancel API 在 e.jobs 找不到时 fallback 到新加的
+  db.PullJobCancel(ctx, id) 把 row 翻 cancelled 返 200,UI 不再弹「not found」。
 -->
 <style>
   :root {
@@ -508,7 +516,7 @@
       <h1 class="wordmark">Cairn<span class="dot">.</span></h1>
       <div class="tagline">Lightweight Container Image Infrastructure</div>
       <div class="tagline-cn">轻量级容器镜像基础设施平台</div>
-      <div class="version-badge">v<span data-cairn-version>0.6.14</span> · 单进程单二进制</div>
+      <div class="version-badge">v<span data-cairn-version>0.7.17</span> · 单进程单二进制</div>
       <div class="chips">
         <span class="chip">单进程单二进制</span>
         <span class="chip">scratch 镜像 ~15 MB</span>

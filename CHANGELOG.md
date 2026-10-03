@@ -6,6 +6,27 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.17] - 2026-10-03
+
+本轮修「取消拉取返 pull job not found」bug。两条叠加: 落库时机错(写的是
+running 不是 terminal)+ Cancel API 只查内存,见不到 SQLite-only 的 history
+row。两处都是既有逻辑修正 → 小版本进位 0.7.17。
+
+### 修复
+
+- **取消拉取返 "pull job not found"**: `executor.RunOne` 末尾调 `PullJobRecord` 写 SQLite,但 `j.view.State` 翻到 terminal 是在 `Executor.executeOne` 拿到 RunOne 返回值之后才发生 —— 落库那一瞬间 state 仍是 `"running"`。重启后 DB 留下 stale running row,UI 端按 `status === 'running'` 渲染「拉取中」+ 取消按钮,但 `Executor.Cancel` 只查 `e.jobs`,内存里这个 id 早就 evict 没了,返 `ErrJobNotFound` → 「pull job not found」。
+  修法: 把 `PullJobRecord` 调用从 `RunOne` 挪到 `executeOne` 翻 state 之后(`internal/pull/queue.go`),这样写盘时一定是 terminal state(succeeded / failed / cancelled 之一),DB 不再产生 stale running row。
+- **Cancel API 加 DB fallback**: 即便再有 stale row,`ExtraHandlers.CancelPullJob` 在 `e.jobs` 找不到时调新加的 `db.PullJobCancel(ctx, id)`,把 row 从 running/queued 翻到 cancelled + 重新读出视图返 200。`internal/db/db.go:PullJobCancel` 用 `WHERE id = ? AND state IN ('running', 'queued')`,已经 terminal 的 row 不动(succeeded/failed/cancelled 不会被误伤)。
+- **执行器到 SQLite 的依赖接线**: `Executor` 加 `DB *db.Db` 字段,server.go 创建 executor 后 `executor.DB = store_db`。nil-safe,`e.DB == nil` 时 record 跳过(老版本行为)。
+
+### 新增
+
+- `internal/db/db.go:PullJobCancel(ctx, id) (bool, error)`: UPDATE state='cancelled' WHERE id=? AND state IN ('running','queued'),ended_at = now。返 (true, nil) 当 row 被翻, (false, nil) 当 row 不存在或已经 terminal。
+- `internal/db/pull_jobs_test.go:TestPullJobCancel`: 三组断言 —— running/queued 翻 cancelled + ended_at 更新;succeeded/failed/cancelled 三种 terminal 状态 row 不动;未知 id 返 (false, nil)。
+- `internal/pull/phase_test.go:TestExecuteOneRecordsTerminalCancelled` / `TestExecuteOneRecordsTerminalFailed` / `TestExecuteOneNoDBNoCrash`: 覆盖 v0.7.17 root cause —— cancel 之后 DB row 一定是 cancelled 不是 running;fail 路径写 failed;e.DB == nil 不 panic。
+
+---
+
 ## [0.7.16] - 2026-10-03
 
 本轮加历史任务数量上限 —— 用户反馈「保留 50 条就行」。之前 `pull_jobs`

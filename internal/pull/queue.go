@@ -21,6 +21,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/Chenjinteng/cairn/internal/db"
 )
 
 // JobState is the lifecycle of a pull job.
@@ -185,6 +187,11 @@ type Executor struct {
 	runCh     chan struct{} // signals "there's a queued job to run"
 
 	runJob func(ctx context.Context, j *Job) error // injected by orchestrator
+
+	// DB persists terminal-state snapshots so the UI's history survives
+	// a restart. v0.7.17: nil-safe; when nil, executeOne skips recording
+	// (no history, like pre-v0.7.12 behavior).
+	DB *db.Db
 }
 
 // NewExecutor creates a queue of size queueSize. runJob is called serially;
@@ -424,7 +431,36 @@ func (e *Executor) executeOne(parent context.Context, j *Job) {
 		})
 	}
 	j.cancelFn = nil
+	// Snapshot the terminal state under the lock; disk I/O runs after
+	// unlock so a slow SQLite can't wedge concurrent readers.
 	j.mu.Unlock()
+	snap := j.View()
+
+	// v0.7.17: record the *terminal* state to SQLite here (was previously
+	// recorded in RunOne right after PutManifest, with vv.State still
+	// "running"). That earlier write left a stale "running" row on disk,
+	// which the UI happily showed as "拉取中" after a restart, exposing
+	// a Cancel button for a job that was no longer in the executor —
+	// hitting it produced "pull job not found" because Cancel() only
+	// checks e.jobs. Recording after the flip keeps the on-disk state
+	// honest.
+	if e.DB != nil {
+		recordCtx, cancelRec := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = e.DB.PullJobRecord(recordCtx, db.PullJobRow{
+			ID:         snap.ID,
+			SourceRef:  snap.SourceRef,
+			DestRepo:   snap.DestRepo,
+			DestTag:    snap.DestTag,
+			State:      string(snap.State),
+			BytesDone:  snap.BytesDone,
+			BytesTotal: snap.BytesTotal,
+			StartedAt:  snap.StartedAt,
+			EndedAt:    snap.EndedAt,
+			CreatedAt:  snap.CreatedAt,
+			Error:      snap.Error,
+		})
+		cancelRec()
+	}
 }
 
 // runJobGuarded calls runJob but converts a panic into an ordinary error.

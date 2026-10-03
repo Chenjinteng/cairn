@@ -149,6 +149,11 @@ func Build(cfg *config.Config) (*Runtime, error) {
 		PullHistoryRetention: cfg.PullHistoryRetentionDays(),
 	}
 	executor := pull.NewExecutor(50, orchestrator.RunOne)
+	// v0.7.17: executeOne records the terminal state to SQLite after
+	// the state flip (see internal/pull/queue.go). The orchestrator's
+	// DB reference is wired through the executor so the flip-then-record
+	// pipeline actually fires.
+	executor.DB = store_db
 
 	// 7. Events handler (webhook receiver for registry notifications + the
 	// sink for built-in registry self-reports).
