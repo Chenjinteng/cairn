@@ -10,12 +10,20 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+// newTestRouter mirrors the production mounting in internal/api/api.go:
+// `r.Route("/api", func(r chi.Router) { docs.Mount(r); ... })`. Mount
+// hangs /docs* off the parent /api prefix, so the test must too.
+func newTestRouter() *chi.Mux {
+	r := chi.NewRouter()
+	r.Route("/api", func(r chi.Router) { Mount(r) })
+	return r
+}
+
 // TestMountServesIndex checks /api/docs returns the swagger-ui HTML
 // shell with the right content-type, and that the body actually
 // references the spec URL we wired into swagger-initializer.js.
 func TestMountServesIndex(t *testing.T) {
-	r := chi.NewRouter()
-	Mount(r)
+	r := newTestRouter()
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/docs", nil)
@@ -38,8 +46,7 @@ func TestMountServesIndex(t *testing.T) {
 // with the right content-type, and that the body is parseable OpenAPI
 // (starts with `openapi:` or `%YAML 1.2` etc.).
 func TestMountServesSpec(t *testing.T) {
-	r := chi.NewRouter()
-	Mount(r)
+	r := newTestRouter()
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/docs/openapi.yaml", nil)
@@ -63,8 +70,7 @@ func TestMountServesSpec(t *testing.T) {
 // traversal must 404 (defensive guard against "../" leaking outside
 // the embed).
 func TestMountServesDistAsset(t *testing.T) {
-	r := chi.NewRouter()
-	Mount(r)
+	r := newTestRouter()
 
 	t.Run("css", func(t *testing.T) {
 		rr := httptest.NewRecorder()
@@ -92,10 +98,6 @@ func TestMountServesDistAsset(t *testing.T) {
 
 	t.Run("path_traversal_blocked", func(t *testing.T) {
 		rr := httptest.NewRecorder()
-		// chi normalises "../" in the URL before ServeHTTP gets it,
-		// so we can't test the actual bytes; we test that an
-		// unrecognised asset name 404s instead of silently serving
-		// something from outside the embed.
 		req := httptest.NewRequest(http.MethodGet, "/api/docs/does-not-exist", nil)
 		r.ServeHTTP(rr, req)
 		if rr.Code != http.StatusNotFound {

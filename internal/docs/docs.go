@@ -5,10 +5,11 @@
 // build-time npm/swag CLI needed; the only "external" content is the
 // vendored dist directory which is checked into git.
 //
-// Two routes:
+// Three routes:
 //
 //	GET /api/docs              — swagger-ui HTML shell
 //	GET /api/docs/openapi.yaml — the spec itself
+//	GET /api/docs/*            — swagger-ui static assets (css / js / favicon)
 //
 // Both are served with no auth (same as /healthz); the /api/docs page
 // is for human operators reading the API, not for clients to consume.
@@ -31,14 +32,20 @@ var distFS embed.FS
 //go:embed openapi.yaml
 var specFS embed.FS
 
-// Mount registers /api/docs routes on r. The swagger-ui HTML expects
-// the spec at "/api/docs/openapi.yaml" (relative URL set in the
-// vendored swagger-initializer.js), so the spec is served there even
-// though it lives at /api/docs/openapi.yaml in the API surface.
+// Mount registers docs routes on r.
+//
+// r is expected to be the /api subtree router (see internal/api/api.go:
+// `r.Route("/api", func(r chi.Router) { docs.Mount(r); ... })`). Paths
+// here therefore omit the leading "/api/" — Mount adds /docs, /docs/openapi.yaml,
+// /docs/*, which the parent /api prefix turns into /api/docs etc.
+//
+// The swagger-ui HTML expects the spec at "/api/docs/openapi.yaml"
+// (relative URL set in the vendored swagger-initializer.js), so the
+// spec is served at /api/docs/openapi.yaml in the API surface.
 func Mount(r chi.Router) {
-	r.Get("/api/docs", serveIndex)
-	r.Get("/api/docs/openapi.yaml", serveSpec)
-	r.Get("/api/docs/*", serveDist)
+	r.Get("/docs", serveIndex)
+	r.Get("/docs/openapi.yaml", serveSpec)
+	r.Get("/docs/*", serveDist)
 }
 
 func serveIndex(w http.ResponseWriter, _ *http.Request) {
