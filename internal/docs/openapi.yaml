@@ -836,6 +836,13 @@ paths:
       summary: 清空全部热度数据 (热度聚合 + 已知客户端 + 幂等记录)
       description: |
         不影响拉取历史。不可撤销,UI 必须二次确认。
+      responses:
+        '200':
+          description: 已清空
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiOk'
 
   # ───────── sync ─────────
   /api/sync/:
@@ -894,6 +901,13 @@ paths:
     delete:
       tags: [sync]
       summary: 删除任务 (级联删除 runs / schedules)
+      responses:
+        '200':
+          description: 已删除
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiOk'
 
   /api/sync/{id}/run:
     post:
@@ -1361,7 +1375,7 @@ components:
         name: { type: string }
         registryUrl: { type: string }
         username: { type: string }
-        password: { type: string, description: 明文,服务端 AES-256-GCM 加密落盘 }
+        password: { type: string, description: "明文,服务端 AES-256-GCM 加密落盘" }
         note: { type: string }
 
     UpdateCredentialReq:
@@ -1370,7 +1384,7 @@ components:
         name: { type: string }
         registryUrl: { type: string }
         username: { type: string }
-        password: { type: string, description: 留空 = 不改; 清空 = 关闭密码 }
+        password: { type: string, description: "留空 = 不改; 清空 = 关闭密码" }
         note: { type: string }
 
     CredentialTestResult:
@@ -1493,7 +1507,7 @@ components:
         direction: { type: string, enum: [pull, push] }
         remoteUrl: { type: string }
         remoteCredentialId: { type: string }
-        include: { type: string, description: glob, 空 = 全部 }
+        include: { type: string, description: "glob, 空 = 全部" }
         enabled: { type: boolean }
         createdAt: { type: integer, format: int64 }
         updatedAt: { type: integer, format: int64 }
@@ -1559,8 +1573,8 @@ components:
       properties:
         id: { type: integer }
         taskId: { type: integer }
-        cronExpr: { type: string, description: 标准 5 字段 cron (v0.7.4+ 支持时区) }
-        timezone: { type: string, description: IANA 名, e.g. `Asia/Shanghai` }
+        cronExpr: { type: string, description: "标准 5 字段 cron (v0.7.4+ 支持时区)" }
+        timezone: { type: string, description: "IANA 名, e.g. Asia/Shanghai" }
         enabled: { type: boolean }
         nextRunAt: { type: integer, format: int64 }
 

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -205,4 +206,31 @@ func hasUnquotedMappingColon(s string) bool {
 		return true
 	}
 	return false
+}
+
+// TestSpecConformsOpenAPI3 runs the full OpenAPI 3.0 semantic validation
+// against the embedded spec using kin-openapi. This catches the class
+// of bugs that pure YAML parsing misses (e.g. inline flow-style mappings
+// silently truncated on commas, operations missing the required
+// `responses` field, schema types in conflict). Earlier rounds of
+// v0.7.19 shipped with three such issues — this test would have caught
+// all three at unit-test time.
+//
+// The trade-off: pulls github.com/getkin/kin-openapi as a test-only
+// dependency. The library is pure Go (no cgo), single-purpose, and we
+// already vet dependencies per AGENTS.md, so the cost is just the
+// module-graph bytes.
+func TestSpecConformsOpenAPI3(t *testing.T) {
+	body, err := specFS.ReadFile("openapi.yaml")
+	if err != nil {
+		t.Fatalf("read spec: %v", err)
+	}
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData(body)
+	if err != nil {
+		t.Fatalf("parse spec: %v", err)
+	}
+	if err := doc.Validate(loader.Context); err != nil {
+		t.Fatalf("OpenAPI 3.0 validation failed: %v", err)
+	}
 }
