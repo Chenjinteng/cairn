@@ -652,6 +652,8 @@ export interface SyncTask {
   include: string;
   /** v0.7.21：换行分隔的 `repo:tag` 精确清单；非空时引擎跳过 /v2/_catalog，直接按 spec fetch manifest。空 = 走老的 catalog 路径。 */
   tagsFilter?: string;
+  /** v0.7.22：逗号分隔的 repo 名；匹配走 30min client timeout，空 = 全部走 5min 默认。精确匹配不打 glob。 */
+  longTimeoutRepos?: string;
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
@@ -675,6 +677,8 @@ export interface SyncTaskInput {
   include: string;
   /** v0.7.21：见 SyncTask.tagsFilter。空串 = 走 catalog 路径。 */
   tagsFilter: string;
+  /** v0.7.22：见 SyncTask.longTimeoutRepos。空串 = 走默认 5min timeout。 */
+  longTimeoutRepos: string;
   enabled: boolean;
 }
 

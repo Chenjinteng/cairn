@@ -245,10 +245,6 @@ func (e *Engine) runPull(ctx context.Context, task SyncTask, run *SyncRun) error
 	if err != nil {
 		return err
 	}
-	rc, err := newRemoteClient(task.RemoteURL, username, password)
-	if err != nil {
-		return fmt.Errorf("build remote client: %w", err)
-	}
 
 	// v0.7.21: tags_filter 旁路。某些上游(典型:匿名 TCR / Harbor)
 	// 对 /v2/_catalog 返 401 / insufficient_scope,而 docker pull 走
@@ -256,9 +252,18 @@ func (e *Engine) runPull(ctx context.Context, task SyncTask, run *SyncRun) error
 	// (repo, tag) 精确清单」绕过 catalog,直接 fetch manifest。
 	// 空 / 全注释 / 全无效行 → 走回老的 ListRepositories 分支,旧任务行为不变。
 	if specs := ParseTagsFilter(task.TagsFilter); len(specs) > 0 {
-		return e.pullFromSpecs(ctx, rc, run, specs)
+		// v0.7.22: pass longRepos so pullFromSpecs picks per-spec timeout.
+		// Parsed here (not inside pullFromSpecs) so the work isn't repeated
+		// on every spec — the list is shared across the whole run.
+		longRepos := ParseLongTimeoutRepos(task.LongTimeoutRepos)
+		return e.pullFromSpecs(ctx, task, username, password, run, specs, longRepos)
 	}
 
+	// Catalog path: one client for the whole run, default timeout.
+	rc, err := newRemoteClient(task.RemoteURL, username, password, DefaultSyncTimeout)
+	if err != nil {
+		return fmt.Errorf("build remote client: %w", err)
+	}
 	repos, err := rc.ListRepositories(ctx)
 	if err != nil {
 		return fmt.Errorf("list remote repos: %w", err)
@@ -290,6 +295,15 @@ func (e *Engine) runPull(ctx context.Context, task SyncTask, run *SyncRun) error
 // parsed TagSpec list, it pulls each (repo, tag) directly via GetManifest
 // without ever asking the remote for /v2/_catalog or /v2/<repo>/tags/list.
 //
+// v0.7.22: each spec gets its own registry.Client with a per-spec
+// timeout (Default vs Long, matched against longRepos). Per-spec clients
+// are necessary because http.Client.Timeout is set at construction;
+// reusing a single client with the wrong timeout would either kill
+// small repos at 30 min or kill big repos at 5 min. The cost of one
+// client per spec is negligible (TLS handshake amortised over the
+// ~hundreds-of-MB blob transfer) and we CloseIdleConnections after each
+// spec so the goroutine doesn't pin idle conns across the whole run.
+//
 // Per-tag failures don't abort the run — they're recorded as failed
 // sync_run_items rows and counted into ReposFailed, matching the catalog
 // path's contract (v0.6.16). A non-nil error return signals the whole run
@@ -300,13 +314,36 @@ func (e *Engine) runPull(ctx context.Context, task SyncTask, run *SyncRun) error
 // removed; we don't reuse pullRepo because its name and return type both
 // imply "operate on one repo", and feeding it a list of repos feels worse
 // than a sibling function with its own doc.
-func (e *Engine) pullFromSpecs(ctx context.Context, rc *registry.Client, run *SyncRun, specs []TagSpec) error {
+func (e *Engine) pullFromSpecs(ctx context.Context, task SyncTask, username, password string, run *SyncRun, specs []TagSpec, longRepos []string) error {
 	run.ReposTotal = len(specs)
 	for _, s := range specs {
+		// v0.7.22: per-spec timeout. Linear scan is fine — longRepos is
+		// typically 1-5 entries; a map would cost more than it saves.
+		timeout := DefaultSyncTimeout
+		for _, r := range longRepos {
+			if s.Repository == r {
+				timeout = LongSyncTimeout
+				break
+			}
+		}
+		rc, err := newRemoteClient(task.RemoteURL, username, password, timeout)
+		if err != nil {
+			// No client = abort this spec, log, continue with the next.
+			// A bad newRemoteClient here is a configuration bug (bad URL),
+			// not a transient network error, so we don't retry.
+			e.log.Warn("sync: build remote client failed (tags_filter)",
+				"task_id", run.TaskID, "run_id", run.ID,
+				"repo", s.Repository, "tag", s.Tag, "err", err)
+			finishedAt := time.Now().UTC()
+			e.recordRunItem(ctx, run.ID, s.Repository, s.Tag, finishedAt, finishedAt, 0, err)
+			run.ReposFailed++
+			continue
+		}
 		e.progress(ctx, run, s.Repository, s.Tag)
 		startedAt := time.Now().UTC()
 		bytesTotal, tagErr := e.pullTag(ctx, rc, s.Repository, s.Tag)
 		finishedAt := time.Now().UTC()
+		rc.HTTP().CloseIdleConnections()
 		e.recordRunItem(ctx, run.ID, s.Repository, s.Tag, startedAt, finishedAt, bytesTotal, tagErr)
 		if errors.Is(tagErr, context.Canceled) {
 			return fmt.Errorf("run aborted: %w", tagErr)
@@ -600,16 +637,39 @@ func isIndexMediaType(mediaType string) bool {
 // The pair may come from the credential library (v0.6.8 / SYNC-3) —
 // resolution happens in resolveCredentials before this point.
 
+// DefaultSyncTimeout is the per-request body-read deadline used for the
+// median sync spec (small/medium images, single layer a few hundred MB).
+// 5 minutes is enough at ~4 MB/s public bandwidth for ~1 GB and short
+// enough to surface hung layers (mid-stream connection idle-out, blob
+// hash mismatch) before the next spec starts.
+//
+// v0.7.22: oversized repos (multi-GB / dozens of layers like
+// bklite/bklite/vllm, bklite/bklite/server) blow past this — see
+// LongSyncTimeout and engine.runPull's per-spec dispatch.
+const DefaultSyncTimeout = 5 * time.Minute
+
+// LongSyncTimeout is the deadline for spec.Repos in
+// SyncTask.LongTimeoutRepos. 30 minutes covers a 7 GB blob at 4 MB/s
+// (≈ 30 min) with headroom for the cumulative RTT per layer; raising
+// further invites a slow-network troubleshooting nightmare where every
+// spec waits 30 min before failing. Keep this paired with the
+// LongTimeoutRepos opt-in rather than applying it globally.
+const LongSyncTimeout = 30 * time.Minute
+
 // newRemoteClient builds a registry.Client pointing at remoteURL with
 // the destination's Basic-auth credentials stamped on every outbound
 // request. Both fields empty = anonymous (skip auth header); the
 // underlying registry.Client does the same.
-func newRemoteClient(remoteURL, username, password string) (*registry.Client, error) {
+//
+// timeout is the per-request body-read deadline. Callers pick between
+// DefaultSyncTimeout (median case) and LongSyncTimeout (whitelisted
+// oversized repos, v0.7.22) per spec.
+func newRemoteClient(remoteURL, username, password string, timeout time.Duration) (*registry.Client, error) {
 	return registry.NewClient(registry.Config{
 		BaseURL:  remoteURL,
 		Username: username,
 		Password: password,
-		Timeout:  5 * time.Minute,
+		Timeout:  timeout,
 	})
 }
 // recordRunItem persists one row to sync_run_items reflecting a single

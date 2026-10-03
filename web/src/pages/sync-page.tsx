@@ -78,6 +78,7 @@ import {
   updateSyncSchedule,
   updateSyncTask,
 } from '../api';
+import { parseTagsFilter } from '../lib/parse-tags-filter';
 import type {
   ApiResult,
   Credential,
@@ -132,6 +133,8 @@ interface FormValues {
   include: string;
   /** v0.7.21：换行分隔的 `repo:tag` 精确清单；非空时引擎跳过 catalog,直接按 spec fetch manifest。 */
   tagsFilter?: string;
+  /** v0.7.22：逗号分隔的 repo 名；匹配走 30min client timeout,空 = 全部走 5min 默认。 */
+  longTimeoutRepos?: string;
   enabled: boolean;
 }
 
@@ -570,6 +573,7 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
       direction: 'pull',
       include: '',
       tagsFilter: '',
+      longTimeoutRepos: '',
       enabled: true,
     });
     setCredMode('anonymous');  // v0.6.11（SYNC-3）：新建默认匿名,要认证就选「引用凭据」
@@ -599,6 +603,7 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
       remotePassword: '',
       include: task.include,
       tagsFilter: task.tagsFilter ?? '',
+      longTimeoutRepos: task.longTimeoutRepos ?? '',
       enabled: task.enabled,
     });
     setModalOpen(true);
@@ -649,6 +654,8 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
         // 是奇怪的(后面 UI 想加互斥提示可以再说)。Trim 是因为 antd Input.TextArea
         // 会在末尾留 `\n`,直接入库会让无意义的空行走 parser。
         tagsFilter: (values.tagsFilter ?? '').trim(),
+        // v0.7.22: 跟 tagsFilter 同款 trim。空串 = 全部走 5min 默认,旧任务行为不变。
+        longTimeoutRepos: (values.longTimeoutRepos ?? '').trim(),
         enabled: values.enabled,
       };
       const result = editing
@@ -1701,6 +1708,12 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
             文案里点出「互斥风格」但实现不强制 —— 用户同时填两个字段时,当前会优先走
             tags_filter(因为 runPull 入口先看它),include 被忽略。这个判定在 runPull
             的注释里有写明,文档 CHANGELOG v0.7.21 会再说明一次。
+
+            v0.7.22: TextArea 下方实时显示解析结果 —— 「✓ N 条有效」+ 跳过的
+            行(具体原因 + 行号 + 原文)。直接调 parseTagsFilter(同款 Go 端
+            实现,见 ../lib/parse-tags-filter.ts),无后端往返,用户输入时 0
+            卡顿。allBlank 区分"用户没填"vs"用户填了但全无效"两种情况,
+            给不同提示文案。
           */}
           <Form.Item
             name="tagsFilter"
@@ -1715,6 +1728,76 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
             <Input.TextArea
               rows={3}
               placeholder={'bklite/alpine/openssl:3.5.4\n# 注释行会被跳过'}
+            />
+          </Form.Item>
+          {/*
+            v0.7.22: 实时解析预览 —— Form.useWatch 拿到 tagsFilter 字段当前值,
+            喂给 parseTagsFilter,渲染 valid 数量 + skipped 行(可点击定位)。
+            没值 / 没填 → 不渲染这个区域,避免在刚打开 modal 时多一个空 alert。
+          */}
+          <Form.Item shouldUpdate noStyle>
+            {() => {
+              const raw = (form.getFieldValue('tagsFilter') as string | undefined) ?? '';
+              if (raw.trim() === '') return null;
+              const parsed = parseTagsFilter(raw);
+              const reasonLabel: Record<string, string> = {
+                blank: '空行',
+                comment: '注释',
+                no_tag: '没写 tag',
+                empty_repo: '空 repo',
+                empty_tag: '空 tag',
+              };
+              return (
+                <div
+                  style={{
+                    marginTop: -16,
+                    marginBottom: 16,
+                    fontSize: 12,
+                    lineHeight: 1.6,
+                  }}
+                >
+                  <div style={{ color: parsed.valid.length > 0 ? '#389e0d' : '#cf1322' }}>
+                    ✓ {parsed.valid.length} 条有效 spec
+                  </div>
+                  {parsed.skipped.length > 0 && (
+                    <div style={{ color: '#cf1322', marginTop: 4 }}>
+                      ✗ 跳过 {parsed.skipped.length} 条:
+                      <ul style={{ margin: '4px 0 0 0', paddingLeft: 20 }}>
+                        {parsed.skipped.map((s) => (
+                          <li key={s.lineNumber}>
+                            L{s.lineNumber}{' '}
+                            <code style={{ fontSize: 11 }}>{s.raw || '(空白)'}</code>
+                            {' '}
+                            <span style={{ color: '#999' }}>({reasonLabel[s.reason] ?? s.reason})</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              );
+            }}
+          </Form.Item>
+
+          {/*
+            v0.7.22: 大镜像(多 GB / 几十层,如 vllm 23GB、bklite/bklite/server 2GB)
+            跑完整下载需要 10-60 分钟,远超 sync engine 默认 5 分钟 client timeout。
+            把 repo 名加进这里,引擎走 30 分钟 timeout;其他 repo 仍按 5min 兜底,
+            避免「误写 typo 拼错」也要等 30min 才报错。逗号分隔,精确匹配不打 glob。
+          */}
+          <Form.Item
+            name="longTimeoutRepos"
+            label="长 Timeout 镜像（30 分钟）"
+            extra={
+              <span style={{ fontSize: 12, color: '#999' }}>
+                逗号分隔的 repo 名(精确匹配)。匹配走 30 分钟 client timeout,空 = 全部走 5min 默认。
+                典型：<code>bklite/bklite/vllm,bklite/bklite/server</code>。
+              </span>
+            }
+          >
+            <Input
+              placeholder={'bklite/bklite/vllm,bklite/bklite/server'}
+              autoComplete="off"
             />
           </Form.Item>
 

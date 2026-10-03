@@ -96,6 +96,7 @@ type SyncTask struct {
 	RemotePassword     string    `json:"-"`
 	Include            string    `json:"include"` // newline-separated glob patterns; "" matches all
 	TagsFilter         string    `json:"tagsFilter,omitempty"` // v0.7.21: newline-separated `repo:tag` specs; "" = catalog path
+	LongTimeoutRepos   string    `json:"longTimeoutRepos,omitempty"` // v0.7.22: comma-separated repo names that get 30min client timeout; "" = all repos use 5min
 	Enabled            bool      `json:"enabled"`
 	CreatedAt          time.Time `json:"createdAt"`
 	UpdatedAt          time.Time `json:"updatedAt"`
@@ -139,6 +140,7 @@ type SyncTaskInput struct {
 	RemotePassword     string    `json:"remotePassword"`
 	Include            string    `json:"include"`
 	TagsFilter         string    `json:"tagsFilter"` // v0.7.21: newline-separated `repo:tag`; empty = catalog path
+	LongTimeoutRepos   string    `json:"longTimeoutRepos"` // v0.7.22: comma-separated repo names; empty = use 5min default
 	Enabled            bool      `json:"enabled"`
 }
 
@@ -154,6 +156,7 @@ func (in SyncTaskInput) ToTask() SyncTask {
 		RemotePassword:     in.RemotePassword,
 		Include:            in.Include,
 		TagsFilter:         in.TagsFilter,
+		LongTimeoutRepos:   in.LongTimeoutRepos,
 		Enabled:            in.Enabled,
 	}
 }

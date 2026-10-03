@@ -92,6 +92,37 @@ type TagSpec struct {
 	Tag        string
 }
 
+// ParseLongTimeoutRepos decodes the per-task long-timeout repo whitelist
+// (v0.7.22) into a list of exact repo names. The engine matches each
+// TagSpec's Repository against this list to decide between the default 5
+// minute client.Timeout and the long 30 minute one — see engine.runPull
+// for the dispatch.
+//
+// Format and tolerance mirror ParseTagsFilter:
+//   - "" or whitespace-only input → nil (every repo uses the default
+//     5min timeout; this is the v0.7.21 behavior, preserved for
+//     pre-0.7.22 tasks that read back with an empty string)
+//   - comma-separated; entries with only whitespace are dropped
+//   - exact name match (no glob) — long timeout needs to be opt-in per
+//     repo, because 30min for hundreds of small repos would mask fast
+//     failures (e.g. 404 on a typo'd spec)
+//   - no de-duplication step: caller checks membership by linear scan
+//     against a typically 1-5 entry list, so the work isn't worth it
+func ParseLongTimeoutRepos(spec string) []string {
+	if strings.TrimSpace(spec) == "" {
+		return nil
+	}
+	var out []string
+	for _, line := range strings.Split(spec, ",") {
+		s := strings.TrimSpace(line)
+		if s == "" {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
 // ParseTagsFilter decodes a task's TagsFilter string into a list of
 // (repo, tag) specs. Format and error handling mirror NewFilter above:
 //

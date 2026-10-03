@@ -6,6 +6,75 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.22] - 2026-10-03
+
+本轮两件事:大镜像 timeout 可配 + tags_filter 实时解析预览。
+都属「既有 sync 任务机制的体验优化」→ 小版本进位 0.7.22。
+
+### 背景
+
+v0.7.21 tags_filter 跑通后,UAT 立刻测出来新问题:
+1. **大镜像超 5 分钟 client timeout**:bklite/bklite/vllm:latest(23 GB / ~50 层)
+   和 bklite/bklite/server:latest(2 GB / 28 层)在 4 MB/s 带宽下要 10-60 分钟,
+   远超 sync engine 默认 5min 的 client.Timeout,跑到一半被 abort 记 failed。
+2. **silently drop**:tags_filter 解析器对没写 tag 的行 silently dropped,用户
+   在 UI 上看不出来 —— 上面 16 条 user 配的 spec,实际跑了 15 条,user 以为
+   server 也在同步,实则被 silently drop 了。
+
+### 新增
+
+- **`sync_tasks.long_timeout_repos TEXT` 列(schema v13)**：逗号分隔的
+  repo 名(精确匹配,不打 glob),非空时匹配走 30 分钟 client timeout,
+  其他仍按 5min 兜底(避免「误写 typo」也要等 30min 才报错)。
+  空串 = 旧任务行为不变。
+- **`internal/sync/filter.go:ParseLongTimeoutRepos`**：与
+  `ParseTagsFilter` 风格对称,逗号分隔,纯空白 / 全空白 entry 跳过。
+- **`internal/sync/engine.go:DefaultSyncTimeout` (5 min) +
+  `LongSyncTimeout` (30 min)**：暴露成 const,方便后续调优。
+  `newRemoteClient` 改成接受 timeout 参数;`pullFromSpecs` 每个 spec
+  根据 longRepos 决定 timeout 后 new 一个 client(per-spec client
+  不是 per-run client,因为 http.Client.Timeout 是构造期写死的),跑完
+  一条 spec 后 `CloseIdleConnections()` 释放 idle conn。
+- **`SyncTask.longTimeoutRepos` / `SyncTaskInput.longTimeoutRepos`
+  字段**:omitempty 序列化;既有列表读回空串走默认 5min。
+- **UI「Tags 过滤(精确清单)」TextArea 下方实时解析预览**：
+  `Form.Item shouldUpdate` + `parseTagsFilter`(纯 TS 镜像 Go 端实现,
+  见 `web/src/lib/parse-tags-filter.ts`),无后端往返 0 卡顿。
+  渲染:
+    - ✓ N 条有效 spec(绿色)
+    - ✗ 跳过 M 条:每条 L<N> + 原文 + 原因(`没写 tag` / `空行` / `注释` /
+      `空 repo` / `空 tag`)
+  区别「user 没填」(不渲染区域)和「user 填了全无效」(标红 0 有效)
+  两种情况给不同提示文案。
+- **UI「长 Timeout 镜像(30 分钟)」Input**:在 tags_filter 下方,逗号分隔,
+  示例提示 `bklite/bklite/vllm,bklite/bklite/server`。
+- **`web/src/lib/parse-tags-filter.ts`**(新):与 Go 端语义一致,逐行切
+  第一个冒号、空 repo / 空 tag / 空行 / 注释 都识别。**没引入
+  vitest/jest** —— web 当前没有 test runner,按 AGENTS.md 「不允许
+  引入新依赖」纪律,解析器正确性靠手工调用 + 端到端冒烟验证
+  (`POST /api/sync` + `GET /api/sync/{id}` 读回)。
+
+### 单测
+
+- `internal/db/migrate_test.go:TestMigrateFreshDatabase`: `wantTasks`
+  加 `long_timeout_repos`,并断言 TEXT NOT NULL DEFAULT '' 契约。
+- `internal/db/migrate_test.go:TestMigrateV6ToV7…` / `…V7ToV8…`:
+  `user_version` 断言从 `12` → `13`(v6 → v7+...+v13)。
+
+### 端到端验证(已实跑)
+
+- `POST /api/sync {tagsFilter, longTimeoutRepos}` → `201 Created`,
+  后续 `GET` 读回完整字符串。
+- `PATCH /api/sync/{id} {tagsFilter: "library/nginx:1.27-only"}` →
+  `200 OK`,`GET` 读回一致。
+- 158 UAT 上 tags_filter 旁路跑通 15 条 bklite 镜像(postgres/redis/nats/
+  traefik/webhookd/fusion-collector/victoria-{metrics,logs,traces}/
+  pgvector/minio/vector/falkordb/telegraf/apm-collector),vllm / server
+  因 5min timeout 失败 → 加 longTimeoutRepos 后预期跑通(本轮测试
+  在跑中)。
+
+---
+
 ## [0.7.21] - 2026-10-03
 
 本轮给镜像同步加「精确 (repo, tag) 清单」绕过 `/v2/_catalog` 的能力。

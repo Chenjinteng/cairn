@@ -213,6 +213,7 @@ func (s *SyncHandlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	existing.RemoteURL = in.RemoteURL
 	existing.Include = in.Include
 	existing.TagsFilter = in.TagsFilter // v0.7.21: bypass /v2/_catalog when set
+	existing.LongTimeoutRepos = in.LongTimeoutRepos // v0.7.22: per-spec 30min timeout for big repos
 	existing.Enabled = in.Enabled
 
 	if err := existing.Validate(); err != nil {

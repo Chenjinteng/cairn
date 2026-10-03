@@ -25,7 +25,7 @@ import (
 
 // SCHEMA_VERSION is bumped together with new migrations.
 // Bump rule: +1 per migration; never reuse a number; never delete a migration.
-const SCHEMA_VERSION = 12
+const SCHEMA_VERSION = 13
 
 // Db is the SQLite wrapper. All exported methods are safe for concurrent use.
 type Db struct {
@@ -461,6 +461,31 @@ var migrations = map[int]string{
 	-- catalog → include-glob path; pre-0.7.21 tasks read back with empty
 	-- strings and keep their original behavior.
 	ALTER TABLE sync_tasks ADD COLUMN tags_filter TEXT NOT NULL DEFAULT '';
+	`,
+	13: `
+	-- v0.7.22: per-task "long-timeout" repo whitelist.
+	--
+	-- Background: sync engine's HTTP client.Timeout is 5 minutes
+	-- (internal/sync/engine.go:newRemoteClient), which is right-sized for
+	-- the median bklite / Docker Hub image (~50-500MB) but blows up on
+	-- multi-GB mirrors like vllm:latest (23GB) or bklite/server:latest
+	-- (2GB / 28 layers). At 4 MB/s public bandwidth those take 10-60
+	-- minutes — single-layer body-read deadline aborts them before the
+	-- last layer flushes.
+	--
+	-- Format (comma-separated, parsed in internal/sync/filter.go):
+	--   bklite/bklite/vllm,bklite/bklite/server
+	-- Empty == every repo uses the default 5min timeout (preserves the
+	-- v0.7.21 behavior). Exact repo-name match (no glob) — long-timeout
+	-- needs to be opt-in per repo, not a wildcard, because 30min timeout
+	-- for hundreds of small repos would mask fast failures (e.g. 404 on
+	-- a typo'd spec).
+	--
+	-- Engine dispatch (runPull, v0.7.22): each spec is matched against
+	-- this list; matching repos get a 30min client timeout, others keep
+	-- the 5min default. ADD COLUMN not DROP+CREATE — same discipline as
+	-- v12; pre-0.7.22 tasks read back with empty string and never match.
+	ALTER TABLE sync_tasks ADD COLUMN long_timeout_repos TEXT NOT NULL DEFAULT '';
 	`,
 }
 
