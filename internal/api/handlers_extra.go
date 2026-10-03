@@ -312,11 +312,51 @@ func (e *ExtraHandlers) ListPullJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jobs := e.Executor.List()
+
+	// v0.7.12: fold SQLite history into the response. Before this, only
+	// memory-resident jobs were returned; after a container restart
+	// Executor.List() came back empty even though pull_jobs held every
+	// terminal job. Memory wins on conflict — a row whose ID is in
+	// memory is shown exactly once, with the live Phase data.
+	seen := make(map[string]struct{}, len(jobs))
 	out := make([]any, 0, len(jobs))
 	for _, j := range jobs {
+		seen[j.ID] = struct{}{}
 		out = append(out, uiJobView(j))
 	}
+	if e.DB != nil {
+		rows, err := e.DB.PullJobsList(r.Context(), 0)
+		if err == nil {
+			for _, row := range rows {
+				if _, ok := seen[row.ID]; ok {
+					continue
+				}
+				out = append(out, dbPullJobToView(row))
+			}
+		}
+		// PullJobsList failure is non-fatal: live jobs still render.
+	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// dbPullJobToView converts a SQLite row into the same JobView shape
+// Executor produces, so the UI doesn't have to branch on "live vs
+// history". Phases is left empty — phases are runtime detail that lives
+// only in memory.
+func dbPullJobToView(row db.PullJobRow) pull.JobView {
+	return pull.JobView{
+		ID:         row.ID,
+		SourceRef:  row.SourceRef,
+		DestRepo:   row.DestRepo,
+		DestTag:    row.DestTag,
+		State:      pull.JobState(row.State),
+		StartedAt:  row.StartedAt,
+		EndedAt:    row.EndedAt,
+		CreatedAt:  row.CreatedAt,
+		BytesDone:  row.BytesDone,
+		BytesTotal: row.BytesTotal,
+		Error:      row.Error,
+	}
 }
 
 func (e *ExtraHandlers) GetPullJob(w http.ResponseWriter, r *http.Request) {

@@ -428,6 +428,73 @@ type PullJobRow struct {
 	CreatedAt  time.Time
 }
 
+// PullJobsList returns every row in pull_jobs, newest first by started_at.
+// Used by ListPullJobs at API time to fold SQLite history into the live
+// memory view — without this, a container restart would surface as an
+// empty history list because Executor.List() only walks memory.
+//
+// (v0.7.12: the dispatcher for "restart loses history".)
+//
+// Memory jobs that the executor still has are passed in so we can skip
+// rows whose ID is already in memory — otherwise a job that just finished
+// would show up twice in the UI (once from memory, once from SQLite).
+// Pure memory reads don't filter; the caller decides.
+func (d *Db) PullJobsList(ctx context.Context, limit int) ([]PullJobRow, error) {
+	q := `SELECT id, source_ref, dest_repo, dest_tag, state, error,
+	             bytes_done, bytes_total, started_at, ended_at, created_at
+	      FROM pull_jobs
+	      ORDER BY started_at DESC`
+	if limit > 0 {
+		q += ` LIMIT ?`
+	}
+	var rows *sql.Rows
+	var err error
+	if limit > 0 {
+		rows, err = d.conn.QueryContext(ctx, q, limit)
+	} else {
+		rows, err = d.conn.QueryContext(ctx, q)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("db: pull_jobs list: %w", err)
+	}
+	defer rows.Close()
+	out := make([]PullJobRow, 0)
+	for rows.Next() {
+		var (
+			r            PullJobRow
+			startedAtStr string
+			endedAtStr   string
+			createdAtStr string
+		)
+		if err := rows.Scan(&r.ID, &r.SourceRef, &r.DestRepo, &r.DestTag, &r.State, &r.Error,
+			&r.BytesDone, &r.BytesTotal, &startedAtStr, &endedAtStr, &createdAtStr); err != nil {
+			return nil, fmt.Errorf("db: pull_jobs scan: %w", err)
+		}
+		r.StartedAt = parseTimeOrZero(startedAtStr)
+		r.EndedAt = parseTimeOrZero(endedAtStr)
+		r.CreatedAt = parseTimeOrZero(createdAtStr)
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("db: pull_jobs iterate: %w", err)
+	}
+	return out, nil
+}
+
+// parseTimeOrZero accepts the RFC3339 string we write and returns the
+// time.Time, or zero on a parse error so the API can still serve the
+// row instead of 500-ing on one malformed timestamp.
+func parseTimeOrZero(s string) time.Time {
+	if s == "" {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
 // ActivitySummary is the JSON shape returned by /api/stats/summary.
 type ActivitySummary struct {
 	TotalPulls  int64     `json:"totalPulls"`

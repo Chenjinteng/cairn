@@ -6,6 +6,35 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.12] - 2026-10-03
+
+本轮修一个用户报的 release-blocker bug —— 「容器重启后拉取历史就没了」。
+属缺陷修复 → 小版本进位 0.7.12。
+
+### 修复
+
+- **后端 · `internal/pull/executor.go` PullJobRecord 写 SQLite 时硬编码 `StateSucceeded`**。
+  失败 / 取消的 job 完全没落库,SQLite 里的「历史」全是成功的。修法:
+  `State: string(vv.State)` 替代硬编码 —— 失败 / 取消也写库。
+- **后端 · `internal/api/handlers_extra.go` ListPullJobs 只走 `Executor.List()` 内存**。
+  重启容器内存清零,即使 SQLite 里有归档也读不到。修法:
+  合并内存 + DB 读到的 pull_jobs 行(按 ID 去重,内存赢);`Phases` 字段历史
+  记录为空(运行时 detail 只在内存)。
+- **后端 · `internal/db/db.go` 新增 `PullJobsList(ctx, limit)`**(v0.7.12)。
+  按 started_at DESC 返所有行,limit=0 不限。配 `parseTimeOrZero` 容忍
+  corrupt 时间戳(单行坏不挂整个响应)。
+
+### 新增(单测)
+
+- `internal/db/pull_jobs_test.go`(新):
+  - `TestPullJobsList_AllStatesPersisted` —— 三种状态(succeeded/failed/cancelled)
+    都能 round-trip;这是 v0.7.0 以来 bug:failed/cancelled 从来没写进 SQLite
+  - `TestPullJobsList_LimitHonoured` —— 5 行数据 + limit=2 → 返 2 行
+  - `TestParseTimeOrZero_ToleratesMalformedInput` —— corrupt 时间戳返零值
+    而不挂响应
+
+---
+
 ## [0.7.11] - 2026-10-03
 
 本轮修一个 UI 问题 —— 拉取任务页表格列宽总和 1390px 撑出主区域 ~1100px,

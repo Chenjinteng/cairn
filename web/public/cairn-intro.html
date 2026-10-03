@@ -65,6 +65,13 @@
   v0.7.11: 拉取任务表瘦身列宽总和 1390 → 1110 —— v0.7.7 加「拉取架构」后总和
   超主区域宽度,底部出横滚条。来源 / 目标 / 状态 / 拉取架构 / 进度都按内容需求
   缩窄(状态按用户反馈缩到 140),URL 等长字段走 ellipsis,横滚条消失。
+
+  v0.7.12: hotfix 修「容器重启后拉取历史没了」—— 之前 PullJobRecord 写 SQLite
+  时硬编码 StateSucceeded(失败 / 取消的 job 从来没落库),ListPullJobs 只读内存
+  Executor.List()(重启后内存清零,SQLite 里其实有归档但 API 看不到)。
+  修法:executor 用真实 vv.State 写;ListPullJobs 合并内存 + DB 读;
+  新增 db.PullJobsList(limit) + parseTimeOrZero。SQLite 数据是「真的在」,
+  只是 UI 没接进来 —— 部署后所有历史都能看到。
 -->
 <style>
   :root {

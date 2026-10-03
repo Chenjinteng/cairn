@@ -350,7 +350,11 @@ func (o *Orchestrator) RunOne(ctx context.Context, j *Job) error {
 			SourceRef:  vv.SourceRef,
 			DestRepo:   destRepo,
 			DestTag:    destTag,
-			State:      string(StateSucceeded),
+			// v0.7.12: was hardcoded string(StateSucceeded) regardless of
+			// outcome — failed / cancelled jobs never reached the history
+			// table, so ListPullJobs (which reads memory only) showed an
+			// empty list after a restart. Use the job's actual state now.
+			State:      string(vv.State),
 			BytesDone:  vv.BytesDone,
 			BytesTotal: vv.BytesTotal,
 			StartedAt:  vv.StartedAt,
