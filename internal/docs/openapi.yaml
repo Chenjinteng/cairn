@@ -249,7 +249,7 @@ paths:
         - $ref: '#/components/parameters/Tag'
       responses:
         '200':
-          description: tar 流 (Content-Type: application/x-tar)
+          description: "tar 流 (Content-Type: application/x-tar)"
           content:
             application/x-tar:
               schema:
@@ -369,7 +369,7 @@ paths:
         '400':
           $ref: '#/components/responses/BadRequest'
         '403':
-          description: `allowPull=false`
+          description: "allowPull=false"
 
   /api/pull/jobs/{id}:
     get:
@@ -452,7 +452,7 @@ paths:
   /api/credentials/:
     get:
       tags: [credentials]
-      summary: 凭据库列表 (密码不回显, 只返 `hasPassword: true/false`)
+      summary: "凭据库列表 (密码不回显, 只返 hasPassword: true/false)"
       responses:
         '200':
           description: 凭据列表
@@ -760,7 +760,7 @@ paths:
   /api/stats/events:
     get:
       tags: [stats]
-      summary: 最近事件 (v0.7.18: 内存 ring + DB fallback 合并)
+      summary: "最近事件 (v0.7.18: 内存 ring + DB fallback 合并)"
       description: |
         200 条封顶 (v0.7.18 retention)。重启后从 event_log 读,不会丢。
       responses:
@@ -1052,7 +1052,7 @@ components:
       name: digest
       required: true
       schema: { type: string }
-      description: manifest digest (e.g. `sha256:abc123...`)
+      description: "manifest digest (e.g. sha256:abc123...)"
     JobID:
       in: path
       name: id
@@ -1313,7 +1313,7 @@ components:
       type: object
       required: [sourceRef, destRepo, destTag]
       properties:
-        sourceRef: { type: string, description: `<repo>:<tag>` }
+        sourceRef: { type: string, description: "<repo>:<tag>" }
         destRepo: { type: string }
         destTag: { type: string }
         credentialId: { type: string }
@@ -1399,7 +1399,7 @@ components:
       required: [name, url]
       properties:
         name: { type: string }
-        url: { type: string, description: `http://...` 或 `socks5://...` }
+        url: { type: string, description: "http://... 或 socks5://..." }
         username: { type: string }
         password: { type: string }
         note: { type: string }
