@@ -6,6 +6,22 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.13] - 2026-10-03
+
+本轮修 v0.7.12 引入的 UI 崩溃 bug —— `dbPullJobToView` 直接返 raw
+`pull.JobView`,前端 `job.phases.find(...)` 看到 marshal 出来的
+`null` Phases 抛 `Cannot read properties of undefined (reading 'find')`。
+属缺陷修复 → 小版本进位 0.7.13。
+
+### 修复
+
+- **后端 · `internal/api/handlers_extra.go` `ListPullJobs` DB row 也走 `uiJobView`**。
+  之前 db row 跳过 uiJobView 直接返 raw JobView,JSON marshal 把 nil
+  `Phases` slice 渲成 `null`,前端 `job.phases.find()` 拿到 null 直接崩。
+  修法:`uiJobView(dbPullJobToView(row))` 走完整转换链。
+
+---
+
 ## [0.7.12] - 2026-10-03
 
 本轮修一个用户报的 release-blocker bug —— 「容器重启后拉取历史就没了」。

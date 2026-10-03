@@ -72,6 +72,11 @@
   修法:executor 用真实 vv.State 写;ListPullJobs 合并内存 + DB 读;
   新增 db.PullJobsList(limit) + parseTimeOrZero。SQLite 数据是「真的在」,
   只是 UI 没接进来 —— 部署后所有历史都能看到。
+
+  v0.7.13: hotfix 修 v0.7.12 引入的 UI 崩 —— dbPullJobToView 直接返 raw JobView,
+  nil Phases slice 被 JSON marshal 成 null,前端 job.phases.find() 拿 null 抛
+  "Cannot read properties of undefined (reading 'find')"。DB row 改走 uiJobView
+  转换链,Phases 重新是 []any 不是 null。
 -->
 <style>
   :root {

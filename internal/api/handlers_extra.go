@@ -331,7 +331,11 @@ func (e *ExtraHandlers) ListPullJobs(w http.ResponseWriter, r *http.Request) {
 				if _, ok := seen[row.ID]; ok {
 					continue
 				}
-				out = append(out, dbPullJobToView(row))
+				// v0.7.13: must go through uiJobView (not raw JobView) so the
+				// frontend gets the same shape it always did. Skipping uiJobView
+				// marshalled Phases as null, which then crashed the row's
+				// "running phase" find() in the UI.
+				out = append(out, uiJobView(dbPullJobToView(row)))
 			}
 		}
 		// PullJobsList failure is non-fatal: live jobs still render.
@@ -339,10 +343,11 @@ func (e *ExtraHandlers) ListPullJobs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// dbPullJobToView converts a SQLite row into the same JobView shape
-// Executor produces, so the UI doesn't have to branch on "live vs
-// history". Phases is left empty — phases are runtime detail that lives
-// only in memory.
+// dbPullJobToView converts a SQLite row into the JobView shape Executor
+// would have produced. The caller still has to pass this through
+// uiJobView before writing JSON — phases must go through uiPhases to
+// stay []any (never null), and sourceRepo/sourceTag must be split out
+// of SourceRef.
 func dbPullJobToView(row db.PullJobRow) pull.JobView {
 	return pull.JobView{
 		ID:         row.ID,
@@ -356,6 +361,10 @@ func dbPullJobToView(row db.PullJobRow) pull.JobView {
 		BytesDone:  row.BytesDone,
 		BytesTotal: row.BytesTotal,
 		Error:      row.Error,
+		// Phases deliberately left nil: runtime detail that lives only
+		// in memory. uiPhases will turn this into an empty []any when the
+		// caller routes through uiJobView, so the frontend's phases.find()
+		// keeps working on history rows.
 	}
 }
 
