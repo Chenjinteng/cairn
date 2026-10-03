@@ -510,15 +510,16 @@ func (s *Store) ScheduleUpdateAfterFire(ctx context.Context, sched *Schedule, la
 // UpdateRunProgress (which writes on every transition).
 func (s *Store) CreateRunItem(ctx context.Context, item SyncRunItem) error {
 	return s.db.SyncRunItemCreate(ctx, db.SyncRunItemRow{
-		RunID:      item.RunID,
-		Repository: item.Repository,
-		Tag:        item.Tag,
-		State:      item.State,
-		Error:      item.Error,
-		BytesDone:  item.BytesDone,
-		BytesTotal: item.BytesTotal,
-		StartedAt:  item.StartedAt,
-		FinishedAt: item.FinishedAt,
+		RunID:       item.RunID,
+		Repository:  item.Repository,
+		Tag:         item.Tag,
+		State:       item.State,
+		Error:       item.Error,
+		BytesDone:   item.BytesDone,
+		BytesTotal:  item.BytesTotal,
+		StartedAt:   item.StartedAt,
+		FinishedAt:  item.FinishedAt,
+		TimeoutUsed: item.TimeoutUsed,
 	})
 }
 
@@ -563,15 +564,16 @@ func (s *Store) RunItemSummary(ctx context.Context, runID int64) (SyncRunItemSum
 // state casing).
 func itemRowToDomain(r db.SyncRunItemRow) SyncRunItem {
 	return SyncRunItem{
-		ID:         r.ID,
-		RunID:      r.RunID,
-		Repository: r.Repository,
-		Tag:        r.Tag,
-		State:      r.State,
-		Error:      r.Error,
-		BytesDone:  r.BytesDone,
-		BytesTotal: r.BytesTotal,
-		StartedAt:  r.StartedAt,
-		FinishedAt: r.FinishedAt,
+		ID:          r.ID,
+		RunID:       r.RunID,
+		Repository:  r.Repository,
+		Tag:         r.Tag,
+		State:       r.State,
+		Error:       r.Error,
+		BytesDone:   r.BytesDone,
+		BytesTotal:  r.BytesTotal,
+		StartedAt:   r.StartedAt,
+		FinishedAt:  r.FinishedAt,
+		TimeoutUsed: r.TimeoutUsed,
 	}
 }

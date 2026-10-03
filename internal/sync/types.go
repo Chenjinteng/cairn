@@ -274,6 +274,12 @@ type SyncRunItem struct {
 	BytesTotal int64      `json:"bytesTotal"`
 	StartedAt  time.Time  `json:"startedAt"`
 	FinishedAt *time.Time `json:"finishedAt,omitempty"`
+	// TimeoutUsed is which sync timeout the engine picked for this pull
+	// (v0.7.25): "" (legacy default), "default" (5min), "long" (30min,
+	// manifest > 1 GiB). UI renders an orange chip next to duration
+	// when == "long" so the operator can tell a big-image pull from a
+	// hung one. Empty is the no-chip case.
+	TimeoutUsed string `json:"timeoutUsed,omitempty"`
 }
 
 // SyncRunItemSummary is the pre-aggregated count breakdown for one

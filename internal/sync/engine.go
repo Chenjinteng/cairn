@@ -405,9 +405,13 @@ func (e *Engine) pullFromSpecs(ctx context.Context, task SyncTask, username, pas
 		// v0.7.24: pullTag builds its own client and auto-detects
 		// timeout based on manifest size. Caller no longer carries
 		// longRepos — the dispatch happens inside.
-		bytesTotal, tagErr := e.pullTag(ctx, task.RemoteURL, username, password, s.Repository, s.Tag)
+		//
+		// v0.7.25: pullTag also stamps the timeout decision
+		// ("default" / "long") on the returned tuple so we can
+		// surface it on the item row.
+		bytesTotal, timeoutUsed, tagErr := e.pullTag(ctx, task.RemoteURL, username, password, s.Repository, s.Tag)
 		finishedAt := time.Now().UTC()
-		e.recordRunItem(ctx, run.ID, s.Repository, s.Tag, startedAt, finishedAt, bytesTotal, tagErr)
+		e.recordRunItem(ctx, run.ID, s.Repository, s.Tag, startedAt, finishedAt, bytesTotal, timeoutUsed, tagErr)
 		if errors.Is(tagErr, context.Canceled) {
 			return fmt.Errorf("run aborted: %w", tagErr)
 		}
@@ -447,9 +451,11 @@ func (e *Engine) pullRepo(ctx context.Context, task SyncTask, username, password
 	for _, tag := range tags {
 		e.progress(ctx, run, repoName, tag)
 		startedAt := time.Now().UTC()
-		bytesTotal, tagErr := e.pullTag(ctx, task.RemoteURL, username, password, repoName, tag)
+		// v0.7.25: pullTag returns the timeout decision; passed
+		// through to the item row.
+		bytesTotal, timeoutUsed, tagErr := e.pullTag(ctx, task.RemoteURL, username, password, repoName, tag)
 		finishedAt := time.Now().UTC()
-		e.recordRunItem(ctx, run.ID, repoName, tag, startedAt, finishedAt, bytesTotal, tagErr)
+		e.recordRunItem(ctx, run.ID, repoName, tag, startedAt, finishedAt, bytesTotal, timeoutUsed, tagErr)
 		if errors.Is(tagErr, context.Canceled) {
 			return fmt.Errorf("run aborted: %w", tagErr)
 		}
@@ -468,10 +474,12 @@ func (e *Engine) pullRepo(ctx context.Context, task SyncTask, username, password
 }
 
 // pullTag returns the total bytes pulled for this tag (sum of layer
-// sizes from the manifest) and any error. On error, bytesTotal still
-// returns the declared manifest size so the failed item row in
-// sync_run_items can show the user "X bytes / Y bytes" — useful for
-// distinguishing "tiny image failed" from "10GB image failed" at a
+// sizes from the manifest), the timeout decision for UI surfacing
+// (v0.7.25: "" / "default" / "long"), and any error. On error,
+// bytesTotal still returns the declared manifest size so the failed
+// item row in sync_run_items can show the user "X bytes / Y bytes" —
+// useful for distinguishing "tiny image failed" from "10GB image
+// failed" at a
 // glance.
 //
 // v0.7.24: pullTag now owns the registry.Client lifecycle and the
@@ -489,7 +497,7 @@ func (e *Engine) pullRepo(ctx context.Context, task SyncTask, username, password
 // This makes pullTag the single source of truth for timeout dispatch —
 // both the catalog path (pullRepo) and the tags_filter path
 // (pullFromSpecs) get correct behavior with no caller bookkeeping.
-func (e *Engine) pullTag(ctx context.Context, remoteURL, username, password, repoName, tag string) (int64, error) {
+func (e *Engine) pullTag(ctx context.Context, remoteURL, username, password, repoName, tag string) (int64, string, error) {
 	// Probe with default timeout. We need a manifest fetch anyway to
 	// know mf.Size; if the manifest fetch itself fails (404 / 401 /
 	// network) we abort with that error and don't get a chance to time
@@ -497,37 +505,48 @@ func (e *Engine) pullTag(ctx context.Context, remoteURL, username, password, rep
 	// something's wrong before we burned a long timeout).
 	probeRC, err := newRemoteClient(remoteURL, username, password, DefaultSyncTimeout)
 	if err != nil {
-		return 0, fmt.Errorf("build probe client: %w", err)
+		return 0, "", fmt.Errorf("build probe client: %w", err)
 	}
 	mf, err := probeRC.GetManifest(ctx, repoName, tag)
 	probeRC.HTTP().CloseIdleConnections()
 	if err != nil {
-		return 0, fmt.Errorf("get manifest: %w", err)
+		return 0, "", fmt.Errorf("get manifest: %w", err)
 	}
 	if isIndexMediaType(mf.MediaType) {
-		return mf.Size, errors.New("multi-arch manifest index not supported in v0.6.0")
+		return mf.Size, "", errors.New("multi-arch manifest index not supported in v0.6.0")
 	}
 
 	// v0.7.24: choose timeout from manifest size. See LargeManifestThreshold
 	// comment for the 1 GiB rationale. Big repos get the long timeout;
 	// everyone else stays on default. No user config required.
+	//
+	// v0.7.25: stamp the decision onto the returned item so the UI
+	// can show an orange chip — operators staring at a "running" run
+	// row need to know whether the engine is on the 5min clock or the
+	// 30min clock to decide "is this hung?" correctly.
 	timeout := DefaultSyncTimeout
+	timeoutUsed := "default"
 	if mf.Size > LargeManifestThreshold {
 		timeout = LongSyncTimeout
+		timeoutUsed = "long"
 	}
 	specRC, err := newRemoteClient(remoteURL, username, password, timeout)
 	if err != nil {
-		return mf.Size, fmt.Errorf("build pull client: %w", err)
+		return mf.Size, timeoutUsed, fmt.Errorf("build pull client: %w", err)
 	}
 	defer specRC.HTTP().CloseIdleConnections()
 
-	return e.copyManifestContents(ctx, specRC, repoName, tag, mf)
+	bytesCopied, copyErr := e.copyManifestContents(ctx, specRC, repoName, tag, mf)
+	return bytesCopied, timeoutUsed, copyErr
 }
 
 // copyManifestContents is the layer-by-layer copy + local put half of
 // pullTag, factored out so pullTag can probe with one client and pull
 // with another (the auto-timeout dispatch in v0.7.24). Both clients
-// share the same credentials/URL; only Timeout differs.
+// share the same credentials/URL; only Timeout differs. The timeout
+// decision lives on pullTag's caller path (returned alongside bytes),
+// not here — copyManifestContents is timeout-agnostic, it just runs
+// against whatever client pullTag handed it.
 //
 // On any error bytesTotal still returns the declared manifest size so
 // the caller can surface "X bytes / Y bytes" in sync_run_items.error.
@@ -635,7 +654,11 @@ func (e *Engine) pushRepo(ctx context.Context, w *Writer, run *SyncRun, repoName
 		startedAt := time.Now().UTC()
 		bytesTotal, tagErr := e.pushTag(ctx, w, repoName, tag)
 		finishedAt := time.Now().UTC()
-		e.recordRunItem(ctx, run.ID, repoName, tag, startedAt, finishedAt, bytesTotal, tagErr)
+		// v0.7.25: push has no smart-timeout dispatch (it's local →
+		// remote and the registry.Client uses its own deadline), so
+		// the item gets the empty / legacy value — no chip. Pull
+		// paths pass "default" or "long" through.
+		e.recordRunItem(ctx, run.ID, repoName, tag, startedAt, finishedAt, bytesTotal, "", tagErr)
 		if errors.Is(tagErr, context.Canceled) {
 			return fmt.Errorf("run aborted: %w", tagErr)
 		}
@@ -819,11 +842,17 @@ func newRemoteClient(remoteURL, username, password string, timeout time.Duration
 // engine knows the run is being cancelled (context.Canceled in the
 // tag handler), it's already returning up the stack and never reaches
 // this call. The "cancelled" enum value is reserved for future use.
+//
+// timeoutUsed is stamped onto the row so the UI can render the
+// "30min" chip for long-timeout pulls (v0.7.25). Pass "" for the
+// legacy default-timeout case (no chip); pass "long" for large
+// manifests; pass "default" only if you want the field explicit
+// (today only pushTag uses that path, but it could also be left "").
 func (e *Engine) recordRunItem(
 	ctx context.Context, runID int64,
 	repo, tag string,
 	startedAt, finishedAt time.Time,
-	bytesTotal int64, tagErr error,
+	bytesTotal int64, timeoutUsed string, tagErr error,
 ) {
 	state := "succeeded"
 	errStr := ""
@@ -834,15 +863,16 @@ func (e *Engine) recordRunItem(
 		bytesDone = 0
 	}
 	item := SyncRunItem{
-		RunID:      runID,
-		Repository: repo,
-		Tag:        tag,
-		State:      state,
-		Error:      errStr,
-		BytesDone:  bytesDone,
-		BytesTotal: bytesTotal,
-		StartedAt:  startedAt,
-		FinishedAt: &finishedAt,
+		RunID:       runID,
+		Repository:  repo,
+		Tag:         tag,
+		State:       state,
+		Error:       errStr,
+		BytesDone:   bytesDone,
+		BytesTotal:  bytesTotal,
+		StartedAt:   startedAt,
+		FinishedAt:  &finishedAt,
+		TimeoutUsed: timeoutUsed,
 	}
 	if err := e.store.CreateRunItem(ctx, item); err != nil {
 		e.log.Warn("sync: write run item failed",

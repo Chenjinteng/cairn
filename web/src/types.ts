@@ -717,6 +717,13 @@ export interface SyncRun {
  */
 export type SyncRunItemState = 'succeeded' | 'failed' | 'cancelled';
 
+/**
+ * v0.7.25: 后端把 pullTag 的 timeout 决策（"default" 5min vs "long" 30min）
+ * 也写到了 sync_run_items.timeout_used，让 UI 知道一个长跑任务究竟是卡住了
+ * 还是只是用了 long deadline。空字符串=legacy / push / 未知（保持 no-chip）。
+ */
+export type SyncRunItemTimeout = '' | 'default' | 'long';
+
 export interface SyncRunItem {
   id: number;
   runId: number;
@@ -728,6 +735,11 @@ export interface SyncRunItem {
   bytesTotal: number;
   startedAt: string;
   finishedAt?: string;
+  /**
+   * v0.7.25: 仅当 pull 路径 + manifest > 1 GiB 时为 "long"（UI 渲染
+   * 橙色 "30min" chip）。空字符串 / undefined / "default" 都不显示。
+   */
+  timeoutUsed?: SyncRunItemTimeout;
 }
 
 /**

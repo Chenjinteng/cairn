@@ -6,6 +6,39 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.25] - 2026-10-04
+
+本轮给 `sync_run_items` 加 `timeout_used` 列,把 v0.7.24 引入的「智能
+timeout 决策」(5min default vs 30min long)显式落到每条 item row 上,
+UI 在 items 表「耗时」列旁画一个橙色 `30min` chip。
+
+### 改动
+
+- `sync_run_items.timeout_used TEXT NOT NULL DEFAULT ''` (schema v13 → v14,
+  migration 14)。`pullTag` 决策 timeout 后把字符串（`"default"` / `"long"`）
+  一并返回给 `recordRunItem`,通过 `SyncRunItem.TimeoutUsed` 透传到
+  store → SQL → API。push 路径 / pre-existing rows 都是空串,UI 视作
+  legacy default（不显示 chip）。
+- 「耗时」列宽 90 → 130,数字 + chip 并排；`timeout_used == 'long'`
+  时显示橙色 `<Tag color="orange">30min</Tag>`,hover 提示
+  「manifest > 1 GiB,引擎使用 30 分钟 deadline」。空 / `default` / 推送
+  都不显示 chip —— 5min 是默认期望,无需噪声。
+- **running 状态也展示 chip**：这是 chip 真正发挥作用的地方 —— 运维
+  看着「耗时 —」的数字超过 6 分钟不再怀疑 hang,因为 chip 已经告诉他
+  「这是 30 分钟 deadline,正常」。
+
+### 行为
+
+- schema 自动迁移：旧 DB 打开后会跑 migration 14,空串默认值保留
+  v0.7.21-v0.7.24 兼容性（老 rows 显示无 chip）。
+- API `/api/sync/{id}/runs/{rid}/items` 返 `timeoutUsed` 字段；pre-existing
+  rows `timeoutUsed` 为 `""` / `undefined`,前端无需适配（旧列。
+  contract）。
+- 运维效果：158 上跑 server:latest（2 GB / 28 层）这类大镜像，items
+  表能直接看到「30min」橙色 tag，明白这是正常耗时长，而不是「hang」。
+
+---
+
 ## [0.7.24] - 2026-10-03
 
 本轮撤掉 v0.7.22 的 `long_timeout_repos` 用户可配字段,改成

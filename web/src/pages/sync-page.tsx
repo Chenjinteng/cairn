@@ -1269,10 +1269,38 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
     {
       title: '耗时',
       key: 'duration',
-      width: 90,
+      width: 130,
       render: (_, item) => {
-        if (!item.finishedAt) return <span style={{ color: '#999' }}>—</span>;
+        if (!item.finishedAt) {
+          // v0.7.25: 还在跑的时候也展示 timeout chip —— 如果是 long,
+          // 运维看着 6 分钟没动静也不会怀疑 hang。这是 chip 真正的
+          // 用途所在。
+          if (item.timeoutUsed === 'long') {
+            return (
+              <Space size={4}>
+                <span style={{ color: '#999' }}>—</span>
+                <Tooltip title="manifest > 1 GiB,引擎使用 30 分钟 deadline">
+                  <Tag color="orange" style={{ margin: 0 }}>30min</Tag>
+                </Tooltip>
+              </Space>
+            );
+          }
+          return <span style={{ color: '#999' }}>—</span>;
+        }
         const ms = new Date(item.finishedAt).getTime() - new Date(item.startedAt).getTime();
+        // v0.7.25: 完成后展示时长 + (如果是 long timeout) 一个橙色 chip,
+        // 让运维能看出哪些 items 走的是 30min deadline。空值/"default"/push
+        // 都不显示 —— 5min 是默认期望,无需 chip。
+        if (item.timeoutUsed === 'long') {
+          return (
+            <Space size={4}>
+              <span style={{ fontFamily: 'monospace' }}>{formatDurationMs(ms)}</span>
+              <Tooltip title="manifest > 1 GiB,引擎使用 30 分钟 deadline">
+                <Tag color="orange" style={{ margin: 0 }}>30min</Tag>
+              </Tooltip>
+            </Space>
+          );
+        }
         return <span style={{ fontFamily: 'monospace' }}>{formatDurationMs(ms)}</span>;
       },
     },

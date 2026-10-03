@@ -584,16 +584,22 @@ func (d *Db) SyncScheduleListDue(ctx context.Context, now time.Time, limit int) 
 //                  because the engine returns from pullRepo/pushRepo
 //                  before writing per-tag rows on cancellation
 type SyncRunItemRow struct {
-	ID         int64
-	RunID      int64
-	Repository string
-	Tag        string
-	State      string
-	Error      string
-	BytesDone  int64
-	BytesTotal int64
-	StartedAt  time.Time
-	FinishedAt *time.Time
+	ID          int64
+	RunID       int64
+	Repository  string
+	Tag         string
+	State       string
+	Error       string
+	BytesDone   int64
+	BytesTotal  int64
+	StartedAt   time.Time
+	FinishedAt  *time.Time
+	// TimeoutUsed stamps which sync timeout the engine picked for this
+	// pull (v0.7.25). One of "" (legacy / default), "default" (5min),
+	// "long" (30min, large manifest). Empty preserves the v0.7.21-v0.7.24
+	// contract for pre-existing rows; UI treats empty == "default"
+	// (no chip — the 5min clock is the normal expectation).
+	TimeoutUsed string
 }
 
 // SyncRunItemCreate inserts one (repo, tag) detail row. Called by the
@@ -610,10 +616,12 @@ func (d *Db) SyncRunItemCreate(ctx context.Context, r SyncRunItemRow) error {
 	_, err := d.conn.ExecContext(ctx, `
 		INSERT INTO sync_run_items(
 			run_id, repository, tag, state, error,
-			bytes_done, bytes_total, started_at, finished_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			bytes_done, bytes_total, started_at, finished_at,
+			timeout_used)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, r.RunID, r.Repository, r.Tag, r.State, r.Error,
-		r.BytesDone, r.BytesTotal, r.StartedAt.Unix(), finishedAt)
+		r.BytesDone, r.BytesTotal, r.StartedAt.Unix(), finishedAt,
+		r.TimeoutUsed)
 	return err
 }
 
@@ -640,7 +648,8 @@ func (d *Db) SyncRunItemListByRun(ctx context.Context, runID int64, limit, offse
 	}
 	rows, err := d.conn.QueryContext(ctx, `
 		SELECT id, run_id, repository, tag, state, error,
-		       bytes_done, bytes_total, started_at, finished_at
+		       bytes_done, bytes_total, started_at, finished_at,
+		       timeout_used
 		FROM sync_run_items WHERE run_id = ?
 		ORDER BY id ASC
 		LIMIT ? OFFSET ?
@@ -655,7 +664,8 @@ func (d *Db) SyncRunItemListByRun(ctx context.Context, runID int64, limit, offse
 		var startedAt int64
 		var finishedAt sql.NullInt64
 		if err := rows.Scan(&r.ID, &r.RunID, &r.Repository, &r.Tag, &r.State, &r.Error,
-			&r.BytesDone, &r.BytesTotal, &startedAt, &finishedAt); err != nil {
+			&r.BytesDone, &r.BytesTotal, &startedAt, &finishedAt,
+			&r.TimeoutUsed); err != nil {
 			return nil, 0, err
 		}
 		r.StartedAt = time.Unix(startedAt, 0).UTC()

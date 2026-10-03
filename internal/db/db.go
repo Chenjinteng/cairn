@@ -25,7 +25,7 @@ import (
 
 // SCHEMA_VERSION is bumped together with new migrations.
 // Bump rule: +1 per migration; never reuse a number; never delete a migration.
-const SCHEMA_VERSION = 13
+const SCHEMA_VERSION = 14
 
 // Db is the SQLite wrapper. All exported methods are safe for concurrent use.
 type Db struct {
@@ -486,6 +486,31 @@ var migrations = map[int]string{
 	-- the 5min default. ADD COLUMN not DROP+CREATE — same discipline as
 	-- v12; pre-0.7.22 tasks read back with empty string and never match.
 	ALTER TABLE sync_tasks ADD COLUMN long_timeout_repos TEXT NOT NULL DEFAULT '';
+	`,
+	14: `
+	-- v0.7.25: per-spec timeout decision surfaced to the UI.
+	--
+	-- Background: v0.7.24 made pullTag auto-pick between DefaultSyncTimeout
+	-- (5 min, for normal small/medium images) and LongSyncTimeout (30 min,
+	-- for big mirrors whose manifest total > 1 GiB). The decision is
+	-- correct, but completely invisible — operators staring at a
+	-- "running" run row have no way to tell whether the engine is on
+	-- the fast 5-min clock or the slow 30-min clock, and start to
+	-- wonder "is this hung?" after the first 6 minutes of a big-image
+	-- pull.
+	--
+	-- Resolution: stamp every sync_run_items row with which timeout was
+	-- used ('default' vs 'long'). UI renders the chip next to the
+	-- duration column — small mirrors stay quiet (default = no chip,
+	-- the 5min clock is the "normal" expectation), big mirrors show an
+	-- orange "30min" tag so the operator knows the engine is on the long
+	-- deadline.
+	--
+	-- ADD COLUMN not DROP+CREATE — same discipline as v0.7.21/22.
+	-- Empty string default preserves the v0.7.21-v0.7.24 contract for
+	-- pre-existing rows (timeout decision made but unrecorded); UI
+	-- treats empty == default (5min, no chip).
+	ALTER TABLE sync_run_items ADD COLUMN timeout_used TEXT NOT NULL DEFAULT '';
 	`,
 }
 
