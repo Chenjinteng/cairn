@@ -1210,7 +1210,8 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
     {
       title: '仓库',
       key: 'repos',
-      width: 160,
+      // v0.7.32: 160 → 240 —— 跟 items 仓库列对齐,多层 namespace 完整显示。
+      width: 240,
       render: (_, run) => (
         <Space direction="vertical" size={0}>
           <Space size={4}>
@@ -1233,7 +1234,8 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
       title: '错误',
       dataIndex: 'error',
       key: 'error',
-      ellipsis: true,
+      // v0.7.32: 跟 items 错误列一致 —— 加 width:240,去 ellipsis,长 run 级错误也能完整可读。
+      width: 240,
       render: (msg: string | undefined) => msg ? (
         <span style={{
           color: '#cf1322',

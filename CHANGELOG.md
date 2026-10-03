@@ -6,6 +6,24 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.32] - 2026-10-04
+
+v0.7.31 改了 items 表的「仓库」列宽 + 「错误」列换行,但忘了
+改 runs 表 —— user 反馈「红框里的还是没变化」时定位到。
+runs 表是展开 task 后看到的第一层(不是 items),跟 items 是
+两张表。
+
+### 改动
+
+- `sync-page.tsx` runs 表(展开后第一层):
+  - 「仓库」列 160 → 240 —— 跟 items 仓库列对齐,多层 namespace 完整显示。
+  - 「错误」列:加 width:240 + 去掉 ellipsis:true(render 已用
+    pre-wrap + break-all,ellipsis:true 仍会截断)。长 run 级错误
+    (internal panic / fetch 失败)也能完整可读。
+- 后端 / API / DB / SQL:全部不变。
+
+---
+
 ## [0.7.31] - 2026-10-04
 
 本轮三个 UX 微调:展开行 banner 深色适配再加强 + 运行中进度 chip
