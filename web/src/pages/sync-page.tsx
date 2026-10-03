@@ -54,6 +54,8 @@ import {
   DeleteOutlined,
   EditOutlined,
   ExclamationCircleOutlined,
+  FilterFilled,
+  FilterOutlined,
   PauseCircleOutlined,
   PlayCircleOutlined,
   PlusOutlined,
@@ -454,6 +456,12 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
     loading: boolean;
   }>>({});
   const [currentPageByRunId, setCurrentPageByRunId] = useState<Record<number, number>>({});
+  /*
+   * v0.7.29: items 表「只看失败」toggle — 每 run 一个独立状态,因为用户可能
+   * 同时展开多条 run,各自 toggle 互不影响(展开 B 时打开 toggle,折 B 不
+   * 影响 A 的 toggle 状态)。
+   */
+  const [onlyFailedByRunId, setOnlyFailedByRunId] = useState<Record<number, boolean>>({});
 
   const ITEMS_PAGE_SIZE = 50;
 
@@ -1377,6 +1385,42 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
     const total = state?.total ?? 0;
     const loading = state?.loading ?? false;
     const loadedCount = loaded.length;
+    /*
+     * v0.7.29: items 表「只看失败」toggle + 行级失败背景。
+     *
+     * 背景：70+ 镜像同步只失败 1 个时,默认按 id ASC 排序后失败的 row 不
+     * 一定在当前页(分页每页 50 条),用户要从 80 条里肉眼找红色行很费劲。
+     *
+     * 两个互补手段:
+     *   1. onRow 给失败行加 inline 淡红背景 —— 翻页时一眼能看到红色行
+     *   2. 「只看失败」toggle —— 把 dataSource filter 到只剩 state='failed'
+     *      的行,翻页没意义(filter 后通常只剩几条),所以 toggle 开启时
+     *      分页器禁用(已加载页内的失败全部展示),并提示「X / Y 条失败」
+     */
+    const onlyFailed = onlyFailedByRunId[run.id] ?? false;
+    const failedCount = loaded.filter((i) => i.state === 'failed').length;
+    const dataSource = onlyFailed ? loaded.filter((i) => i.state === 'failed') : loaded;
+    // v0.7.29: 把 loadRunItems / setOnlyFailedByRunId 调用都提到 JSX 外 —
+    // JSX attr 的 { ... } 里再嵌对象字面量 { ... } 在某些 ts/babel 版本里
+    // 会被误识别为新 JSX expression,触发 "expected '}'" 错(报错位置在
+    // Fragment close </> 后面)。提取到 const 后,JSX attr 只剩函数引用。
+    const goToPage = (p: number) => loadRunItems(taskId, run.id, { jumpTo: p });
+    const toggleOnlyFailed = () => {
+      const prev = onlyFailedByRunId[run.id] ?? false;
+      setOnlyFailedByRunId({ ...onlyFailedByRunId, [run.id]: !prev });
+    };
+    // v0.7.29: 把 onRow / locale 对象提到外面 —— 它们的 object literal
+    // `{...}` 在 JSX attr `{...}` 里再嵌一层,某些 ts 版本会卡。
+    const onRow = (record: SyncRunItem) => ({
+      style: record.state === 'failed'
+        ? { background: 'rgba(207, 19, 34, 0.06)' }
+        : {},
+    });
+    const locale = {
+      emptyText: onlyFailed && failedCount === 0
+        ? '当前页没有失败项(切换「显示全部」翻其他页)'
+        : '暂无数据',
+    };
     return (
       <div
         style={{
@@ -1396,36 +1440,42 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
         )}
         {state && (loadedCount > 0 || total > 0) && (
           <>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <Button
+                size="small"
+                type={onlyFailed ? 'primary' : 'default'}
+                icon={onlyFailed ? <FilterFilled /> : <FilterOutlined />}
+                onClick={toggleOnlyFailed}
+                disabled={failedCount === 0}
+              >
+                {onlyFailed ? `只看失败(${failedCount}/${total})` : '只看失败'}
+              </Button>
+              <span style={{ fontSize: 12, color: failedCount > 0 ? '#cf1322' : '#999' }}>
+                {failedCount > 0 ? `共 ${failedCount} 条失败 / ${total} 条` : `共 ${total} 条`}
+              </span>
+            </div>
             <Table<SyncRunItem>
               rowKey="id"
               size="small"
               columns={itemColumns}
-              dataSource={loaded}
+              dataSource={dataSource}
               pagination={false}
               loading={loading && loadedCount === 0}
+              onRow={onRow}
+              locale={locale}
             />
-            {/*
-             * v0.6.20: 不再有「加载更多」按钮。0.6.16 那版 「加载更多」 +
-             * Pagination 同时存在 — 翻页就能 append,「加载更多」是冗余动作。
-             * 现在翻页 = 整页替换,简单一致。
-             *
-             * 同步的「分页高亮 bug」修复在这里:0.6.18 用 loadedCount 推算
-             * currentPage,最后一页不满 50 条时会算出 1(把第 5 页算成第 1
-             * 页)。现在 currentPage 直接读 `currentPageByRunId[run.id]`,
-             * loadRunItems 加载完成后由它写回真值。
-             */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
               <span style={{ fontSize: 12, color: '#999' }}>
                 共 {total} 条 · 每页 {ITEMS_PAGE_SIZE} 条
               </span>
-              {total > ITEMS_PAGE_SIZE && loadedCount > 0 && (
+              {total > ITEMS_PAGE_SIZE && loadedCount > 0 && !onlyFailed && (
                 <Pagination
                   size="small"
                   current={currentPageByRunId[run.id] ?? 1}
                   pageSize={ITEMS_PAGE_SIZE}
                   total={total}
                   showSizeChanger={false}
-                  onChange={(p) => void loadRunItems(taskId, run.id, { jumpTo: p })}
+                  onChange={goToPage}
                 />
               )}
             </div>

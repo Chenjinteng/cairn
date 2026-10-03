@@ -6,6 +6,33 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.29] - 2026-10-04
+
+本轮解决 sync items 表 70+ 镜像只失败 1 个时定位困难的痛点:
+失败行加 inline 淡红背景翻页一眼看见 + 「只看失败」toggle 把列表过滤到只剩失败项。
+
+### 改动
+
+- `sync-page.tsx` items 表(`renderExpandedItems`):
+  - **行级红色背景**:`onRow={(record) => ({ style: record.state === 'failed' ? { background: 'rgba(207, 19, 34, 0.06)' } : {} })}` —— 失败行加淡红背景,翻页时一眼看到。
+  - **「只看失败」toggle**:每 run 一个独立状态(`onlyFailedByRunId: Record<number, boolean>`),打开时 filter `dataSource` 到只剩 `state === 'failed'` 的行,并禁用分页器(filter 后通常只剩几条,翻页无意义)。
+  - 切换 button 启用条件 `failedCount === 0` 自动 disabled,避免误点空表。
+  - 顶部右侧失败计数提示 `共 X 条失败 / Y 条`(失败 0 时显示 `共 Y 条`,不报错;失败 ≥ 1 时数字变红 `#cf1322`)。
+- `sync-page.tsx` icons:从 `@ant-design/icons` 加 `FilterFilled` / `FilterOutlined`(toggle 按钮 icon)。
+- 后端 / API / DB / SQL:全部不变。
+
+### 行为
+
+- 后端 `/api/sync/{id}/runs/{rid}/items` 数据结构不变 —— 仍是 `{ items, total, limit, offset }`,前端 filter 是纯客户端。
+- toggle 是单 run 局部状态(每条 run 独立)—— 展开 run A 打开 toggle,折 A 再展开 A,toggle 状态保留;折 B 互不影响。
+- 关闭 toggle 立刻显示全量,翻页回到 `total` 计数。
+
+### 踩坑
+
+调试中遇到一个 tsc 解析坑:JSX 内连用 3 个 `{/* ... */}` block comment(tsc 5.9)会触发「`}` expected」错(报错点在 Fragment close `</>` 后面)。解决:合并/精简注释,JSX 结构本身没问题。这是 tsc 解析器已知陷阱,记下来给后续避坑。
+
+---
+
 ## [0.7.28] - 2026-10-04
 
 本轮调整同步任务列表的「运行中」chip 布局:列表行只显示「运行中」chip,
