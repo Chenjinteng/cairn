@@ -14,6 +14,7 @@ import {
   Tooltip,
 } from 'antd';
 import {
+  ApiOutlined,
   CheckCircleOutlined,
   CloseCircleOutlined,
   DeleteOutlined,
@@ -28,6 +29,7 @@ import {
   deleteCredential,
   listCredentials,
   testCredential,
+  testCredentialDraft,
   updateCredential,
 } from '../api';
 import LoadError from '../components/load-error';
@@ -39,6 +41,8 @@ import type {
   Credential,
   CredentialInput,
   CredentialPatch,
+  CredentialTestInput,
+  SyncProbeResult,
 } from '../types';
 import { formatDateTime } from '../utils';
 import type { SidebarGroup, SidebarItem, SidebarSelection } from '../components/page-sidebar';
@@ -76,6 +80,43 @@ function registryHostOf(registryUrl: string | undefined): string {
   } catch {
     const host = raw.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').split('/')[0];
     return host || '未知';
+  }
+}
+
+/**
+ * v0.7.34：行内「测试」+ 弹窗内「测试连接」共用同一个结果分档。
+ * 之前行内只看 `status < 400` 当 ok,401 Basic challenge 被错判成
+ * 「连接成功 · API 2」。现在统一用 sync.ProbeConnection 的六档:
+ *   ok / no_auth_required        → 绿(成功)
+ *   wrong_creds / required_but_missing → 红(认证失败)
+ *   not_registry                  → 橙(URL 不像 registry)
+ *   unknown                       → 灰(其它非 2xx / 5xx)
+ * 跟 sync-page 的「测试连接」按钮走同一份文案,免得两处漂。
+ */
+function renderProbeResult(
+  message: {
+    success: (content: string) => void;
+    error: (content: string) => void;
+    warning: (content: string) => void;
+    info: (content: string) => void;
+  },
+  r: SyncProbeResult,
+): void {
+  if (!r.reachable) {
+    // 连接层失败(TCP / DNS / TLS / 超时):Reachable=false,Message 是后端填的。
+    message.error(`连接失败:${r.message || '无法到达对端'}`);
+    return;
+  }
+  if (r.authStatus === 'ok' || r.authStatus === 'no_auth_required') {
+    message.success(`连接成功 · HTTP ${r.httpStatus}`);
+  } else if (r.authStatus === 'wrong_creds') {
+    message.error(`认证失败:${r.message} (HTTP ${r.httpStatus})`);
+  } else if (r.authStatus === 'required_but_missing') {
+    message.warning(`对端要求认证:${r.message} (HTTP ${r.httpStatus})`);
+  } else if (r.authStatus === 'not_registry') {
+    message.warning(`URL 不像 registry:${r.message} (HTTP ${r.httpStatus})`);
+  } else {
+    message.info(`HTTP ${r.httpStatus}:${r.message}`);
   }
 }
 
@@ -252,11 +293,62 @@ export default function CredentialsPage({ config, sidebarFilter, onPublishGroups
       const result = await testCredential(c.id);
       if (!result.success) {
         message.error(`连接失败：${result.message}`);
-      } else if (result.data) {
-        message.success(`连接成功 · API ${result.data.apiVersion}`);
+        return;
+      }
+      if (result.data) {
+        renderProbeResult(message, result.data);
       }
     } finally {
       setTestingId(null);
+    }
+  };
+
+  /**
+   * v0.7.34：新增/编辑弹窗里的「测试连接」按钮。
+   * 不落库 —— 服务端拿 body 里的 url/username/password 直接拨一次 /v2/。
+   * 编辑态带 id,服务端在「密码留空 + 用户名与存量一致」时回退用已存密码,
+   * 跟 v0.5.15 proxy draft 同款规则(否则一进编辑弹窗点测试必然 401)。
+   */
+  const [draftTesting, setDraftTesting] = useState(false);
+  const handleTestDraft = async () => {
+    const values = form.getFieldsValue() as Partial<FormValues>;
+    const url = (values.registryUrl ?? '').trim();
+    const username = values.username ?? '';
+    const password = values.password ?? '';
+    if (!url) {
+      message.warning('请先填写 Registry URL');
+      return;
+    }
+    if (!/^https?:\/\//i.test(url)) {
+      message.warning('Registry URL 需要以 http:// 或 https:// 开头');
+      return;
+    }
+    if (!username || !password) {
+      // 编辑态的 password 留空 = 「保留原密码」,由服务端决定是否复用存量;
+      // 新建态 password 必填 ⇒ 没填就跑测试没意义,直接拦下。
+      if (password && !username) {
+        message.warning('请填写用户名');
+        return;
+      }
+    }
+    const input: CredentialTestInput = {
+      id: editing?.id,
+      registryUrl: url,
+      username,
+      password,
+    };
+    setDraftTesting(true);
+    try {
+      const result = await testCredentialDraft(input);
+      if (!result.success) {
+        message.error(`连接失败：${result.message}`);
+        return;
+      }
+      if (result.data) {
+        renderProbeResult(message, result.data);
+      }
+    } finally {
+      setDraftTesting(false);
     }
   };
 
@@ -496,6 +588,25 @@ export default function CredentialsPage({ config, sidebarFilter, onPublishGroups
         cancelText="取消"
         onCancel={() => setModalOpen(false)}
         onOk={handleSubmit}
+        // v0.7.34: footer 改成自定义三按钮 —— 「测试连接」在最左,
+        // 跟 proxies-page 的 v0.5.13 / v0.5.15 模式对齐:
+        // 不落库、不复用做 commit,可以独立点。TestDraft 自身维护 loading。
+        footer={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Button
+              icon={<ApiOutlined />}
+              loading={draftTesting}
+              onClick={() => void handleTestDraft()}
+            >
+              测试连接
+            </Button>
+            <span style={{ flex: 1 }} />
+            <Button onClick={() => setModalOpen(false)}>取消</Button>
+            <Button type="primary" onClick={() => void handleSubmit()}>
+              {editing ? '保存' : '创建'}
+            </Button>
+          </div>
+        }
         destroyOnClose
       >
         <Form<FormValues> form={form} layout="vertical" preserve={false}>

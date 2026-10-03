@@ -25,6 +25,7 @@ import (
 	"github.com/Chenjinteng/cairn/internal/pull"
 	"github.com/Chenjinteng/cairn/internal/registry"
 	"github.com/Chenjinteng/cairn/internal/storage"
+	"github.com/Chenjinteng/cairn/internal/sync"
 	"github.com/Chenjinteng/cairn/internal/version"
 )
 
@@ -108,6 +109,10 @@ func (e *ExtraHandlers) RegisterRoutes(r chi.Router) {
 		r.Patch("/{id}", e.UpdateCredential)
 		r.Delete("/{id}", e.DeleteCredential)
 		r.Post("/{id}/test", e.TestCredential)
+		// v0.7.34: "test before save" — dials URL/creds straight from the
+		// request body so the create/edit dialog can verify before commit.
+		// Static segment, distinct from "/{id}/test" by segment count.
+		r.Post("/test", e.TestCredentialDraft)
 	})
 
 	r.Route("/proxies", func(r chi.Router) {
@@ -1117,8 +1122,16 @@ func (e *ExtraHandlers) DeleteCredential(w http.ResponseWriter, r *http.Request)
 }
 
 // TestCredential probes /v2/ on the credential's registry with basic auth.
-// Transport/domain failures are returned as HTTP 200 {ok:false} — the UI
-// renders them inline next to the form.
+//
+// v0.7.34: rewrote to share the auth classification logic with
+// sync.ProbeConnection (the same six buckets: ok / no_auth_required /
+// required_but_missing / wrong_creds / not_registry / unknown). The
+// previous version just trusted "status < 400" which let a 401 Basic
+// challenge — exactly what wrong creds return — pass as "ok:true · API 2".
+//
+// Returns the same ProbeResult shape as sync.TestConnection so the UI
+// can render both with one renderer. Always HTTP 200 — wrong creds /
+// 404 / unreachable all land in the body's AuthStatus field.
 func (e *ExtraHandlers) TestCredential(w http.ResponseWriter, r *http.Request) {
 	if e.vaultUnavailable(w, r) {
 		return
@@ -1129,44 +1142,54 @@ func (e *ExtraHandlers) TestCredential(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusNotFound, err)
 		return
 	}
-	base := strings.TrimSuffix(c.URL, "/")
-	endpoint := base + "/v2/"
+	result := sync.ProbeConnection(r.Context(), c.URL, c.Username, c.Password)
+	writeJSON(w, http.StatusOK, result)
+}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"ok": false, "error": err.Error(), "registryUrl": base,
-		})
+// TestCredentialDraft is "test before save" for the credentials form.
+// Takes URL + username/password straight from the request body so the
+// create / edit dialog can find out whether what the user just typed
+// actually works *before* it is committed to credentials.json.
+//
+// v0.7.34: added alongside TestCredential; mirrors proxies'
+// TestProxyDraft shape (URL + inline creds + optional id for the
+// "keep stored password" edit-time case). Nothing here is persisted
+// and no probe status is recorded.
+type credentialDraftInput struct {
+	ID          string `json:"id"`
+	RegistryURL string `json:"registryUrl"`
+	Username    string `json:"username"`
+	Password    string `json:"password"`
+}
+
+func (e *ExtraHandlers) TestCredentialDraft(w http.ResponseWriter, r *http.Request) {
+	if e.vaultUnavailable(w, r) {
 		return
 	}
-	if c.Username != "" {
-		req.SetBasicAuth(c.Username, c.Password)
-	}
-	req.Header.Set("User-Agent", "cairn/"+version.Version)
-
-	start := time.Now()
-	resp, err := http.DefaultClient.Do(req)
-	elapsed := time.Since(start).Milliseconds()
-	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"ok": false, "error": err.Error(), "elapsedMs": elapsed, "registryUrl": base,
-		})
+	var in credentialDraftInput
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, r, http.StatusBadRequest, err)
 		return
 	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":          resp.StatusCode < 400,
-		"status":      resp.StatusCode,
-		"statusText":  resp.Status,
-		"elapsedMs":   elapsed,
-		"registryUrl": base,
-		"apiVersion":  "2",
-		"purpose":     "source",
-	})
+	registryURL := strings.TrimSpace(in.RegistryURL)
+	if registryURL == "" {
+		writeError(w, r, http.StatusBadRequest, errors.New("registryUrl is required"))
+		return
+	}
+	username := in.Username
+	password := in.Password
+	// v0.5.15 (proxy mode): editing a saved entry cannot echo the stored
+	// password back to the form, so an empty password + unchanged username
+	// means "reuse the stored one". Falls through to a fresh-credential dial
+	// if the username was edited (mirrors how the proxy draft does it).
+	if id := strings.TrimSpace(in.ID); id != "" && password == "" {
+		stored, err := e.Vault.Get(id)
+		if err == nil && stored.Username == username {
+			password = stored.Password
+		}
+	}
+	result := sync.ProbeConnection(r.Context(), registryURL, username, password)
+	writeJSON(w, http.StatusOK, result)
 }
 
 // --- Proxies ----------------------------------------------------------------

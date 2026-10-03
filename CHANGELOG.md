@@ -6,6 +6,81 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.34] - 2026-10-04
+
+凭据管理页两个收口:新增/编辑弹窗加「测试连接」按钮(跟 proxies
+页同款),行内测试 + 弹窗测试都修掉「错的密码也返 连接成功」。
+
+### 问题
+
+1. 新增/编辑凭据的 Modal 里没有「测试连接」按钮 —— 表格行虽然有
+   一颗,但填完表单(尤其密码)保存之前没法验。
+2. 即便填错密码,行内「测试」按钮也会返回「连接成功 · API 2」。
+   根因:`TestCredential`(handlers_extra.go)只看 `resp.StatusCode < 400`,
+   Registry V2 协议下带错误 basic auth 访问 `/v2/` 会回 401 Basic
+   challenge,401 < 400 → 错判 ok:true。Docker Hub / ghcr.io / quay.io
+   上同样 GET 实际就是这个码,「错也能发现」的问题跨所有镜像都成立。
+
+### 修法
+
+复用 `sync.ProbeConnection`(`internal/sync/probe.go:56`)的判定逻辑:
+六档 `ok / no_auth_required / required_but_missing / wrong_creds /
+not_registry / unknown`,401 + `WWW-Authenticate: Basic` + 带凭据
+→ `wrong_creds`(认证失败)。同一份判定两边都跑,**绝不漂**。
+
+### 改动
+
+- 后端:
+  - `TestCredential`(`POST /api/credentials/{id}/test`):重写,直接调
+    `sync.ProbeConnection(c.URL, c.Username, c.Password)`,响应字段
+    跟 sync 的 `SyncTestConnection` 对齐(reachable / authStatus /
+    httpStatus / message)。不再自己实现 HTTP 探测逻辑。
+  - **新增** `TestCredentialDraft`(`POST /api/credentials/test`):
+    「保存前试连」。Body 含 `id / registryUrl / username / password`。
+    编辑态带 id:服务端在「密码留空 + 用户名与存量一致」时回退用
+    已存密码(跟 v0.5.15 proxy draft 同款 —— 否则一进编辑弹窗点
+    「测试」必然 401,因为表单不显示已存密码)。
+  - 路由注册:`r.Post("/test", e.TestCredentialDraft)` 加到 `/credentials`
+    路由块,跟 proxies 那边 `r.Post("/test", e.TestProxyDraft)` 同款
+    静态段形式(参数化走 `/{id}/test`,区分按段数)。
+- 前端:
+  - `types.ts`:`CredentialTestInput` 新类型(id / registryUrl /
+    username / password);凭据探测结果复用 `SyncProbeResult`(字段同形)。
+  - `api.ts`:`testCredentialDraft(input)` 新函数;`testCredential(id)`
+    返回类型由内联 `{apiVersion,host,registryUrl,purpose}` 改成
+    `SyncProbeResult`。
+  - `credentials-page.tsx`:
+    - 抽 `renderProbeResult(message, r)` 工具函数(六档分类渲染),
+      行内 `handleTest` + 弹窗 `handleTestDraft` 共用,跟 sync-page
+      「测试连接」按钮走同一份文案。
+    - Modal footer 改成自定义三按钮:左「测试连接」(loading:
+      `draftTesting`)、中弹性占位、右「取消 / 创建」。**不落库**,
+      跟 proxy Modal 一模一样。
+    - 行内测试：`result.data !== authStatus` 分类正确;401 + 错密码
+      走红色「认证失败」,不再误报「连接成功」。
+- 文档 / DB / schema:全部不变。
+
+### 改动文件
+
+- `internal/api/handlers_extra.go` — 重写 TestCredential,新增
+  TestCredentialDraft + 输入类型 + 路由注册 + import sync。
+- `web/src/types.ts` — 新 CredentialTestInput。
+- `web/src/api.ts` — 新 testCredentialDraft,改 testCredential 返回类型。
+- `web/src/pages/credentials-page.tsx` — 加 ApiOutlined import + 抽
+  renderProbeResult + 改 handleTest 分类 + 新 handleTestDraft +
+  新 draftTesting state + Modal footer 自定义。
+
+### 报错速查
+
+- 弹窗「测试连接」按钮点了没反应:URL 没填 / 没 `http(s)://` 前缀
+  / 用户名没填;前端会弹 warning。
+- 编辑态点测试,服务端回 401:用户名改了但密码留空 —— 跟 proxy draft
+  一致,这是「没复用存量密码」的预期行为,不是 bug。
+- Docker Hub 用错的密码测:会弹「认证失败」红色 toast(改前是绿色
+  的「连接成功」,这就是这次要修的洞)。
+
+---
+
 ## [0.7.33] - 2026-10-04
 
 v0.7.31 加的 banner 进度 chip fallback「(加载中...)」一直不变成

@@ -793,6 +793,19 @@ export interface SyncTestInput {
   remotePassword: string;
 }
 
+/**
+ * v0.7.34：凭据管理页的「保存前试连」(POST /api/credentials/test)。
+ * 镜像 TestProxyDraft 的形态 —— 编辑态 id 留空则服务端走全字段;
+ * id 非空 + password 留空 + username 与存量一致 → 服务端复用已存密码。
+ */
+export interface CredentialTestInput {
+  /** 编辑态带上原 id,新增 = 留空。 */
+  id?: string;
+  registryUrl: string;
+  username: string;
+  password: string;
+}
+
 
 /**
  * v0.6.11：每个 sync 任务可以附加多个定时规则,调度器每 30s 扫一次

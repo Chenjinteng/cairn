@@ -4,6 +4,7 @@ import type {
   Credential,
   CredentialInput,
   CredentialPatch,
+  CredentialTestInput,
   DeleteManifestPayload,
   DeleteRepositoryPayload,
   DeleteTagPayload,
@@ -336,15 +337,20 @@ export const deleteCredential = (id: string) =>
   request<{ id: string }>(`/api/credentials/${encodeURIComponent(id)}`, { method: 'DELETE' });
 
 export const testCredential = (id: string) =>
-  requestSlow<{
-    apiVersion: string;
-    host: string;
-    registryUrl: string;
-    purpose: string
-  }>(
+  requestSlow<SyncProbeResult>(
     `/api/credentials/${encodeURIComponent(id)}/test`,
     { method: 'POST' }
   );
+
+/**
+ * v0.7.34：保存前试连。新增/编辑弹窗里的「测试连接」按钮会调这个，
+ * 跟 proxies-page 的 testProxyDraft 同款模式。不落库、不改探测状态。
+ */
+export const testCredentialDraft = (input: CredentialTestInput) =>
+  requestSlow<SyncProbeResult>('/api/credentials/test', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
 
 export const listProxies = () => request<ProxyEntry[]>('/api/proxies');
 
