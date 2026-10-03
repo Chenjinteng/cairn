@@ -1,0 +1,1573 @@
+openapi: 3.0.3
+info:
+  title: Cairn API
+  version: 0.7.19
+  description: |
+    Cairn 镜像仓库 HTTP API。所有路径相对于 `/` 解析;cairn 的 web UI
+    通过同一组 endpoint 渲染后端(浏览器 → `:8787/api/*`)。如果 cairn
+    前面挂了 reverse proxy(Nginx / Caddy / 别的),路径与 Host 头保持
+    原样即可,handler 不依赖任何特定 origin。
+
+    鉴权: 默认无认证,所有 endpoint 公开访问。开启 `usingAuth`
+    (`/api/config` 里的设置) 后 Basic Auth 才生效。
+
+    错误响应统一格式:
+    ```json
+    {"code":"NOT_FOUND","message":"repository not found","success":false}
+    ```
+    code 是机器可读分类,message 是人可读,success 总是 false。
+  contact:
+    name: Cairn
+    url: https://github.com/Chenjinteng/cairn
+  license:
+    name: AGPL-3.0
+
+servers:
+  - url: /
+
+tags:
+  - name: health
+    description: 健康检查 (无鉴权, 用于 liveness / readiness 探针)
+  - name: config
+    description: 运行时配置 (cairn 启动后通过此 API 改仓库地址 / 代理 / 认证等)
+  - name: inventory
+    description: 镜像清单浏览 (仓库列表 / 标签列表 / 清单内容)
+  - name: repositories
+    description: 仓库级操作 (读 manifest / 导出 tar / 删除)
+  - name: events
+    description: Registry 通知 webhook (registry-side 推送, HMAC 签名校验)
+  - name: pull
+    description: 镜像拉取 (异步任务 + 队列管理)
+  - name: credentials
+    description: 私有 registry 凭据 (basic auth)
+  - name: proxies
+    description: 出口代理配置 (TCP 连通性探测)
+  - name: gc
+    description: Registry garbage-collect 干跑 / 真正执行
+  - name: stats
+    description: 镜像热度统计 (按日聚合 / top / 客户端列表)
+  - name: sync
+    description: 同步任务 (从一个 registry 拉到 cairn)
+
+paths:
+  # ───────── health ─────────
+  /healthz:
+    get:
+      tags: [health]
+      summary: liveness 探针
+      description: |
+        进程在跑就 200。不依赖 SQLite / registry 状态。Docker
+        healthcheck / k8s livenessProbe 用这个。
+      responses:
+        '200':
+          description: alive
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ok
+  /readyz:
+    get:
+      tags: [health]
+      summary: readiness 探针
+      description: |
+        所有 boot 期检查都通过才 200: 配置加载、SQLite 打开、凭据库
+        (可选) 可用、registry storage 可写。k8s readinessProbe 用这个,
+        失败会让 service 退出 endpoint 列表(不再接收流量)。
+      responses:
+        '200':
+          description: ready
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ready
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  # ───────── config ─────────
+  /api/config:
+    get:
+      tags: [config]
+      summary: 读取运行时配置
+      description: |
+        返回仓库地址 / 名称 / 鉴权开关 / 允许删除 / 允许拉取 / 拉取平台
+        限制 / 匿名第三方源 / 热度保留天数 / 已知客户端 UA 等。改这些
+        字段直接 PATCH `/api/config`,无需重启容器。
+      responses:
+        '200':
+          description: 配置对象
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigEnvelope'
+    patch:
+      tags: [config]
+      summary: 增量更新运行时配置
+      description: |
+        任何子集字段都接受;不传的字段保持不变。返回更新后的完整
+        `ConfigEnvelope`(GET 形态)。失败字段校验(例如非法仓库名)
+        返 400 + `code: BAD_REQUEST`。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfigPatch'
+      responses:
+        '200':
+          description: 更新后的完整配置
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  # ───────── inventory ─────────
+  /api/probe:
+    post:
+      tags: [inventory]
+      summary: 探测目标 tag 是否可达 + 列出 manifest 平台
+      description: |
+        输入仓库地址 (可空 = cairn 自己) + repo + tag。返回 200 时
+        `data` 里包含 `available: true` 与 manifest 的 API version /
+        media type / 多架构平台列表。`available: false` 时 `probeError`
+        或 `destError` 给出原因(目的端写权限检查等)。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProbeRequest'
+      responses:
+        '200':
+          description: 探测结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProbeResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/inventory:
+    get:
+      tags: [inventory]
+      summary: 浏览镜像清单 (仓库 + 标签 + 摘要)
+      description: |
+        支持 `?prefix=lib/alp` 过滤仓库, `?tag=3.19` 过滤标签,
+        `?platforms=linux/amd64,linux/arm64` 过滤架构 (空 = 全部)。
+        30 秒内存缓存 (v0.6.32) 避免 list 时反复扫 storage。
+      parameters:
+        - in: query
+          name: prefix
+          schema: { type: string }
+          description: 仓库名前缀过滤
+        - in: query
+          name: tag
+          schema: { type: string }
+          description: 单 tag 过滤
+        - in: query
+          name: platforms
+          schema: { type: string }
+          description: 逗号分隔的 os/arch 列表 (e.g. `linux/amd64,linux/arm64`)
+      responses:
+        '200':
+          description: 仓库树
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Inventory'
+
+  /api/tags:
+    delete:
+      tags: [inventory]
+      summary: 按 tag 删除 (实际是删除 manifest)
+      description: |
+        等价于 `DELETE /api/repositories/{repo}/manifests/{digest}`
+        但只需要给 repo + tag,cairn 自己查 digest。
+        受 `allowDelete=false` 开关限制。
+      parameters:
+        - in: query
+          name: repo
+          required: true
+          schema: { type: string }
+        - in: query
+          name: tag
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 删除完成
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiOk'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ───────── repositories ─────────
+  /api/repositories/{repo}/tags/{tag}/manifest:
+    get:
+      tags: [repositories]
+      summary: 读某 tag 的 manifest (JSON / YAML / OCI image index)
+      description: |
+        Accept 头必带 (registry 协议要求): `application/vnd.docker.distribution.manifest.v2+json`,
+        `application/vnd.oci.image.manifest.v1+json`,
+        `application/vnd.oci.image.index.v1+json`,
+        `application/vnd.docker.distribution.manifest.list.v2+json`。
+      parameters:
+        - $ref: '#/components/parameters/Repo'
+        - $ref: '#/components/parameters/Tag'
+      responses:
+        '200':
+          description: manifest body
+          content:
+            application/vnd.docker.distribution.manifest.v2+json:
+              schema: { type: object }
+            application/vnd.oci.image.index.v1+json:
+              schema: { type: object }
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '406':
+          description: Accept 不被支持
+
+  /api/repositories/{repo}/tags/{tag}/export:
+    get:
+      tags: [repositories]
+      summary: 导出 tag 为 `docker save` 兼容的 tar 流
+      description: |
+        v0.7.0+: 与 `docker save` / `docker load` 双向兼容 (manifest + blobs +
+        repositories + tag)。多架构 image 会把所有架构都打包进 tar;`docker
+        load` 后能用 `docker --platform` 选平台。
+      parameters:
+        - $ref: '#/components/parameters/Repo'
+        - $ref: '#/components/parameters/Tag'
+      responses:
+        '200':
+          description: tar 流 (Content-Type: application/x-tar)
+          content:
+            application/x-tar:
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /api/repositories/{repo}:
+    delete:
+      tags: [repositories]
+      summary: 删除整个仓库
+      description: |
+        列出所有 manifest digest 逐个删,跟 registry GC 行为一致。
+        磁盘空间要跑 registry GC 才回收 (cairn 自动跑 dry-run 报告;
+        真 GC 是 `/api/gc?apply=true`)。
+        受 `allowDelete=false` 开关限制。
+      parameters:
+        - $ref: '#/components/parameters/Repo'
+      responses:
+        '200':
+          description: 删除完成
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiOk'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/repositories/{repo}/manifests/{digest}:
+    delete:
+      tags: [repositories]
+      summary: 按 digest 删除 manifest
+      description: |
+        digest 必须是 `sha256:...` 格式。删除前会列出受影响的 tag
+        (`affectedTags`),让 UI 给出删除确认。
+        受 `allowDelete=false` 开关限制。
+      parameters:
+        - $ref: '#/components/parameters/Repo'
+        - $ref: '#/components/parameters/Digest'
+      responses:
+        '200':
+          description: 删除完成 + 受影响 tag 列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteAffected'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ───────── events ─────────
+  /api/events:
+    post:
+      tags: [events]
+      summary: Registry 通知 webhook (cairn 内置 registry 自推 + 外部兼容)
+      description: |
+        接收 Distribution registry push notifications (manifest / blob
+        push 事件)。校验 `X-Registry-Signature: sha256=<hex>` HMAC。
+        `cfg.notifyToken` 为空时所有请求 401 (fail-closed)。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegistryEvent'
+      responses:
+        '202':
+          description: 已接收, 异步处理
+        '401':
+          description: 签名校验失败
+
+  # ───────── pull ─────────
+  /api/pull/jobs:
+    get:
+      tags: [pull]
+      summary: 拉取任务列表 (内存 + DB 历史)
+      description: |
+        合并内存 (正在跑 / 排队的) 和 SQLite history (50 条封顶,
+        v0.7.16)。重启后内存部分会从 DB 恢复。
+      responses:
+        '200':
+          description: 任务列表 (新→旧)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PullJobView'
+    post:
+      tags: [pull]
+      summary: 入队一个拉取任务
+      description: |
+        异步执行: 返回 201 + 任务 view,实际拉取在后台 worker 跑。
+        支持 inline credential / proxy (不依赖库里存的)。
+        同一时间只有一个 worker 在跑 (serial queue)。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePullJobReq'
+      responses:
+        '201':
+          description: 已入队
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PullJobView'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          description: `allowPull=false`
+
+  /api/pull/jobs/{id}:
+    get:
+      tags: [pull]
+      summary: 读单个任务详情 (含 blob 阶段)
+      description: |
+        v0.7.18+: 历史任务也带 `phases` (每个 blob 的 sha256 / size / status),
+        不是空数组。
+      parameters:
+        - $ref: '#/components/parameters/JobID'
+      responses:
+        '200':
+          description: 任务详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PullJobView'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [pull]
+      summary: 移除历史任务 (从列表里清掉)
+      description: |
+        不会删除已落库的镜像,只清任务记录。
+        内存 + SQLite 都清 (v0.7.15+)。
+      parameters:
+        - $ref: '#/components/parameters/JobID'
+      responses:
+        '200':
+          description: 删除完成
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+
+  /api/pull/jobs/{id}/cancel:
+    post:
+      tags: [pull]
+      summary: 取消任务 (memory + DB fallback)
+      description: |
+        内存里有: 调 cancelFn, jobCtx 被 cancel 后 transport 退出。
+        内存里没 + DB 有 stale running row (v0.7.17 之前的 ghost):
+        fallback 到 `db.PullJobCancel` 把 row 翻 cancelled 返 200。
+      parameters:
+        - $ref: '#/components/parameters/JobID'
+      responses:
+        '200':
+          description: 已取消 / 已 fallback 翻转
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PullJobView'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/pull/probe:
+    post:
+      tags: [pull]
+      summary: 拉取源预检 (同 `/api/probe` 但用 pull 视角)
+      description: |
+        UI 在「加入队列」前调用,看源是否可达 + 平台匹配,失败时
+        直接弹错不让入队。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PullProbeRequest'
+      responses:
+        '200':
+          description: 预检结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PullProbeResponse'
+
+  # ───────── credentials ─────────
+  /api/credentials/:
+    get:
+      tags: [credentials]
+      summary: 凭据库列表 (密码不回显, 只返 `hasPassword: true/false`)
+      responses:
+        '200':
+          description: 凭据列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CredentialView'
+    post:
+      tags: [credentials]
+      summary: 新建凭据 (密码必填, AES-256-GCM 加密落盘)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCredentialReq'
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialView'
+
+  /api/credentials/{id}:
+    parameters:
+      - $ref: '#/components/parameters/CredID'
+    get:
+      tags: [credentials]
+      summary: 读单个凭据 (无密码)
+      responses:
+        '200':
+          description: 凭据
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialView'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [credentials]
+      summary: 更新凭据 (密码留空 = 不改)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCredentialReq'
+      responses:
+        '200':
+          description: 更新后的凭据
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialView'
+    delete:
+      tags: [credentials]
+      summary: 删除凭据 (不影响已落库的镜像, 但用它的 pull / probe 会立即失败)
+      responses:
+        '200':
+          description: 已删除
+
+  /api/credentials/{id}/test:
+    post:
+      tags: [credentials]
+      summary: 测试凭据是否能登入目标 registry
+      parameters:
+        - $ref: '#/components/parameters/CredID'
+      responses:
+        '200':
+          description: 测试结果 (data.apiVersion 是 registry API 版本)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialTestResult'
+
+  # ───────── proxies ─────────
+  /api/proxies/:
+    get:
+      tags: [proxies]
+      summary: 代理列表 (含 probe 状态)
+      responses:
+        '200':
+          description: 代理列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Proxy'
+    post:
+      tags: [proxies]
+      summary: 新建代理 (URL 必填;username / password 可选)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProxyInput'
+      responses:
+        '201':
+          description: 创建成功 (含首次 probe 结果)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Proxy'
+
+  /api/proxies/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ProxyID'
+    get:
+      tags: [proxies]
+      summary: 读单个代理
+      responses:
+        '200':
+          description: 代理详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Proxy'
+    patch:
+      tags: [proxies]
+      summary: 更新代理 (任何子集字段)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProxyInput'
+      responses:
+        '200':
+          description: 更新后的代理
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Proxy'
+    delete:
+      tags: [proxies]
+      summary: 删除代理
+      responses:
+        '200':
+          description: 已删除
+
+  /api/proxies/{id}/test:
+    post:
+      tags: [proxies]
+      summary: 测试代理 URL 是否能登入目标 registry
+      parameters:
+        - $ref: '#/components/parameters/ProxyID'
+      responses:
+        '200':
+          description: 测试结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProxyTestResult'
+
+  /api/proxies/{id}/probe:
+    post:
+      tags: [proxies]
+      summary: 触发单个代理的 TCP 连通性探测 (更新 lastProbeAt / status)
+      parameters:
+        - $ref: '#/components/parameters/ProxyID'
+      responses:
+        '200':
+          description: 探测后的代理 (含最新 status)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Proxy'
+
+  /api/proxies/probe:
+    post:
+      tags: [proxies]
+      summary: 探测所有代理 (并行)
+      responses:
+        '200':
+          description: 探测结果摘要
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  probed:
+                    type: integer
+                  ok:
+                    type: integer
+                  failed:
+                    type: integer
+
+  /api/proxies/test:
+    post:
+      tags: [proxies]
+      summary: 测试一个未保存的代理草稿 (URL 可填错,不会落盘)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProxyInput'
+      responses:
+        '200':
+          description: 测试结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProxyTestResult'
+
+  # ───────── gc ─────────
+  /api/gc:
+    post:
+      tags: [gc]
+      summary: Registry garbage-collect
+      description: |
+        v0.6.32+: `dryRun=true` (默认) 走 dry-run,返回会回收的 blob
+        数量 + 字节数,不改 storage。`dryRun=false` 才真正删 blob。
+      parameters:
+        - in: query
+          name: dryRun
+          schema:
+            type: boolean
+            default: true
+      responses:
+        '200':
+          description: GC 结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GcResult'
+
+  # ───────── stats ─────────
+  /api/stats/summary:
+    get:
+      tags: [stats]
+      summary: 热度总计 (总事件 / 总字节 / 客户端数)
+      responses:
+        '200':
+          description: 摘要
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatsSummary'
+
+  /api/stats/top:
+    get:
+      tags: [stats]
+      summary: Top 仓库 (按事件数 / 字节数)
+      parameters:
+        - in: query
+          name: days
+          schema: { type: integer, default: 30 }
+        - in: query
+          name: by
+          schema:
+            type: string
+            enum: [events, bytes]
+            default: events
+        - in: query
+          name: limit
+          schema: { type: integer, default: 10 }
+      responses:
+        '200':
+          description: Top 列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StatsTopItem'
+
+  /api/stats/series:
+    get:
+      tags: [stats]
+      summary: 时间序列 (按天聚合, 用于热力图)
+      parameters:
+        - in: query
+          name: days
+          schema: { type: integer, default: 90 }
+      responses:
+        '200':
+          description: 时间序列点
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StatsSeriesPoint'
+
+  /api/stats/repositories:
+    get:
+      tags: [stats]
+      summary: 仓库级热度 (含每个 repo 的事件数 / 字节数)
+      responses:
+        '200':
+          description: 仓库列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StatsRepositoryItem'
+
+  /api/stats/events:
+    get:
+      tags: [stats]
+      summary: 最近事件 (v0.7.18: 内存 ring + DB fallback 合并)
+      description: |
+        200 条封顶 (v0.7.18 retention)。重启后从 event_log 读,不会丢。
+      responses:
+        '200':
+          description: 事件列表 (新→旧)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RecentEvent'
+
+  /api/stats/clients:
+    get:
+      tags: [stats]
+      summary: 已知客户端 UA 列表 (含首次/最后见到时间)
+      responses:
+        '200':
+          description: 客户端列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StatsClient'
+
+  /api/stats/ignore:
+    get:
+      tags: [stats]
+      summary: 读 UA 忽略规则列表
+      responses:
+        '200':
+          description: 规则列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/IgnoreRule'
+    post:
+      tags: [stats]
+      summary: 新增 UA 忽略规则 (子串匹配, 忽略大小写)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                pattern: { type: string }
+      responses:
+        '201':
+          description: 规则已加
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IgnoreRule'
+    delete:
+      tags: [stats]
+      summary: 删除 UA 忽略规则
+      parameters:
+        - in: query
+          name: pattern
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 已删除
+
+  /api/stats/heat:
+    delete:
+      tags: [stats]
+      summary: 清空全部热度数据 (热度聚合 + 已知客户端 + 幂等记录)
+      description: |
+        不影响拉取历史。不可撤销,UI 必须二次确认。
+
+  # ───────── sync ─────────
+  /api/sync/:
+    get:
+      tags: [sync]
+      summary: 同步任务列表
+      responses:
+        '200':
+          description: 任务列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SyncTask'
+    post:
+      tags: [sync]
+      summary: 新建同步任务 (拉或推)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSyncTaskReq'
+      responses:
+        '201':
+          description: 任务已建
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncTask'
+
+  /api/sync/{id}:
+    parameters:
+      - $ref: '#/components/parameters/SyncID'
+    get:
+      tags: [sync]
+      summary: 读单个任务
+      responses:
+        '200':
+          description: 任务详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncTask'
+    patch:
+      tags: [sync]
+      summary: 更新任务
+      responses:
+        '200':
+          description: 更新后
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncTask'
+    delete:
+      tags: [sync]
+      summary: 删除任务 (级联删除 runs / schedules)
+
+  /api/sync/{id}/run:
+    post:
+      tags: [sync]
+      summary: 立即触发一次同步 (不等 schedule)
+      parameters:
+        - $ref: '#/components/parameters/SyncID'
+      responses:
+        '202':
+          description: 已入队
+
+  /api/sync/{id}/runs:
+    get:
+      tags: [sync]
+      summary: 任务的运行历史 (按时间倒序)
+      parameters:
+        - $ref: '#/components/parameters/SyncID'
+      responses:
+        '200':
+          description: 运行历史
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SyncRun'
+
+  /api/sync/{id}/runs/{rid}/items:
+    get:
+      tags: [sync]
+      summary: 单次 run 的 per-(repo, tag) 详情 (失败 / 成功的镜像列表)
+      parameters:
+        - $ref: '#/components/parameters/SyncID'
+        - $ref: '#/components/parameters/RunID'
+      responses:
+        '200':
+          description: items 列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SyncRunItem'
+
+  /api/sync/test:
+    post:
+      tags: [sync]
+      summary: 测试连接 (填 url + username + password, 不入库)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SyncConnectionTestReq'
+      responses:
+        '200':
+          description: 测试结果 (含 API version)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncConnectionTestResult'
+
+  /api/sync/{id}/schedules/:
+    parameters:
+      - $ref: '#/components/parameters/SyncID'
+    get:
+      tags: [sync]
+      summary: 列出该任务的所有 cron 计划
+      responses:
+        '200':
+          description: 计划列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SyncSchedule'
+    post:
+      tags: [sync]
+      summary: 新建一个 cron 计划
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSyncScheduleReq'
+      responses:
+        '201':
+          description: 已建
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncSchedule'
+
+  /api/sync/{id}/schedules/{sid}:
+    parameters:
+      - $ref: '#/components/parameters/SyncID'
+      - $ref: '#/components/parameters/ScheduleID'
+    patch:
+      tags: [sync]
+      summary: 更新计划 (cron / enabled)
+      responses:
+        '200':
+          description: 更新后
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncSchedule'
+    delete:
+      tags: [sync]
+      summary: 删除计划
+      responses:
+        '200':
+          description: 已删
+
+  # ───────── docs ─────────
+  /api/docs:
+    get:
+      tags: [health]
+      summary: Swagger UI 入口
+      description: |
+        v0.7.19+: 静态资源 (swagger-ui 5.33.1) + 我们的 OpenAPI spec 渲染。
+        完整路径 `/api/docs`,spec 在 `/api/docs/openapi.yaml`。
+      responses:
+        '200':
+          description: HTML
+          content:
+            text/html: {}
+  /api/docs/openapi.yaml:
+    get:
+      tags: [health]
+      summary: OpenAPI 3.0 spec (cairn 自己,不是 petstore)
+      responses:
+        '200':
+          description: spec
+          content:
+            application/yaml: {}
+
+# ───────────────────────────── components ─────────────────────────────
+components:
+  parameters:
+    Repo:
+      in: path
+      name: repo
+      required: true
+      schema: { type: string }
+      description: 仓库名 (e.g. `library/alpine`)
+    Tag:
+      in: path
+      name: tag
+      required: true
+      schema: { type: string }
+      description: tag 名
+    Digest:
+      in: path
+      name: digest
+      required: true
+      schema: { type: string }
+      description: manifest digest (e.g. `sha256:abc123...`)
+    JobID:
+      in: path
+      name: id
+      required: true
+      schema: { type: string }
+      description: pull job ID (e.g. `job-1790961332999686957-1`)
+    CredID:
+      in: path
+      name: id
+      required: true
+      schema: { type: string }
+      description: credential ID
+    ProxyID:
+      in: path
+      name: id
+      required: true
+      schema: { type: string }
+      description: proxy ID
+    SyncID:
+      in: path
+      name: id
+      required: true
+      schema: { type: integer }
+      description: sync task ID
+    RunID:
+      in: path
+      name: rid
+      required: true
+      schema: { type: integer }
+      description: sync run ID
+    ScheduleID:
+      in: path
+      name: sid
+      required: true
+      schema: { type: integer }
+      description: sync schedule ID
+
+  responses:
+    BadRequest:
+      description: 请求参数错误
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiErr'
+    Forbidden:
+      description: 操作被 `allowDelete / allowPull` 开关拒绝
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiErr'
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiErr'
+    ServerError:
+      description: 服务器内部错误
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiErr'
+    ServiceUnavailable:
+      description: 服务暂时不可用 (boot 期检查失败 / 下游不可达)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiErr'
+
+  schemas:
+    ApiOk:
+      type: object
+      properties:
+        code: { type: string, example: OK }
+        message: { type: string }
+        success: { type: boolean, example: true }
+        data: {}
+    ApiErr:
+      type: object
+      properties:
+        code: { type: string, example: NOT_FOUND }
+        message: { type: string }
+        success: { type: boolean, example: false }
+
+    ConfigEnvelope:
+      type: object
+      description: 完整运行时配置
+      properties:
+        name: { type: string }
+        version: { type: string }
+        port: { type: integer }
+        hostPort: { type: integer }
+        url: { type: string }
+        host: { type: string }
+        usingAuth: { type: boolean }
+        allowDelete: { type: boolean }
+        allowPull: { type: boolean }
+        allowCredentials: { type: boolean }
+        allowProxies: { type: boolean }
+        allowRegistryEvents: { type: boolean }
+        pullQueueSize: { type: integer }
+        statsRetentionDays: { type: integer }
+        platforms:
+          type: array
+          items: { type: string, example: linux/amd64 }
+        anonymousUpstreams:
+          type: array
+          items: { type: string }
+        knownUseragents:
+          type: array
+          items: { type: string }
+
+    ConfigPatch:
+      type: object
+      description: 任意子集字段,不传保持不变
+      properties:
+        name: { type: string }
+        platforms:
+          type: array
+          items: { type: string }
+        anonymousUpstreams:
+          type: array
+          items: { type: string }
+        usingAuth: { type: boolean }
+        registryUsername: { type: string }
+        allowDelete: { type: boolean }
+        allowPull: { type: boolean }
+        statsRetentionDays: { type: integer }
+
+    ProbeRequest:
+      type: object
+      required: [repo, tag]
+      properties:
+        sourceUrl: { type: string }
+        repo: { type: string }
+        tag: { type: string }
+
+    ProbeResponse:
+      type: object
+      properties:
+        available: { type: boolean }
+        apiVersion: { type: string }
+        mediaType: { type: string }
+        platforms:
+          type: array
+          items:
+            type: object
+            properties:
+              os: { type: string }
+              architecture: { type: string }
+              digest: { type: string }
+              size: { type: integer }
+        probeError: { type: string }
+        destError: { type: string }
+
+    Inventory:
+      type: object
+      description: 仓库树
+      additionalProperties:
+        type: array
+        items:
+          $ref: '#/components/schemas/TagInfo'
+
+    TagInfo:
+      type: object
+      properties:
+        name: { type: string }
+        digest: { type: string }
+        mediaType: { type: string }
+        bytes: { type: integer }
+        layerCount: { type: integer }
+        platforms:
+          type: array
+          items: { type: string }
+        createdAt: { type: string, format: date-time }
+
+    DeleteAffected:
+      type: object
+      properties:
+        affectedTags:
+          type: array
+          items: { type: string }
+        digest: { type: string }
+
+    RegistryEvent:
+      type: object
+      description: Distribution push notification (envelope + manifest push payload)
+      properties:
+        id: { type: string }
+        timestamp: { type: string, format: date-time }
+        action: { type: string, enum: [push, pull, manifest_push, manifest_pull, blob_push, blob_pull, tag_delete] }
+        target:
+          type: object
+          properties:
+            mediaType: { type: string }
+            digest: { type: string }
+            repository: { type: string }
+            tag: { type: string }
+        request:
+          type: object
+          properties:
+            method: { type: string }
+            useragent: { type: string }
+            remoteAddr: { type: string }
+            host: { type: string }
+        actor:
+          type: object
+          properties:
+            name: { type: string }
+
+    PullJobView:
+      type: object
+      properties:
+        id: { type: string }
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed, cancelled]
+        sourceRef: { type: string }
+        sourceRepo: { type: string }
+        sourceTag: { type: string }
+        destRepo: { type: string }
+        destTag: { type: string }
+        credential: { type: string }
+        proxy: { type: string }
+        bytes: { type: integer }
+        totalBytes: { type: integer }
+        blobsDone: { type: integer }
+        blobsTotal: { type: integer }
+        finalDigest: { type: string }
+        errorMessage: { type: string }
+        createdAt: { type: string, format: date-time }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: string, format: date-time }
+        fromHistory:
+          type: boolean
+          description: true = 来自 SQLite 历史, false = 内存活任务
+        phases:
+          type: array
+          description: |
+            v0.7.18+: 每个 blob / config / child-manifests 的明细。
+            history row 也带这个字段 (从 pull_job_blobs 表恢复)。
+          items:
+            $ref: '#/components/schemas/PullPhase'
+
+    PullPhase:
+      type: object
+      properties:
+        name: { type: string, example: blob:0 }
+        digest: { type: string }
+        status:
+          type: string
+          enum: [pending, running, success, failed, skipped]
+        bytes: { type: integer }
+        totalBytes: { type: integer, nullable: true }
+        message: { type: string }
+
+    CreatePullJobReq:
+      type: object
+      required: [sourceRef, destRepo, destTag]
+      properties:
+        sourceRef: { type: string, description: `<repo>:<tag>` }
+        destRepo: { type: string }
+        destTag: { type: string }
+        credentialId: { type: string }
+        proxyId: { type: string }
+        sourceUrl: { type: string }
+        sourceUsername: { type: string }
+        sourcePassword: { type: string }
+
+    PullProbeRequest:
+      type: object
+      properties:
+        sourceRef: { type: string }
+        sourceUrl: { type: string }
+        credentialId: { type: string }
+        proxyId: { type: string }
+        destRepo: { type: string }
+        destTag: { type: string }
+
+    PullProbeResponse:
+      type: object
+      properties:
+        state: { type: string, enum: [idle, loading, ok, failed] }
+        sourceRepo: { type: string }
+        sourceTag: { type: string }
+        apiVersion: { type: string }
+        host: { type: string }
+        message: { type: string }
+        authRequired: { type: boolean }
+
+    CredentialView:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        registryUrl: { type: string }
+        username: { type: string }
+        note: { type: string }
+        hasPassword: { type: boolean }
+        updatedAt: { type: string, format: date-time }
+
+    CreateCredentialReq:
+      type: object
+      required: [name, registryUrl, username, password]
+      properties:
+        name: { type: string }
+        registryUrl: { type: string }
+        username: { type: string }
+        password: { type: string, description: 明文,服务端 AES-256-GCM 加密落盘 }
+        note: { type: string }
+
+    UpdateCredentialReq:
+      type: object
+      properties:
+        name: { type: string }
+        registryUrl: { type: string }
+        username: { type: string }
+        password: { type: string, description: 留空 = 不改; 清空 = 关闭密码 }
+        note: { type: string }
+
+    CredentialTestResult:
+      type: object
+      properties:
+        apiVersion: { type: string }
+        bearerRealm: { type: string }
+
+    Proxy:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        url: { type: string }
+        username: { type: string }
+        note: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        lastProbeAt: { type: string, format: date-time }
+        lastProbeStatus: { type: string, enum: [ok, failed, unknown] }
+        lastProbeError: { type: string }
+        lastProbeLatencyMs: { type: number }
+
+    ProxyInput:
+      type: object
+      required: [name, url]
+      properties:
+        name: { type: string }
+        url: { type: string, description: `http://...` 或 `socks5://...` }
+        username: { type: string }
+        password: { type: string }
+        note: { type: string }
+
+    ProxyTestResult:
+      type: object
+      properties:
+        ok: { type: boolean }
+        apiVersion: { type: string }
+        error: { type: string }
+
+    GcResult:
+      type: object
+      properties:
+        dryRun: { type: boolean }
+        blobsEligible: { type: integer }
+        bytesEligible: { type: integer }
+        blobsDeleted: { type: integer }
+        bytesDeleted: { type: integer }
+        error: { type: string }
+
+    StatsSummary:
+      type: object
+      properties:
+        totalEvents: { type: integer }
+        totalBytes: { type: integer }
+        uniqueClients: { type: integer }
+        windowDays: { type: integer }
+
+    StatsTopItem:
+      type: object
+      properties:
+        repository: { type: string }
+        tag: { type: string }
+        events: { type: integer }
+        bytes: { type: integer }
+
+    StatsSeriesPoint:
+      type: object
+      properties:
+        day: { type: string, example: '2026-10-03' }
+        events: { type: integer }
+        bytes: { type: integer }
+
+    StatsRepositoryItem:
+      type: object
+      properties:
+        repository: { type: string }
+        events: { type: integer }
+        bytes: { type: integer }
+        uniqueTags: { type: integer }
+
+    RecentEvent:
+      type: object
+      properties:
+        at: { type: string, format: date-time, description: 服务端接收时间 }
+        eventAt: { type: string, format: date-time, description: registry 端事件时间 }
+        id: { type: string }
+        action: { type: string }
+        method: { type: string }
+        mediaType: { type: string }
+        repository: { type: string }
+        tag: { type: string }
+        useragent: { type: string }
+        addr: { type: string }
+        host: { type: string }
+        actor: { type: string }
+        reason: { type: string }
+        counted: { type: boolean }
+
+    StatsClient:
+      type: object
+      properties:
+        useragent: { type: string }
+        events: { type: integer }
+        counted: { type: integer }
+        firstSeenAt: { type: string, format: date-time }
+        lastSeenAt: { type: string, format: date-time }
+        self: { type: boolean }
+
+    IgnoreRule:
+      type: object
+      properties:
+        pattern: { type: string }
+
+    SyncTask:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        direction: { type: string, enum: [pull, push] }
+        remoteUrl: { type: string }
+        remoteCredentialId: { type: string }
+        include: { type: string, description: glob, 空 = 全部 }
+        enabled: { type: boolean }
+        createdAt: { type: integer, format: int64 }
+        updatedAt: { type: integer, format: int64 }
+
+    CreateSyncTaskReq:
+      type: object
+      required: [name, direction, remoteUrl]
+      properties:
+        name: { type: string }
+        direction: { type: string, enum: [pull, push] }
+        remoteUrl: { type: string }
+        remoteCredentialId: { type: string }
+        include: { type: string }
+        enabled: { type: boolean }
+
+    SyncRun:
+      type: object
+      properties:
+        id: { type: integer }
+        taskId: { type: integer }
+        startedAt: { type: integer, format: int64 }
+        finishedAt: { type: integer, format: int64, nullable: true }
+        status:
+          type: string
+          enum: [running, success, failed, partial]
+        reposTotal: { type: integer }
+        reposSynced: { type: integer }
+        reposFailed: { type: integer }
+        error: { type: string }
+
+    SyncRunItem:
+      type: object
+      properties:
+        id: { type: integer }
+        runId: { type: integer }
+        repository: { type: string }
+        tag: { type: string }
+        state:
+          type: string
+          enum: [succeeded, failed, cancelled]
+        error: { type: string }
+        bytesDone: { type: integer }
+        bytesTotal: { type: integer }
+        startedAt: { type: integer, format: int64 }
+        finishedAt: { type: integer, format: int64, nullable: true }
+
+    SyncConnectionTestReq:
+      type: object
+      required: [url]
+      properties:
+        url: { type: string }
+        username: { type: string }
+        password: { type: string }
+
+    SyncConnectionTestResult:
+      type: object
+      properties:
+        apiVersion: { type: string }
+        bearerRealm: { type: string }
+
+    SyncSchedule:
+      type: object
+      properties:
+        id: { type: integer }
+        taskId: { type: integer }
+        cronExpr: { type: string, description: 标准 5 字段 cron (v0.7.4+ 支持时区) }
+        timezone: { type: string, description: IANA 名, e.g. `Asia/Shanghai` }
+        enabled: { type: boolean }
+        nextRunAt: { type: integer, format: int64 }
+
+    CreateSyncScheduleReq:
+      type: object
+      required: [cronExpr]
+      properties:
+        cronExpr: { type: string }
+        timezone: { type: string }
+        enabled: { type: boolean, default: true }

@@ -180,6 +180,13 @@ export default function PageSidebar({ groups, selected, onSelect, version }: Pag
         <a href="/cairn-intro.html">
           产品介绍
         </a>
+        {' · '}
+        {/* v0.7.19: swagger-ui at /api/docs. Footer link, no top-nav
+            button — operators who know it exists can find it; everyone
+            else doesn't get visual noise. */}
+        <a href="/api/docs" target="_blank" rel="noopener">
+          API 文档
+        </a>
         {' · © Cairn'}
       </div>
     </aside>

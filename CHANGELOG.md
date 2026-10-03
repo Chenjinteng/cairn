@@ -6,6 +6,51 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.19] - 2026-10-03
+
+本轮新增 OpenAPI / Swagger UI 文档子系统。属新增一整个模块 (新包
++ 新 spec + vendored UI 资源),按 AGENTS.md 「新增一整个模块 →
+中版本」默认应进 v0.8.0。**本轮按用户拍板走小版本 v0.7.19**,与
+AGENTS.md 默认规则不同 —— 若日后想统一回滚到中版本节奏,可以
+重命名发布 v0.8.0 (commit history 完整,可重打 tag)。
+
+### 新增
+
+- **`/api/docs` Swagger UI**: vendored swagger-ui 5.33.1 静态资源
+  (internal/docs/dist/), 通过 `//go:embed` 嵌进二进制,无运行时
+  npm 依赖。运行时只多 ~4.3MB(已 gzip,~1.5MB),符合 AGENTS.md
+  「单进程单二进制 + scratch 镜像」。
+- **`/api/docs/openapi.yaml`**: 手写 OpenAPI 3.0 spec, ~50 个
+  endpoint 全部覆盖 (config / inventory / repositories / pull /
+  credentials / proxies / gc / stats / sync)。每个 endpoint 包含
+  summary + 常用 response code + request/response schema,数据
+  形状跟 UI 的 PullJob / Credential / Proxy / SyncTask 完全对齐。
+- **`internal/docs` 包**: chi.Router.Mount(r) 注册 `/api/docs`
+  路由,index / spec / dist 资源三个 handler,带 path traversal
+  guard。
+- **Footer 入口**: 侧栏底部加「API 文档」链接 (新 tab),
+  不进产品顶部 nav (按用户拍板)。
+
+### 决策
+
+- **零 build-time 依赖**: 手写 spec + vendored UI,无需 `swag init`
+  / `npm install`。代价是 spec ~47KB 手写 yaml,但好处是 code review
+  容易 (diff 可读),UI 升级可控 (改 dist/ 子目录即可)。
+- **dist/ 进版本库**: swagger-ui 的 dist 静态资源 commit 进 git,
+  让任何 clone 仓库 + `go build` 就能拿到完整功能,无需额外下载。
+  这是 vendoring pattern (vs `/internal/webui/dist/` 是 build 产
+  物所以 gitignore)。
+- **路径 `/api/docs`** (非 `/docs`): 用户拍板,与现有 `/api/*`
+  同一命名空间。
+
+### 单测
+
+- `internal/docs/docs_test.go`: 三组断言 — index HTML 返 200 +
+  含 swagger-ui marker; spec YAML 返 200 + 含 openapi: marker;
+  dist 资源 (css / js) 正确 content-type,未知路径 404。
+
+---
+
 ## [0.7.18] - 2026-10-03
 
 本轮把两类原本只在内存、重启就丢的数据持久化到 SQLite: 拉取历史的

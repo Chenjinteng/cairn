@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/Chenjinteng/cairn/internal/config"
+	"github.com/Chenjinteng/cairn/internal/docs"
 	"github.com/Chenjinteng/cairn/internal/registry"
 	"github.com/Chenjinteng/cairn/internal/webui"
 )
@@ -78,6 +79,11 @@ func NewRouterWithExtras(h *Handlers, extras *ExtraHandlers, cfg *config.Config)
 
 	// API surface
 	r.Route("/api", func(r chi.Router) {
+		// v0.7.19: swagger-ui + OpenAPI spec at /api/docs.
+		// Mounted inside the /api subtree so a future auth gate
+		// (when usingAuth flips on) covers it automatically.
+		docs.Mount(r)
+
 		r.Get("/config", h.GetConfig)
 		r.Patch("/config", h.UpdateConfig)
 		r.Post("/probe", h.Probe)
