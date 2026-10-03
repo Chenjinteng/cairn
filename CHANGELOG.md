@@ -6,6 +6,74 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.23] - 2026-10-03
+
+本轮给运行中的 sync 任务加「中止」入口。属既有 sync 机制的补全
+(v0.6.17 留下 TODO "cancelled reserved for future per-tag cancellation"),
+不引入新模块 → 小版本进位 0.7.23。
+
+### 背景
+
+v0.7.21 / v0.7.22 跑通 tags_filter + long_timeout 后,UAT 立刻撞到:
+大镜像(2GB / 28 层)拉到一半发现配错了 / 加错了,只能等满 5-30 分钟
+timeout。Engine 启动 run 时显式用 `context.WithoutCancel(ctx)`(SYNC-1/2
+设计,防止 client disconnect 中断 run),所以**没有外部中止路径**。这次
+加 `Engine.Cancel(taskID)` + API + UI 按钮补这个口子。
+
+### 新增
+
+- **`Engine.Cancel(taskID int64) bool`**(`internal/sync/engine.go`):
+  从 `e.cancels` map 拿 cancel func,删除后调用。false = 没 run 在跑
+  (handler → 400,UI race)。Map 用独立 `cancelMu` 守护,绝不在锁里调
+  cancel()(cancel 可能触发深层 I/O abort)。
+- **`Engine.Start` 改写**:`runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))`,
+  把 cancel func 存进 `e.cancels[taskID]`。`execute` 退出时 defer
+  `delete(e.cancels, task.ID)` + `lock.Unlock()`(合并 defer,顺序
+  敏感 —— 先 delete 后 unlock)。
+- **`Engine.execute` terminal write 改用 `context.Background()`**:
+  不用 runCtx,因为 Cancel 后 ctx.Err()!=nil 会让 UpdateRun 失败,
+  run row 就会卡在 'running' 等下次进程启动 stale sweep。改成
+  background ctx 让 cancel 后 terminal row 立刻可见。
+- **`POST /api/sync/{id}/cancel`**(`internal/api/sync_handlers.go`):
+  调 `Engine.Cancel(id)`,200 返 `{cancelled:true, taskId}`,400 返
+  「no run in flight」;404 找不到 task;500 store error。
+- **`cancelSyncTask(id)` API 客户端**(`web/src/api.ts`):Promise 返
+  `{cancelled:boolean, taskId:number}`。
+- **UI 中止按钮 + handleCancel**(`web/src/pages/sync-page.tsx`):
+  操作列宽 200 → 230px,「中止」图标只在 `lastRunStatus==='running'`
+  时显示,其他时候不渲染(避免空 placeholder 撑列宽)。点击走
+  `modal.confirm` 二段确认(高危动作,防手滑),确认后调 cancel API +
+  toast「已请求中止,稍等」+ refresh。3s 轮询自然追上终态(已经在跑)。
+- **`cancellingId` state**:跟 `runningId` 拆开,允许「立即运行」
+  和「中止」按钮在不同 task 上同时旋转。
+
+### 取消语义(契约)
+
+**非抢占**:cancel 只 signal run goroutine 的 ctx,正在 in-flight 的
+HTTP 调用(http.Client.Do 读 slow blob)不会被打断,它跑完 / 撞自身
+deadline,下一次 `errors.Is(err, context.Canceled)` 检查才 bail。
+对 v0.7.22-era task 拉 2GB blob @ 4MB/s,**最坏 abort latency = 单层
+下载时间 (~17s for 70MB)**。Handler 立刻返 200,UI 立刻解锁按钮,
+但 run row 还显示 'running' 直到 layer 落地。
+
+### 单测
+
+- `internal/sync/engine_test.go`(新):
+  - `TestEngineCancelShortCircuitsBeforeRemoteCall`: 真 DB + 真 Engine,
+    Start 一个会 hang 的 run,立刻 Cancel,断言 run row 在 2s 内到
+    terminal 状态 + Error 包含 "context"。再 Start 同一 task 验证
+    lock 没泄漏。
+  - `TestEngineCancelUnknownTask`: 不存在的 taskID 返回 false 不 panic。
+
+### 端到端验证(已实跑)
+
+- `POST /api/sync/2/cancel` → 200 `{cancelled:true, taskId:2}`。
+- run row 翻 'failed',Error = "context canceled"。
+- 3s 后 lastRunStatus 从 'running' → 'failed',「立即运行」按钮解锁。
+- UI 中止按钮在 running 时可见,非 running 不渲染。
+
+---
+
 ## [0.7.22] - 2026-10-03
 
 本轮两件事:大镜像 timeout 可配 + tags_filter 实时解析预览。

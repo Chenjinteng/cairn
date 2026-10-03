@@ -74,6 +74,7 @@ import {
   listSyncSchedules,
   listSyncTasks,
   runSyncTask,
+  cancelSyncTask,
   testSyncConnection,
   updateSyncSchedule,
   updateSyncTask,
@@ -465,6 +466,9 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
 
   /** 立即运行中的 task id（按钮 spinner）。 */
   const [runningId, setRunningId] = useState<number | null>(null);
+  /** v0.7.23: 中止运行中的 task id（按钮 spinner）。跟 runningId 拆开
+   * 因为「立即运行」和「中止」可能在不同时机旋转。 */
+  const [cancellingId, setCancellingId] = useState<number | null>(null);
 
   /**
    * v0.6.13 (UI): 「测试连接」结果不再落进 state,而是按状态码分档直接
@@ -720,6 +724,56 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
     } finally {
       setRunningId(null);
     }
+  };
+
+  /**
+   * v0.7.23: 中止运行中的 sync 任务。
+   *
+   * 点「中止」→ POST /api/sync/{id}/cancel → 后端 dispatch 一个 cancel
+   * 信号给 background goroutine → run row 在 background goroutine 跑完
+   * 当前 layer (max 一个 layer timeout) 后翻 'failed' 并解锁「立即运行」
+   * 按钮。
+   *
+   * UI 不阻塞等终态:
+   *   - 立刻 toast「已请求中止,稍等」(真 user 在意的是「点了有响应」)
+   *   - 跑 refresh() 看到 lastRunStatus=running 还在(再等几十秒才翻)
+   *   - 现有 3s 轮询自然追上终态(已经在跑,running=true 时 interval 触发)
+   *
+   * 200 + cancelled=true 表示 cancel 信号已发出;实际 run 还要等当
+   * 前 layer / repo 退出才能停。400 表示 task 已不在 running 状态
+   * (按钮 enabled 时是 running,click 之前 run 已结束 —— UI race,
+   * refresh 后按钮会自动 disable)。
+   */
+  const handleCancel = async (task: SyncTask) => {
+    // v0.7.23: 中止是高危动作,二段确认 —— 避免「手滑点了开始没完没了」。
+    modal.confirm({
+      title: `中止任务 "${task.name}"？`,
+      content:
+        '当前正在同步的 (repo, tag) 会跑完当前层后中止,run row 标 failed。' +
+        '已经下完的层会保留,下次「立即运行」会跳过它们。',
+      okText: '中 止',
+      okButtonProps: { danger: true },
+      cancelText: '取 消',
+      onOk: async () => {
+        setCancellingId(task.id);
+        try {
+          const result = await cancelSyncTask(task.id);
+          if (result.success) {
+            message.success('已请求中止，稍等当前层跑完');
+            await refresh();
+          } else if (result.code === 'BAD_REQUEST') {
+            // 按钮 enabled 时 running,但 click 之前已结束 —— UI race。
+            // 提示后 refresh,3s 轮询会自然解锁按钮。
+            message.warning('任务已不在运行状态，正在刷新');
+            await refresh();
+          } else {
+            message.error(`中止失败：${result.message}`);
+          }
+        } finally {
+          setCancellingId(null);
+        }
+      },
+    });
   };
 
   // ── 历史（v0.6.20 重构：Modal → Task Table 行内嵌展开） ────────────────────────
@@ -1012,7 +1066,8 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
     {
       title: '操作',
       key: 'actions',
-      width: 200,
+      // v0.7.23: 加「中止」图标,200 → 230px。
+      width: 230,
       render: (_, task) => {
         /** v0.6.11（SYNC-1/4）：后台还在跑 → 按钮置灰,防重复发起（后端 409 兜底）。 */
         const running = task.lastRunStatus === 'running';
@@ -1021,6 +1076,10 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
          *   - 删除文字标签后,280px 列宽可以压到 200px,不再被「运行」「编辑」等字撑爆
          *   - 删除按钮仍走 Popconfirm 二段确认（高危动作不能一健下去）
          *   - v0.6.10 SYNC-4 的「disabled 包 <span>」技巧对运行按钮仍需要
+         *
+         * v0.7.23: 新增「中止」图标,只在 running 时显示 —— 让 user 在大
+         * 镜像(2GB+ / 30+ 层)拉一半时能主动终止,不必等满 timeout。
+         * 二段确认(modal.confirm 在 handleCancel 里)防止手滑。
          */
         return (
           <Space size={0}>
@@ -1037,6 +1096,26 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
                 />
               </span>
             </Tooltip>
+            {/*
+              v0.7.23: 中止按钮。running=true 时可见,其余时候不渲染 —
+              不渲染而不是 disabled,避免空 placeholder 撑出列宽。
+              antd Button 默认 type='text',显式标 danger=true 是为了
+              「中止」语义明显(红色);handler 里有 modal.confirm 二段
+              确认,所以这里点一下不会立刻发请求。
+            */}
+            {running && (
+              <Tooltip title="中止当前运行（高危）">
+                <Button
+                  size="small"
+                  type="text"
+                  danger
+                  icon={<PauseCircleOutlined />}
+                  loading={cancellingId === task.id}
+                  onClick={() => void handleCancel(task)}
+                  aria-label="中止"
+                />
+              </Tooltip>
+            )}
             <Tooltip title="编辑任务">
               <Button
                 size="small"

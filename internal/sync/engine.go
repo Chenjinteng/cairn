@@ -41,6 +41,16 @@ import (
 // reference fails the run with ErrCredentialNotFound; it never falls
 // back to anonymous.
 //
+// v0.7.23: cancel mechanism. Engine.Start wraps the run context with
+// context.WithCancel (on top of context.WithoutCancel so client
+// disconnects still don't kill a run); the cancel func is stored in
+// e.cancels[taskID] so Engine.Cancel(taskID) can be invoked from any
+// goroutine — typically the HTTP handler for POST /sync/{id}/cancel.
+// The run goroutine's existing context.Canceled checks (runPull,
+// pullRepo, pullFromSpecs, pullTag) handle the abort naturally; run
+// status lands on 'failed' with an error mentioning cancellation. See
+// Cancel for the failure-mode contract.
+//
 // Failure semantics:
 //   - continue-on-error per repo: one bad repo doesn't abort the run.
 //   - per-tag failures bubble up as per-repo failures (tags within a
@@ -50,9 +60,11 @@ import (
 //     credential resolution failed) abort the whole run with
 //     status=failed and Error=...; repos_total is populated even if 0
 //     so the UI shows "0 attempted".
-//   - context cancellation aborts the run immediately with one Info
-//     line ("pull aborted" / "push aborted") instead of a WARN per
-//     repo, and the run lands in 'failed' — not 'partial' (SYNC-2).
+//   - context cancellation (either explicit Cancel() or — in the
+//     detached-ctx world — basically never from upstream) aborts the
+//     run immediately with one Info line ("pull aborted" / "push
+//     aborted") instead of a WARN per repo, and the run lands in
+//     'failed' — not 'partial' (SYNC-2).
 type Engine struct {
 	store *Store
 	local storage.Storage
@@ -61,6 +73,14 @@ type Engine struct {
 
 	perTaskMu sync.Mutex
 	perTask   map[int64]*sync.Mutex
+
+	// v0.7.23: per-task cancel funcs. Map[int64]cancel is safe because
+	// Start holds the per-task lock before storing, so two concurrent
+	// Start calls for the same task never both succeed (TryLock fails
+	// the second). cancelMu guards the map; we never hold it across
+	// cancel() — that call could trigger deep I/O aborts.
+	cancelsMu sync.Mutex
+	cancels   map[int64]context.CancelFunc
 }
 
 // NewEngine constructs an Engine. vault may be nil — tasks that
@@ -77,6 +97,7 @@ func NewEngine(store *Store, local storage.Storage, vault *credentials.Vault, lo
 		vault:   vault,
 		log:     log,
 		perTask: make(map[int64]*sync.Mutex),
+		cancels: make(map[int64]context.CancelFunc),
 	}
 }
 
@@ -102,6 +123,11 @@ func NewEngine(store *Store, local storage.Storage, vault *credentials.Vault, lo
 // client disconnect, a page refresh, or the response completing must
 // not cancel the sync (SYNC-2 — the old synchronous design logged a
 // WARN per repo with "context canceled" the moment the browser gave up).
+//
+// v0.7.23: on top of the detach, we wrap with context.WithCancel so
+// Engine.Cancel(taskID) can abort the run explicitly. The cancel func
+// is stashed in e.cancels; execute's deferred cleanup deletes it on
+// terminal-state write so the map never grows.
 func (e *Engine) Start(ctx context.Context, task SyncTask) (SyncRun, error) {
 	if !task.Enabled {
 		return SyncRun{}, ErrTaskDisabled
@@ -127,17 +153,73 @@ func (e *Engine) Start(ctx context.Context, task SyncTask) (SyncRun, error) {
 	}
 
 	// Detach from the request context: iteration must outlive the HTTP
-	// response. StartedAt / run.ID were persisted above; the goroutine
-	// writes the terminal state with the same detached context.
-	go e.execute(context.WithoutCancel(ctx), task, run, lock)
+	// response. Then wrap with WithCancel so Cancel(taskID) can abort.
+	// StartedAt / run.ID were persisted above; the goroutine writes the
+	// terminal state with the same detached+cancelable context.
+	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	e.cancelsMu.Lock()
+	e.cancels[task.ID] = cancel
+	e.cancelsMu.Unlock()
+
+	go e.execute(runCtx, task, run, lock)
 
 	return run, nil
 }
 
+// Cancel aborts the run currently in flight for taskID. Returns true if
+// a run was in flight and the cancel was dispatched; false if no run
+// is active for this task (handler maps to 400, not a no-op success,
+// because the UI needs to know it clicked too late / wrong state).
+//
+// Cancellation is best-effort: it only signals the run goroutine's
+// context. Network calls in flight (http.Client.Do on a 5-minute layer
+// pull) won't be preempted; they finish or hit their own deadline first,
+// then the next ctx.Err() check in pullTag / pullRepo / pullFromSpecs
+// bails out. For a v0.7.21-era task pulling a 2 GB blob at 4 MB/s, the
+// worst-case abort latency is one full layer download (~70 MB / ~17 s).
+// The handler keeps the connection open and returns immediately — the
+// run row stays 'running' for those few seconds, then flips to 'failed'
+// with an error containing "context canceled". UI polls see the
+// transition.
+//
+// Safe to call concurrently and from any goroutine.
+func (e *Engine) Cancel(taskID int64) bool {
+	e.cancelsMu.Lock()
+	cancel, ok := e.cancels[taskID]
+	if ok {
+		delete(e.cancels, taskID)
+	}
+	e.cancelsMu.Unlock()
+	if !ok {
+		return false
+	}
+	cancel()
+	return true
+}
+
 // execute runs one iteration and always leaves the run row in a
 // terminal state. It owns the per-task lock (released on return).
+//
+// v0.7.23: also clears e.cancels[taskID] on exit so Cancel() can't reach
+// a stale cancel func for a task whose run already finished. Order of
+// the two defers matters — unlock is on the outer scope; we put the
+// cancels-delete inline so it runs after the terminal-state write
+// but before the lock release.
+//
+// The terminal-state write uses a background context — separate from
+// `ctx` (which is the runCtx and may already be canceled). Without
+// this guard, Cancel() would leave the run row stuck on 'running'
+// until the next process boot's MarkStaleRunsFailed sweep, because
+// the SQL UPDATE on a canceled ctx returns ctx.Err() before it ever
+// reaches SQLite. The transition should be visible immediately, not
+// after a container restart.
 func (e *Engine) execute(ctx context.Context, task SyncTask, run SyncRun, lock *sync.Mutex) {
-	defer lock.Unlock()
+	defer func() {
+		e.cancelsMu.Lock()
+		delete(e.cancels, task.ID)
+		e.cancelsMu.Unlock()
+		lock.Unlock()
+	}()
 
 	runErr := e.iterate(ctx, task, &run)
 
@@ -155,8 +237,9 @@ func (e *Engine) execute(ctx context.Context, task SyncTask, run SyncRun, lock *
 
 	// Best-effort terminal write: losing it only means the row stays
 	// 'running' until the next process start sweeps it
-	// (MarkStaleRunsFailed at boot).
-	if err := e.store.UpdateRun(ctx, run); err != nil {
+	// (MarkStaleRunsFailed at boot). Use context.Background() rather
+	// than ctx — see comment on execute for why.
+	if err := e.store.UpdateRun(context.Background(), run); err != nil {
 		e.log.Warn("sync: update run row failed",
 			"run_id", run.ID, "task_id", task.ID, "err", err)
 	}

@@ -46,6 +46,10 @@ type SyncHandlers struct {
 //	DELETE /sync/{id}             — delete task (cascades runs)
 //	POST   /sync/{id}/run         — start a run; 202 + the running run,
 //	                                409 while another run is in flight
+//	POST   /sync/{id}/cancel      — abort a run in flight; 200 with
+//	                                {cancelled:true} on dispatch,
+//	                                400 if no run is active
+//	                                (v0.7.23 — was a UI gap before)
 //	GET    /sync/{id}/runs        — list recent runs (newest first,
 //	                                default limit 50)
 //	GET    /sync/{id}/runs/{rid}/items?limit=&offset=
@@ -63,6 +67,7 @@ func (s *SyncHandlers) RegisterRoutes(r chi.Router) {
 		r.Patch("/{id}", s.UpdateTask)
 		r.Delete("/{id}", s.DeleteTask)
 		r.Post("/{id}/run", s.RunTask)
+		r.Post("/{id}/cancel", s.CancelTask)
 		r.Get("/{id}/runs", s.ListRuns)
 		r.Get("/{id}/runs/{rid}/items", s.ListRunItems)
 		r.Post("/test", s.TestConnection)
@@ -311,6 +316,60 @@ func (s *SyncHandlers) RunTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, run)
+}
+
+// CancelTask — POST /api/sync/{id}/cancel
+//
+// Aborts the run currently in flight for the given task. Returns 200
+// immediately after dispatching the cancel signal — the run goroutine
+// finishes its current layer / commit / error write asynchronously, so
+// the run row stays 'running' for a few seconds before flipping to
+// 'failed' with an error mentioning cancellation. UI should keep the
+// task in lastRunStatus='running' until the next poll (which they
+// already do — 3s tick — see sync-page.tsx).
+//
+// Status mapping:
+//   - 200 OK              — cancel was dispatched (the run will end soon)
+//   - 400 BAD_REQUEST     — task exists but has no run in flight
+//   - 404 NOT_FOUND       — task id doesn't exist
+//   - 500 INTERNAL        — store lookup error
+//
+// Best-effort: the cancel is non-preemptive. Network calls already in
+// flight (http.Client.Do reading a slow blob) will finish or hit their
+// own deadline first; the next ctx.Err() check inside pullTag /
+// pullRepo / pullFromSpecs then bails. Documented in engine.Cancel.
+func (s *SyncHandlers) CancelTask(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	if _, err := s.Store.GetTask(r.Context(), id); err != nil {
+		if errors.Is(err, sync.ErrTaskNotFound) {
+			writeError(w, r, http.StatusNotFound, err)
+			return
+		}
+		writeError(w, r, http.StatusInternalServerError, err)
+		return
+	}
+	if !s.Engine.Cancel(id) {
+		// No cancel func registered for this task — either no run has
+		// ever started, or the previous run already finished. From the
+		// caller's perspective the "nothing to cancel" state is a UI
+		// race (button was enabled because lastRunStatus was running
+		// but the run ended before the click arrived). 400 + a clear
+		// error tells the UI to refresh; 200 + silent success would
+		// hide the race.
+		writeError(w, r, http.StatusBadRequest,
+			fmt.Errorf("sync: task %d has no run in flight", id))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"cancelled": true,
+		"taskId":    id,
+		// The terminal-state run row isn't here — it lands in the
+		// background after the cancel propagates. UI polls
+		// /api/sync (lastRunStatus) to detect the transition.
+	})
 }
 
 // ListRuns — GET /api/sync/{id}/runs?limit=50

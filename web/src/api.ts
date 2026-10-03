@@ -532,6 +532,21 @@ export const runSyncTask = (id: number) =>
   request<SyncRun>(`/api/sync/${id}/run`, { method: 'POST' });
 
 /**
+ * v0.7.23: 中止一个正在运行的 sync 任务。后端 dispatch 一个 cancel 信号
+ * 给 background goroutine —— run row 不会立刻翻 terminal,可能还有
+ * 一个正在 in-flight 的 layer 下载要等它自己 timeout(per-layer 5min /
+ * long-timeout 30min)。UI 应该继续轮询列表,等 lastRunStatus 翻到
+ * 'failed' 或 'success' 才算完。
+ *
+ * 后端 200 返回 {cancelled:true, taskId};400 if task has no run in
+ * flight(UI race:按钮 enabled 时 running,click 之前 run 已结束)。
+ */
+export const cancelSyncTask = (id: number) =>
+  request<{ cancelled: boolean; taskId: number }>(`/api/sync/${id}/cancel`, {
+    method: 'POST',
+  });
+
+/**
  * 拉某任务的运行历史,默认 50 条;`limit` 显式传 0 表示不限（不传列表 UI）
  */
 export const listSyncRuns = (id: number, limit = 50) =>
