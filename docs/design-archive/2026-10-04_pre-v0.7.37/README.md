@@ -20,6 +20,24 @@
 
 下面每个差异点都标了"原版在哪 + 实际实现位置",刷新后两边都能对照看。
 
+### 字体策略（v0.7.37 设计稿恢复 Google Fonts）
+
+刷新时走方案 A —— **设计稿和 demo / 实际 web 字体栈刻意不同**:
+
+| 资产 | 字体策略 | 理由 |
+|---|---|---|
+| 设计稿（cairn-brand / cairn-ui-design / index）| Google Fonts CDN · Outfit / DM Serif / JetBrains Mono | 设计理想态,视觉好看 |
+| demo-A-*.html（8 个）| system stack | 跟实际 cairn web 一致 |
+| 实际 cairn web（web/src/theme.css + main.tsx）| system stack（v0.5.38 起）| 离线部署零外部依赖,无 FOUT |
+
+原版（v0.5.36 时期）所有 10 个设计稿 + 8 个 demo 都 link Google Fonts——本快照完整保留了那时的状态。
+
+v0.7.37 刷新时一开始把所有 html 都改成 system stack,后用户觉得老字体（Google Fonts）好看一些,改回分工模式。三份设计稿顶部都有注释明确写「设计理想态 vs 实际 web」,不会让人误以为字体栈应该一致。
+
+如果未来需要让设计稿字体跟实际 web 完全对齐,有两条路:
+- (i) 接受 system stack 在设计稿里的视觉,所有 html 统一走 system stack
+- (ii) 给实际 cairn web 加回 Google Fonts,放弃 v0.5.38 立的"离线部署零外部依赖"原则
+
 ### 元数据过期
 
 | 原版位置 | 写的是什么 | 实际是什么 |
@@ -99,6 +117,7 @@
 | 版本 | 作者 | 描述 |
 |---|---|---|
 | v1.0 | Mavis | 把 `docs/design/` 上一版冻结到本目录,作为 v0.7.37 刷新前的快照。共 10 个 html + 1 份本说明。 |
+| v1.1 | Mavis | 追加字体策略一节,讲清 v0.7.37 设计稿为什么恢复 Google Fonts、demo 和实际 web 为什么不恢复,以及未来若要对齐的两个方向。 |
 
 ## 后续动作
 
