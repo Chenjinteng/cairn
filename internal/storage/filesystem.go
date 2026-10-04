@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Chenjinteng/cairn/internal/config"
 )
 
 // Filesystem is the production Storage impl, backed by a local directory.
@@ -841,7 +843,11 @@ func (f *Filesystem) GC(_ context.Context, opts GCOption) (*GCResult, error) {
 	// Pass 2: abandon old upload sessions. StartUpload writes a startedat
 	// marker precisely so this sweep can tell "in flight" from "client died".
 	uploadsRoot := filepath.Join(f.root, "uploads")
-	cutoff := time.Now().UTC().Add(-24 * time.Hour)
+	// v0.7.37 (review §1.2): was hardcoded `-24 * time.Hour` here and
+	// again in server.go's retentionLoop. Sourced from
+	// config.UploadSessionTTL (== config.DayInterval) so both stay in
+	// lockstep when one changes.
+	cutoff := time.Now().UTC().Add(-config.UploadSessionTTL)
 	_ = filepath.Walk(uploadsRoot, func(p string, info os.FileInfo, err error) error {
 		if err != nil || info == nil || !info.IsDir() {
 			return nil

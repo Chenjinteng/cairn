@@ -500,11 +500,16 @@ func (e *Executor) executeOne(parent context.Context, j *Job) {
 func (e *Executor) runJobGuarded(ctx context.Context, j *Job, jobID string) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
+			stack := debug.Stack()
 			slog.Error("pull job panicked",
 				"job", jobID,
 				"panic", fmt.Sprint(r),
-				"stack", string(debug.Stack()))
-			err = fmt.Errorf("internal error: %v", r)
+				"stack", string(stack))
+			// v0.7.37 (review §2.1): use *PanicError so callers can
+			// errors.As(err, &pull.PanicError{}) distinguish a panic
+			// from a regular job failure, and (when r was an error)
+			// errors.Is against the original cause.
+			err = &PanicError{Value: r, Stack: stack}
 		}
 	}()
 	return e.runJob(ctx, j)
@@ -536,6 +541,34 @@ var (
 	ErrJobNotFound    = errors.New("pull job not found")
 	ErrJobNotTerminal = errors.New("pull job is not in a terminal state")
 )
+
+// PanicError wraps a recovered panic value into an error so callers can
+// use errors.Is / errors.As to tell a recovered panic apart from a regular
+// job failure.
+//
+// Most callers panic(err) with an error value, but panics can also be plain
+// strings (panic("registry returned garbage Location: ...") is a realistic
+// failure mode). Unwrap returns the inner error when Value was already an
+// error, nil otherwise — so the errors.Is/As chain works for the common case
+// and degrades gracefully for the string case.
+//
+// v0.7.37 (review §2.1): replaces the previous fmt.Errorf("internal error:
+// %v", r) which used %v instead of %w and broke the error chain.
+type PanicError struct {
+	Value any
+	Stack []byte
+}
+
+func (p *PanicError) Error() string {
+	return fmt.Sprintf("internal error: %v", p.Value)
+}
+
+func (p *PanicError) Unwrap() error {
+	if err, ok := p.Value.(error); ok {
+		return err
+	}
+	return nil
+}
 
 // jobCounter disambiguates jobs created within the same clock tick.
 //

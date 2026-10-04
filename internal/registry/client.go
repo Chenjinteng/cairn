@@ -17,9 +17,13 @@ import (
 
 // UserAgent identifies cairn to upstream registries. Some allowlists in
 // private registries match on User-Agent to permit scripts; "cairn/<ver>"
-// is honest and easy to filter on. Sourced from internal/version so a single
-// version bump propagates everywhere.
-var UserAgent = version.UserAgent
+// is honest and easy to filter on.
+//
+// v0.7.37 (review §1.1): callers use `version.UserAgent` directly. The
+// previous `var UserAgent = version.UserAgent` indirection was removable
+// noise — there are no writers, only readers, and `version.UserAgent` is a
+// const so wrapping it in a `var` was downgrading an immutable constant to
+// mutable global state.
 
 // manifestAccept is the Accept header sent on every manifest fetch.
 // The V2 spec returns 404 (not 400, not 406) if Accept doesn't list a known
@@ -61,7 +65,7 @@ func (c *Client) PutRaw(ctx context.Context, method, path, contentType string, b
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", UserAgent)
+	req.Header.Set("User-Agent", version.UserAgent)
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
@@ -204,7 +208,7 @@ func (c *Client) doRequest(ctx context.Context, method, path, accept string, res
 	if err != nil {
 		return nil, nil, fmt.Errorf("registry: build request: %w", err)
 	}
-	req.Header.Set("User-Agent", UserAgent)
+	req.Header.Set("User-Agent", version.UserAgent)
 	if accept != "" {
 		req.Header.Set("Accept", accept)
 	} else if strings.Contains(full.Path, "/manifests/") {
@@ -235,7 +239,7 @@ func (c *Client) doRequest(ctx context.Context, method, path, accept string, res
 				if rerr == nil {
 					req2.Header = req.Header.Clone()
 					req2.Header.Set("Authorization", "Bearer "+token)
-					req2.Header.Set("User-Agent", UserAgent)
+					req2.Header.Set("User-Agent", version.UserAgent)
 					if accept != "" {
 						req2.Header.Set("Accept", accept)
 					} else if strings.Contains(full.Path, "/manifests/") {

@@ -391,7 +391,10 @@ func (r *Runtime) Start(ctx context.Context) error {
 // The DB call gets its own short-lived context: using r.PullCtx directly
 // would turn a normal shutdown into a scary "cleanup failed" warning.
 func (r *Runtime) retentionLoop(ctx context.Context) {
-	const interval = 24 * time.Hour
+	// v0.7.37 (review §1.2): was hardcoded `24 * time.Hour` here and
+	// again in storage/filesystem.go's upload-session sweep. Sourced
+	// from config.DayInterval so both stay in lockstep.
+	const interval = config.RetentionSweepInterval
 
 	timer := time.NewTimer(30 * time.Second) // first pass: let startup settle
 	defer timer.Stop()

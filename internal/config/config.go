@@ -36,6 +36,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Mutable holds runtime-editable settings persisted to SQLite. v0.5.2
@@ -309,6 +310,33 @@ const (
 	// manifests and upload sessions. It nests inside DataDirPath so a single
 	// bind mount carries both the metadata and every pulled/pushed image.
 	StorageDirPath = DataDirPath + "/registry"
+)
+
+// Day-scaled durations.
+//
+// v0.7.37 (review §1.2): `24 * time.Hour` was hardcoded in two places
+// (server.go's retentionLoop and storage/filesystem.go's upload-session
+// sweep) with no shared source. They happen to match today; sourcing both
+// from DayInterval keeps a future change to be one-line.
+//
+// These are not in Mutable — adjusting them is operator-grade (changes
+// resource reclamation cadence) and there is no observed demand for a UI
+// knob. If that changes, see docs/review/v0.7.36-cross-module.md §1.2
+// for the full UI-configurable Timeouts design.
+const (
+	// DayInterval is the canonical "1 day" duration. Used as the base
+	// for both the retention sweep interval and the upload-session TTL.
+	DayInterval = 24 * time.Hour
+
+	// RetentionSweepInterval is how often retentionLoop wakes up to
+	// prune stats / events / pull history past the configured retention
+	// window. (server.go: retentionLoop)
+	RetentionSweepInterval = DayInterval
+
+	// UploadSessionTTL bounds how long an abandoned cross-mount upload
+	// session can live before the storage sweep reclaims it. (storage/
+	// filesystem.go: sweepUploads)
+	UploadSessionTTL = DayInterval
 )
 
 // Config is the resolved runtime configuration for cairn.

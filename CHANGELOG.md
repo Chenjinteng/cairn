@@ -6,6 +6,40 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.37] - 2026-10-04
+
+review cleanup:把 [docs/review/v0.7.36-cross-module.md](./docs/review/v0.7.36-cross-module.md) 里 4 项 Tier 1 / Tier 2 落地（小版本,纯清理,0 行为变更）。Tier 1 §1.3（internal/api god 包拆 bounded context）排进 [docs/ROADMAP.md](./docs/ROADMAP.md) 待开工,本轮不做。
+
+### 动机
+
+v0.7.36 落地了一份跨模块架构审查（commit `d570290`），列出 6 项 actionable finding。本轮消化其中 4 项,行为零变更但修掉 4 类「昨天没出错今天可能踩雷」的隐患：① 可写全局变量被错误赋值的可能、② 错误链断链导致 panic 来源无法追溯、③ 同语义「24h」字面量在两处独立维护（改一个不跟另一个）、④ 一段无意义自实现的 itoa（sync 包已经 import strconv）。
+
+### 修复
+
+- **`internal/registry` — `UserAgent` 收敛到 `version.UserAgent`**（review §1.1）
+  - 删 `client.go:22` 的 `var UserAgent = version.UserAgent`。该 var 是把 `version.UserAgent`（const）降级为可变全局状态,当前 8 个 set 点全部只读,语义上等于 `version.UserAgent` 的别名。
+  - 8 个 set 点（`client.go:68,211,242` / `bearer.go:152` / `inventory.go:315` / `blob.go:74,205,240`）改用 `version.UserAgent`;bearer.go / inventory.go / blob.go 加 import version。
+
+- **`internal/pull` — panic recovery 错误链修复 + `PanicError` 类型**（review §2.1）
+  - 旧实现 `err = fmt.Errorf("internal error: %v", r)` 用 `%v` 丢错误链,导致 caller 无法 `errors.Is(err, ...)` 区分 panic 与业务错误。
+  - 新增 `pull.PanicError{Value, Stack}` 类型,实现 `Error()` + `Unwrap()`（`Value` 是 error 时返回,否则 nil —— 既支持 `panic(err)` 也兼容 `panic("msg")`）。
+  - `runJobGuarded` 用 `&PanicError{Value: r, Stack: stack}` 包装;caller 可以 `errors.As(err, &pull.PanicError{})` 拿到 stack。
+
+- **`internal/config` — 24h 双写收敛**（review §1.2）
+  - 加 3 个常量 `DayInterval = 24 * time.Hour` / `RetentionSweepInterval = DayInterval` / `UploadSessionTTL = DayInterval`。
+  - `server.go:retentionLoop` 用 `config.RetentionSweepInterval`;`storage/filesystem.go:sweepUploads` 用 `config.UploadSessionTTL`。
+  - 后续要调 GC 周期或 upload session 截止,改 `DayInterval` 一处即可。
+
+- **`internal/sync` — 删自实现 `itoa`**（review §2.2）
+  - 旧 `writer.go` 自实现 19 行 `itoa`,注释说「avoid importing strconv just for two call sites」。但 `cron.go:5` 已经 import strconv,「省 import」前提不成立。
+  - 改用 `strconv.Itoa`,删函数。改 `writer.go:Error()` 2 处调用点。
+
+### 文档
+
+- **[`docs/ROADMAP.md`](./docs/ROADMAP.md)** — 新增「internal/api 按 bounded context 拆分」立项（review §1.3）。1-2 周 broad refactor,本轮不动。
+
+---
+
 ## [0.7.36] - 2026-10-04
 
 镜像同步页页头加一颗「刷新」按钮。

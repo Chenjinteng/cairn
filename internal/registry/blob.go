@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/Chenjinteng/cairn/internal/version"
 )
 
 // BlobExists checks whether the destination registry already has a blob.
@@ -69,7 +71,7 @@ func (c *Client) GetBlob(ctx context.Context, repo, digest string) (io.ReadClose
 		if err != nil {
 			return nil, fmt.Errorf("registry: build request: %w", err)
 		}
-		req.Header.Set("User-Agent", UserAgent)
+		req.Header.Set("User-Agent", version.UserAgent)
 		if bearerToken != "" {
 			req.Header.Set("Authorization", "Bearer "+bearerToken)
 		} else if c.user != "" {
@@ -200,7 +202,7 @@ func (c *Client) UploadBlob(ctx context.Context, repo, digest string, src io.Rea
 		if err != nil {
 			return err
 		}
-		req.Header.Set("User-Agent", UserAgent)
+		req.Header.Set("User-Agent", version.UserAgent)
 		req.Header.Set("Content-Type", "application/octet-stream")
 		req.Header.Set("Content-Range", fmt.Sprintf("%d-%d", offset, offset+int64(n)-1))
 		req.ContentLength = int64(n)
@@ -235,7 +237,7 @@ func (c *Client) UploadBlob(ctx context.Context, repo, digest string, src io.Rea
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", UserAgent)
+	req.Header.Set("User-Agent", version.UserAgent)
 	req.Header.Set("Content-Length", "0")
 	resp, err := c.http.Do(req)
 	if err != nil {

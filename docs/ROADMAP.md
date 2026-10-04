@@ -21,6 +21,7 @@
 | --- | --- | --- | --- |
 | 0.5.19 | 工程化:最小 CI / `-race` 守门 / 版本号一致性 / 冒烟脚本固化 | 工程化 | 部分完成(见下) |
 | 0.6.0 | registry 同步(regsync 内建):拉 / 推 双向可配 | 新模块 | 号位已定,待开工 |
+| — | internal/api 按 bounded context 拆分 | 架构 | 待开工 |
 
 > **roadmap 不记录 hotfix**,每个小版本修复去 `CHANGELOG.md` 查;**也不列"未来做了哪些小修"**,因为结构性列表没意义 —— 只标"已发布 / 在做 / 待开工"三态。
 >
@@ -31,6 +32,28 @@
 **状态**：部分完成（v0.5.50 时的进度）—— `make gates`（`Makefile` 第 156–167 行）已固化 `tsc --noEmit` / `go build ./...` / `go build -tags webui` / `go test -race ./...` 一条命令；`-race` 守门**已落地**（B5 / B7 的并发问题已在此前各轮修掉）；**未完成**：E1 GitHub Actions 自动跑 CI / E3 版本号 5 处一致性校验脚本 / E4 `go.mod` 与 `Dockerfile` `GO_IMAGE` 自动同步 / E5 隔离冒烟脚本固化。
 
 **骨架级别不变**：E1 / E3 / E4 / E5 全部仍在 backlog 里,见 [`docs/resilience.md`](./resilience.md) 了解上下文。
+
+## internal/api 按 bounded context 拆分（架构，待开工）
+
+v0.7.36 cross-module review（[docs/review/v0.7.36-cross-module.md §1.3](./review/v0.7.36-cross-module.md)）识别出 `internal/api` 是隐性 god 包：3 个 receiver（`*Handlers` / `*ExtraHandlers` / `*SyncHandlers`）、71 个 HTTP 端点、最大的单文件 `handlers_extra.go` 2038 行。文件名按"放满了拆出来"演化，不是按业务域 —— 新人加端点时心智负担大；未来按 bounded context 拆时这是最大杠杆点，越晚拆代价越高。
+
+**目标形态**（仅方向，路径以开工时为准）：
+
+```
+internal/api/
+  browse/        Mount(r chi.Router)   // 列镜像 / 看 tag / 看 manifest
+  credentials/   Mount(r chi.Router)   // 凭据库增删改查 + 测试连接
+  pull/          Mount(r chi.Router)   // 拉取队列
+  sync/          Mount(r chi.Router)   // 同步任务
+  settings/      Mount(r chi.Router)   // 设置 / 监听端口 / 保留天数
+  stats/         Mount(r chi.Router)   // 统计 + 历史
+  proxies/       Mount(r chi.Router)   // 代理管理
+  router.go                            // facade: api.NewRouter(handlers...) 组装
+```
+
+每个子包暴露独立的 dependencies（不再 cross-embed `Handlers`）。`Mount(r chi.Router)` 是 single entry point，由 facade 装配。
+
+**当前不动**：review 自己评估为 "broad refactor, code-review skill 不报此类"，适合单独立项。当前无对应用户痛点，触发需求：新人加端点时的摩擦变大 / 想给 sync 写隔离单测时 mock 困难。
 
 ## 0.6.0 · registry 同步（regsync 内建）（新模块，中版本）
 

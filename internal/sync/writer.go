@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -272,9 +273,9 @@ type WriterError struct {
 
 func (e *WriterError) Error() string {
 	if e.Msg != "" {
-		return "sync: " + e.Op + ": " + e.Msg + " (status=" + itoa(e.Status) + " url=" + e.URL.String() + ")"
+		return "sync: " + e.Op + ": " + e.Msg + " (status=" + strconv.Itoa(e.Status) + " url=" + e.URL.String() + ")"
 	}
-	return "sync: " + e.Op + ": status=" + itoa(e.Status) + " url=" + e.URL.String()
+	return "sync: " + e.Op + ": status=" + strconv.Itoa(e.Status) + " url=" + e.URL.String()
 }
 
 // mustParseRef parses a URL reference (relative or absolute). Panics
@@ -289,25 +290,3 @@ func mustParseRef(s string) *url.URL {
 	return u
 }
 
-// itoa avoids importing strconv just for two call sites.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
-}

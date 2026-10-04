@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Chenjinteng/cairn/internal/version"
 )
 
 // BearerAuth handles the V2 spec's "Bearer token" flow, used by Docker Hub,
@@ -149,7 +151,7 @@ func (b *BearerAuth) fetchTokenOnce(ctx context.Context, ch Challenge, basicAuth
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("User-Agent", UserAgent)
+	req.Header.Set("User-Agent", version.UserAgent)
 	// Only send Basic auth when a username is actually configured.
 	// auth.docker.io rejects an empty-credential header (base64(":"))
 	// with 401 "incorrect username or password" instead of ignoring it,

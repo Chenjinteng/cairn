@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"golang.org/x/sync/errgroup"
+
+	"github.com/Chenjinteng/cairn/internal/version"
 )
 
 // Page sizes for /v2/_catalog and /v2/<name>/tags/list.
@@ -312,7 +314,7 @@ func (c *Client) Probe(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("registry: build request: %w", err)
 	}
-	req.Header.Set("User-Agent", UserAgent)
+	req.Header.Set("User-Agent", version.UserAgent)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("registry: GET /v2/: %w", err)
