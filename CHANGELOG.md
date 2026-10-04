@@ -6,6 +6,27 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.51] - 2026-10-04
+
+`PageLoading` 加 `cover` prop —— `'viewport'` 时用 `position: fixed` 覆盖整个 viewport，而不是只盖父容器 box。给「镜像列表」显式 opt-in，避免加载时 `.metric-grid` 顶部 4 张 MetricCard 露出来。无 API / 后端变更。
+
+### 变更
+
+- **`PageLoading` 加 `cover` prop ([`web/src/components/page-loading.tsx`](./web/src/components/page-loading.tsx))**
+  - `'parent'`（默认）：`position: absolute + inset: 0`,覆盖 nearest positioned ancestor 的 padding box。**v0.6.22 行为不变**,其它 6 个页面继续用这个
+  - `'viewport'`：`position: fixed + inset: 0`,覆盖整个 viewport,不跟随任何 scroll container。**给镜像列表用** —— 它的 `.page--fill` 顶部有 `.metric-grid`(仓库数 / Tag 数 / 镜像层合计 / 清单刷新时间),loading 期间露出来,用户可能扫到「仓库数 = 0」的瞬态值造成「看起来没数据」的错觉
+
+- **「镜像列表」显式 opt-in `cover='viewport'` ([`web/src/pages/images-page.tsx`](./web/src/pages/images-page.tsx))**
+  - 注释里说明为什么用 viewport 而不是 parent:`.metric-grid` 在 loading 期间不该露
+  - 其它页面(sync / pull / stats / credentials / proxies / settings)继续用 `'parent'` 默认 —— 它们只有表格一个 section 需要遮盖
+
+### 背景
+
+v0.7.50 给镜像列表 opt-in `delay=0 + minDuration=700`,但没解决覆盖范围:PageLoading 嵌在 `.table-scroll` 内只覆盖 Table 区域,`.page--fill` 顶部的 `.metric-grid` 在 loading 期间露出来 —— 用户在 v0.7.50 部署后报「蒙板只盖住一页列表,往下滚动看到没盖住的行」,实际是「MetricCard 在蒙板覆盖范围之外,滚动时能看到」。
+v0.7.51 引入 `cover='viewport'` 让镜像列表蒙板覆盖整个 viewport,彻底消除加载期其他 section 的可见性。
+
+---
+
 ## [0.7.50] - 2026-10-04
 
 `PageLoading` 默认参数改回 v0.6.28 的「避免闪屏」语义（`delay=200ms` / `minDuration=250ms`）。**只**给「镜像列表」页面（用户进入控制台看到的第一个页面）显式传 `delay={0} minDuration={700}` 让 cairn-mark 入场动画跑完。其它页面维持默认避免闪屏。

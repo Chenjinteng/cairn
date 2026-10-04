@@ -15,7 +15,7 @@ package version
 
 // Version is the semantic version of the running binary.
 // Format: 主.中.小 (Major.Minor.Patch). See AGENTS.md for the bump rules.
-const Version = "0.7.50"
+const Version = "0.7.51"
 
 // UserAgent is the value sent on outbound registry requests. Useful for
 // allowlists / log filtering on the upstream registry.
