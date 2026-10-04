@@ -3,17 +3,25 @@
 <head>
 <meta charset="UTF-8">
 <title>Cairn · Design Index</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <!--
-  v0.7.37: 字体栈说明（离线部署零外部依赖，v0.5.38 起）
+  v0.7.37: 字体策略 — 本页是「设计理想态」,与实际 cairn web 字体栈不同
 
-  原版设计稿 link Google Fonts CDN 加载 Outfit / DM Serif Display /
-  JetBrains Mono。v0.5.38 cairn web 改为纯系统栈（见 web/src/theme.css）：
-    - UI 主字体：-apple-system / BlinkMacSystemFont / Segoe UI / PingFang SC
-    - Display：   Georgia / Times New Roman
-    - Mono：      ui-monospace / SFMono-Regular / Menlo / Consolas
+  本 design 索引页 link Google Fonts CDN 加载 Outfit / DM Serif Display / JetBrains Mono,
+  渲染出 cairn 品牌应有的视觉气质。
 
-  本页是 design 目录的索引，仍使用同样的字体策略（system stack），
-  与 cairn web 字体栈对齐。
+  ⚠️ 实际 cairn web（web/src/theme.css / main.tsx）从 v0.5.38 起走 system stack,
+  不再 link Google Fonts（理由:离线部署零外部依赖）:
+    - UI 主字体:  -apple-system / BlinkMacSystemFont / Segoe UI / PingFang SC
+    - Display:    Georgia / 'Times New Roman'
+    - Mono:       ui-monospace / SFMono-Regular / Menlo / Consolas
+
+  这两份字体栈**刻意不同**:
+    - 本目录的设计稿（cairn-brand.html / cairn-ui-design.html / index.html）= 设计理想态
+    - demo-A-*.html + 实际 cairn web                              = system stack
+  详见 docs/design-archive/2026-10-04_pre-v0.7.37/README.md 的字体策略说明。
 -->
 <style>
 :root {
@@ -31,8 +39,7 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body {
   background: var(--bg); color: var(--ink);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
-    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
   font-size: 15px; line-height: 1.6; -webkit-font-smoothing: antialiased;
   background-image:
     radial-gradient(at 8% 0%, rgba(13, 148, 136, 0.04) 0px, transparent 50%),
@@ -46,7 +53,7 @@ html, body {
 .hero-text { flex: 1; }
 .eyebrow { font-size: 11px; font-weight: 600; letter-spacing: 0.18em; color: var(--primary-deep); text-transform: uppercase; margin-bottom: 12px; }
 h1.wordmark {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif; font-weight: 600;
+  font-family: 'Outfit', sans-serif; font-weight: 600;
   font-size: 64px; line-height: 1; letter-spacing: -0.03em;
   color: var(--ink); margin-bottom: 14px;
 }
@@ -60,12 +67,12 @@ h1.wordmark .dot { color: var(--accent); }
 .section { padding: 56px 0; border-bottom: 1px solid var(--line); }
 .section:last-of-type { border-bottom: none; }
 h2 {
-  font-family: Georgia, 'Times New Roman', serif;
+  font-family: 'DM Serif Display', serif;
   font-size: 32px; font-weight: 400; line-height: 1.1;
   letter-spacing: -0.02em; color: var(--ink); margin-bottom: 6px;
 }
 .h-sub {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: 'JetBrains Mono', monospace;
   font-size: 12px; color: var(--ink-soft); margin-bottom: 28px;
 }
 .card-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
@@ -76,16 +83,16 @@ h2 {
   transition: transform .15s, box-shadow .15s;
 }
 .card:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,0,0,0.06); }
-.card .kind { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 10px; color: var(--primary-deep); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 4px; }
+.card .kind { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--primary-deep); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 4px; }
 .card .title { font-size: 17px; font-weight: 600; margin-bottom: 6px; color: var(--ink); }
 .card .desc { font-size: 13px; color: var(--ink-mid); line-height: 1.5; margin-bottom: 10px; }
-.card .meta { display: flex; gap: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; color: var(--ink-soft); padding-top: 10px; border-top: 1px dashed var(--line); }
+.card .meta { display: flex; gap: 12px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-soft); padding-top: 10px; border-top: 1px dashed var(--line); }
 .card .meta span { display: inline-flex; align-items: center; gap: 4px; }
 .card .meta b { color: var(--ink); font-weight: 600; }
 .card.overview-link { background: var(--primary-tint); border-color: transparent; }
 footer {
   margin-top: 60px; padding-top: 28px; border-top: 1px solid var(--line);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; color: var(--ink-soft);
+  font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-soft);
   display: flex; justify-content: space-between; align-items: center;
 }
 </style>
@@ -216,7 +223,7 @@ footer {
     </p>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px;font-size:13px">
       <div style="background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:18px 22px">
-        <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;color:var(--primary-deep);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px">// design → code</div>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--primary-deep);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px">// design → code</div>
         <div style="color:var(--ink)">改 demo → 同步</div>
         <ul style="margin:0;padding-left:18px;color:var(--ink-mid);line-height:1.8">
           <li><code>theme.css</code> 的颜色 token</li>
@@ -225,7 +232,7 @@ footer {
         </ul>
       </div>
       <div style="background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:18px 22px">
-        <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;color:var(--primary-deep);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px">// code → design</div>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--primary-deep);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px">// code → design</div>
         <div style="color:var(--ink)">改源码 → 同步</div>
         <ul style="margin:0;padding-left:18px;color:var(--ink-mid);line-height:1.8">
           <li>任何 token 改名 / 新增</li>
