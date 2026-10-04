@@ -3,7 +3,6 @@ import {
   Alert,
   App as AntdApp,
   Button,
-  Collapse,
   Descriptions,
   Empty,
   Form,
@@ -21,7 +20,6 @@ import {
   CheckCircleOutlined,
   CloseCircleOutlined,
   CloudDownloadOutlined,
-  DownOutlined,
   HourglassOutlined,
   LoadingOutlined,
   PauseCircleOutlined,
@@ -780,258 +778,253 @@ export default function PullPage({ config, sidebarFilter, onPublishGroups }: Pro
           onValuesChange={handleValuesChange}
           disabled={Boolean(config && !config.allowPull)}
         >
-          <Form.Item
-            label="源镜像名"
-            name="image"
-            extra="支持任意 docker pull 引用：alpine:3.19、library/alpine:3.19、ghcr.io/owner/img:1.0、192.0.2.20:10001/library/alpine:3.9 等。"
-            rules={[
-              { required: true, message: '请填写镜像名' },
-              {
-                // v0.5.49: 空值由上面的 required 独占负责,这条 validator 只在
-                // 有值时跑「缺 tag」检查。旧版本这里也判 !ref,空值时两条规则
-                // 同时触发「请填写镜像名」→ 截图里两条红字叠在一起。
-                validator: (_, value: string) => {
-                  if (!value || !value.trim()) {
+          {/*
+            v0.7.37 布局调整：3 列 grid — 源镜像 / 目标镜像 / 高级选项窄卡片并排。
+            高级选项不再折叠 —— 「源端代理」「源认证」这两个选择是高频操作，
+            每次新建任务都可能要切，折叠一次点一次太烦；放右侧窄卡片里
+            既不挤占源/目标的主输入空间，又保持可见。
+          */}
+          <div className="pull-form-row">
+            <Form.Item
+              label="源镜像名"
+              name="image"
+              extra="支持任意 docker pull 引用：alpine:3.19、library/alpine:3.19、ghcr.io/owner/img:1.0、192.0.2.20:10001/library/alpine:3.9 等。"
+              rules={[
+                { required: true, message: '请填写镜像名' },
+                {
+                  // v0.5.49: 空值由上面的 required 独占负责,这条 validator 只在
+                  // 有值时跑「缺 tag」检查。旧版本这里也判 !ref,空值时两条规则
+                  // 同时触发「请填写镜像名」→ 截图里两条红字叠在一起。
+                  validator: (_, value: string) => {
+                    if (!value || !value.trim()) {
+                      return Promise.resolve();
+                    }
+                    // 不能用 `value.includes(':')` 判断：主机前缀里也有冒号
+                    // （`192.0.2.20:10001/library/alpine` 会被误判为"已有 tag"），
+                    // 于是提交后才被后端拒，报错还跟输入对不上。
+                    // 正解是先剥掉主机段，再看剩下部分有没有 tag。
+                    const parsed = parseImageReference(value, userHosts);
+                    const ref = parsed.sourceRef;
+                    const colon = ref.lastIndexOf(':');
+                    const tag = colon >= 0 ? ref.slice(colon + 1) : '';
+                    if (!tag || tag.includes('/')) {
+                      return Promise.reject(
+                        new Error('缺少 tag，请写成 <repo>:<tag>，例如 alpine:3.19')
+                      );
+                    }
                     return Promise.resolve();
-                  }
-                  // 不能用 `value.includes(':')` 判断：主机前缀里也有冒号
-                  // （`192.0.2.20:10001/library/alpine` 会被误判为"已有 tag"），
-                  // 于是提交后才被后端拒，报错还跟输入对不上。
-                  // 正解是先剥掉主机段，再看剩下部分有没有 tag。
-                  const parsed = parseImageReference(value, userHosts);
-                  const ref = parsed.sourceRef;
-                  const colon = ref.lastIndexOf(':');
-                  const tag = colon >= 0 ? ref.slice(colon + 1) : '';
-                  if (!tag || tag.includes('/')) {
-                    return Promise.reject(
-                      new Error('缺少 tag，请写成 <repo>:<tag>，例如 alpine:3.19')
+                  },
+                },
+              ]}
+            >
+              <Input placeholder="alpine:3.19" allowClear autoFocus />
+            </Form.Item>
+
+            <Form.Item
+              label="目标镜像名"
+              name="destImage"
+              extra={
+                host
+                  ? `本仓库地址 ${host}/ 固定不可改；留空表示与源镜像同名。改这里可以把镜像落到别的路径（例如去掉 library/ 前缀）。`
+                  : '本仓库地址固定不可改；留空表示与源镜像同名。'
+              }
+              rules={[
+                {
+                  validator: (_, value: string | undefined) => {
+                    if (!value || !value.trim()) {
+                      return Promise.resolve(); // 留空 = 沿用源镜像
+                    }
+                    const { repo, tag } = splitRepoTag(value);
+                    if (!DEST_REPO_PATTERN.test(repo)) {
+                      return Promise.reject(
+                        new Error('仓库路径只能是小写字母 / 数字 / ._- 分段，且不能带主机')
+                      );
+                    }
+                    if (tag && !DEST_TAG_PATTERN.test(tag)) {
+                      return Promise.reject(new Error('tag 只能包含字母数字与 ._-'));
+                    }
+                    return Promise.resolve();
+                  },
+                },
+              ]}
+            >
+              {/* 固定前缀用 addonBefore 呈现：视觉上就是"不可编辑的一段"。 */}
+              <Input
+                addonBefore={host ? <span className="mono">{host}/</span> : undefined}
+                placeholder="与源镜像同名"
+                allowClear
+              />
+            </Form.Item>
+
+            <div className="pull-advanced-card">
+              <div className="pull-advanced-card-title">高级选项</div>
+              <Form.Item
+                label="源端代理"
+                extra="仅作用于本次拉取访问源；本仓库自身的代理走服务配置。"
+              >
+                <Input.Group compact>
+                  <Form.Item name="sourceProxyMode" noStyle initialValue="none">
+                    <Radio.Group optionType="button" buttonStyle="solid">
+                      <Radio.Button value="none">不用</Radio.Button>
+                      <Radio.Button value="library">代理库</Radio.Button>
+                      <Radio.Button value="temp">临时输入</Radio.Button>
+                    </Radio.Group>
+                  </Form.Item>
+                </Input.Group>
+              </Form.Item>
+
+              <Form.Item
+                noStyle
+                shouldUpdate={(prev, current) =>
+                  prev.sourceProxyMode !== current.sourceProxyMode
+                }
+              >
+                {({ getFieldValue }) => {
+                  const mode = getFieldValue('sourceProxyMode');
+                  if (mode === 'library') {
+                    return (
+                      <Form.Item
+                        label="选择代理"
+                        name="sourceProxyId"
+                        rules={[{ required: true, message: '请选择一个代理' }]}
+                      >
+                        <Select
+                          placeholder={
+                            proxies.length === 0
+                              ? '代理库还是空的，请先到「代理管理」新增'
+                              : '选择代理'
+                          }
+                          disabled={proxies.length === 0}
+                          options={proxies.map((p) => {
+                            const status = p.lastProbeStatus || '';
+                            const tag =
+                              status === 'ok'
+                                ? ' [可用]'
+                                : status === 'failed'
+                                  ? ' [不可用]'
+                                  : '';
+                            return {
+                              value: p.id,
+                              label: `${p.name}（${p.url}${p.hasAuth ? '，带认证' : ''}）${tag}`,
+                              disabled: status === 'failed',
+                            };
+                          })}
+                        />
+                      </Form.Item>
                     );
                   }
-                  return Promise.resolve();
-                },
-              },
-            ]}
-          >
-            <Input placeholder="alpine:3.19" allowClear autoFocus />
-          </Form.Item>
-
-          <Form.Item
-            label="目标镜像名"
-            name="destImage"
-            extra={
-              host
-                ? `本仓库地址 ${host}/ 固定不可改；留空表示与源镜像同名。改这里可以把镜像落到别的路径（例如去掉 library/ 前缀）。`
-                : '本仓库地址固定不可改；留空表示与源镜像同名。'
-            }
-            rules={[
-              {
-                validator: (_, value: string | undefined) => {
-                  if (!value || !value.trim()) {
-                    return Promise.resolve(); // 留空 = 沿用源镜像
-                  }
-                  const { repo, tag } = splitRepoTag(value);
-                  if (!DEST_REPO_PATTERN.test(repo)) {
-                    return Promise.reject(
-                      new Error('仓库路径只能是小写字母 / 数字 / ._- 分段，且不能带主机')
+                  if (mode === 'temp') {
+                    return (
+                      <Form.Item
+                        label="临时代理地址"
+                        name="sourceProxy"
+                        rules={[
+                          { required: true, message: '请填写代理地址' },
+                          {
+                            validator: (_, value: string | undefined) =>
+                              !value || /^https?:\/\//i.test(value.trim())
+                                ? Promise.resolve()
+                                : Promise.reject(
+                                    new Error('需要以 http:// 或 https:// 开头')
+                                  ),
+                          },
+                        ]}
+                        extra="只用于本次任务，不写入代理库。需要认证时写成 http://用户:密码@主机:端口。"
+                      >
+                        <Input placeholder="http://proxy.example.com:8080" allowClear />
+                      </Form.Item>
                     );
                   }
-                  if (tag && !DEST_TAG_PATTERN.test(tag)) {
-                    return Promise.reject(new Error('tag 只能包含字母数字与 ._-'));
+                  return null;
+                }}
+              </Form.Item>
+
+              <Form.Item
+                label="源认证"
+                extra={
+                  config?.allowCredentials
+                    ? '凭据库由「凭据管理」维护；临时输入不会落盘。'
+                    : '凭据库未配置，只能临时输入账号 / 密码（不会落盘）。'
+                }
+              >
+                <Input.Group compact>
+                  <Form.Item name="sourceAuthMode" noStyle initialValue="none">
+                    <Radio.Group
+                      optionType="button"
+                      buttonStyle="solid"
+                      onChange={() => form.resetFields(['sourceCredentialId'])}
+                    >
+                      <Radio.Button value="none">不用</Radio.Button>
+                      <Radio.Button value="credential">凭据库</Radio.Button>
+                      <Radio.Button value="temp">临时输入</Radio.Button>
+                    </Radio.Group>
+                  </Form.Item>
+                </Input.Group>
+              </Form.Item>
+
+              <Form.Item
+                noStyle
+                shouldUpdate={(prev, current) =>
+                  prev.sourceAuthMode !== current.sourceAuthMode
+                }
+              >
+                {({ getFieldValue }) => {
+                  const mode = getFieldValue('sourceAuthMode');
+                  if (mode === 'credential') {
+                    // 凭据库里全是外部源凭据，没有"用途"维度，直接全列。
+                    const sourceCandidates = credentials;
+                    return (
+                      <Form.Item
+                        label="选择源凭据"
+                        name="sourceCredentialId"
+                        rules={[
+                          { required: true, message: '请选择一条凭据' },
+                        ]}
+                      >
+                        <Select
+                          placeholder={
+                            sourceCandidates.length === 0
+                              ? '凭据库里还没有凭据，请先到「凭据管理」新增'
+                              : '选择凭据'
+                          }
+                          disabled={sourceCandidates.length === 0}
+                          options={sourceCandidates.map((c) => ({
+                            value: c.id,
+                            label: `${c.name}（${c.username} @ ${c.registryUrl}）`,
+                          }))}
+                        />
+                      </Form.Item>
+                    );
                   }
-                  return Promise.resolve();
-                },
-              },
-            ]}
-          >
-            {/* 固定前缀用 addonBefore 呈现：视觉上就是"不可编辑的一段"。 */}
-            <Input
-              addonBefore={host ? <span className="mono">{host}/</span> : undefined}
-              placeholder="与源镜像同名"
-              allowClear
-            />
-          </Form.Item>
-          <Collapse
-            ghost
-            expandIcon={({ isActive }) => (
-              <DownOutlined rotate={isActive ? 180 : 0} style={{ fontSize: 12 }} />
-            )}
-            items={[
-              {
-                key: 'advanced',
-                label: '高级选项（来源代理 / 认证）',
-                children: (
-                  <>
-                    <Form.Item
-                      label="源端代理"
-                      extra="仅作用于本次拉取访问源；本仓库自身的代理走服务配置。"
-                    >
-                      <Input.Group compact>
-                        <Form.Item name="sourceProxyMode" noStyle initialValue="none">
-                          <Radio.Group optionType="button" buttonStyle="solid">
-                            <Radio.Button value="none">不用</Radio.Button>
-                            <Radio.Button value="library">代理库</Radio.Button>
-                            <Radio.Button value="temp">临时输入</Radio.Button>
-                          </Radio.Group>
+                  if (mode === 'temp') {
+                    return (
+                      <>
+                        <Form.Item
+                          label="临时账号"
+                          name="sourceTempUsername"
+                          rules={[{ required: true, message: '请填写用户名' }]}
+                        >
+                          <Input autoComplete="off" placeholder="username" />
                         </Form.Item>
-                      </Input.Group>
-                    </Form.Item>
-
-                    <Form.Item
-                      noStyle
-                      shouldUpdate={(prev, current) =>
-                        prev.sourceProxyMode !== current.sourceProxyMode
-                      }
-                    >
-                      {({ getFieldValue }) => {
-                        const mode = getFieldValue('sourceProxyMode');
-                        if (mode === 'library') {
-                          return (
-                            <Form.Item
-                              label="选择代理"
-                              name="sourceProxyId"
-                              rules={[{ required: true, message: '请选择一个代理' }]}
-                            >
-                              <Select
-                                placeholder={
-                                  proxies.length === 0
-                                    ? '代理库还是空的，请先到「代理管理」新增'
-                                    : '选择代理'
-                                }
-                                disabled={proxies.length === 0}
-                                options={proxies.map((p) => {
-                                  const status = p.lastProbeStatus || '';
-                                  const tag =
-                                    status === 'ok'
-                                      ? ' [可用]'
-                                      : status === 'failed'
-                                        ? ' [不可用]'
-                                        : '';
-                                  return {
-                                    value: p.id,
-                                    label: `${p.name}（${p.url}${p.hasAuth ? '，带认证' : ''}）${tag}`,
-                                    disabled: status === 'failed',
-                                  };
-                                })}
-                              />
-                            </Form.Item>
-                          );
-                        }
-                        if (mode === 'temp') {
-                          return (
-                            <Form.Item
-                              label="临时代理地址"
-                              name="sourceProxy"
-                              rules={[
-                                { required: true, message: '请填写代理地址' },
-                                {
-                                  validator: (_, value: string | undefined) =>
-                                    !value || /^https?:\/\//i.test(value.trim())
-                                      ? Promise.resolve()
-                                      : Promise.reject(
-                                          new Error('需要以 http:// 或 https:// 开头')
-                                        ),
-                                },
-                              ]}
-                              extra="只用于本次任务，不写入代理库。需要认证时写成 http://用户:密码@主机:端口。"
-                            >
-                              <Input placeholder="http://proxy.example.com:8080" allowClear />
-                            </Form.Item>
-                          );
-                        }
-                        return null;
-                      }}
-                    </Form.Item>
-
-                    <Form.Item
-                      label="源认证"
-                      extra={
-                        config?.allowCredentials
-                          ? '凭据库由「凭据管理」维护；临时输入不会落盘。'
-                          : '凭据库未配置，只能临时输入账号 / 密码（不会落盘）。'
-                      }
-                    >
-                      <Input.Group compact>
-                        <Form.Item name="sourceAuthMode" noStyle initialValue="none">
-                          <Radio.Group
-                            optionType="button"
-                            buttonStyle="solid"
-                            onChange={() => form.resetFields(['sourceCredentialId'])}
-                          >
-                            <Radio.Button value="none">不用</Radio.Button>
-                            <Radio.Button value="credential">凭据库</Radio.Button>
-                            <Radio.Button value="temp">临时输入</Radio.Button>
-                          </Radio.Group>
+                        <Form.Item
+                          label="临时密码"
+                          name="sourceTempPassword"
+                          rules={[{ required: true, message: '请填写密码' }]}
+                          extra="只用于本次任务，不会写入凭据库。"
+                        >
+                          <Input.Password
+                            autoComplete="new-password"
+                            placeholder="••••••"
+                          />
                         </Form.Item>
-                      </Input.Group>
-                    </Form.Item>
-
-                    <Form.Item
-                      noStyle
-                      shouldUpdate={(prev, current) =>
-                        prev.sourceAuthMode !== current.sourceAuthMode
-                      }
-                    >
-                      {({ getFieldValue }) => {
-                        const mode = getFieldValue('sourceAuthMode');
-                        if (mode === 'credential') {
-                          // 凭据库里全是外部源凭据，没有"用途"维度，直接全列。
-                          const sourceCandidates = credentials;
-                          return (
-                            <Form.Item
-                              label="选择源凭据"
-                              name="sourceCredentialId"
-                              rules={[
-                                { required: true, message: '请选择一条凭据' },
-                              ]}
-                            >
-                              <Select
-                                placeholder={
-                                  sourceCandidates.length === 0
-                                    ? '凭据库里还没有凭据，请先到「凭据管理」新增'
-                                    : '选择凭据'
-                                }
-                                disabled={sourceCandidates.length === 0}
-                                options={sourceCandidates.map((c) => ({
-                                  value: c.id,
-                                  label: `${c.name}（${c.username} @ ${c.registryUrl}）`,
-                                }))}
-                              />
-                            </Form.Item>
-                          );
-                        }
-                        if (mode === 'temp') {
-                          return (
-                            <>
-                              <Form.Item
-                                label="临时账号"
-                                name="sourceTempUsername"
-                                rules={[{ required: true, message: '请填写用户名' }]}
-                              >
-                                <Input autoComplete="off" placeholder="username" />
-                              </Form.Item>
-                              <Form.Item
-                                label="临时密码"
-                                name="sourceTempPassword"
-                                rules={[{ required: true, message: '请填写密码' }]}
-                                extra="只用于本次任务，不会写入凭据库。"
-                              >
-                                <Input.Password
-                                  autoComplete="new-password"
-                                  placeholder="••••••"
-                                />
-                              </Form.Item>
-                            </>
-                          );
-                        }
-                        return null;
-                      }}
-                    </Form.Item>
-
-                  </>
-                ),
-              },
-            ]}
-          />
+                      </>
+                    );
+                  }
+                  return null;
+                }}
+              </Form.Item>
+            </div>
+          </div>
           <Space>
             <Button
               type="primary"

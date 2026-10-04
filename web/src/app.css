@@ -538,11 +538,46 @@
   text-decoration: underline;
 }
 
-/* 镜像拉取页：3 列等宽输入，窄屏自动塌成单列。 */
-.pull-form-grid {
+/* 镜像拉取页：源 / 目标 / 高级选项 3 列布局。
+ * 源 + 目标各 1fr,高级选项窄卡片(<略小一点,放源代理 + 源认证的 Radio.Group)。
+ * 窄屏(md 以下)塌成单列,3 个块各自一行。*/
+.pull-form-row {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: 1fr 1fr minmax(260px, 0.85fr);
   gap: 12px 16px;
+}
+@media (max-width: 900px) {
+  .pull-form-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* 高级选项窄卡片:展开态,跟源/目标并排,但内容紧凑一点。*/
+.pull-advanced-card {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 12px 14px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.pull-advanced-card-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-3);
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.pull-advanced-card .ant-form-item {
+  margin-bottom: 12px;
+}
+.pull-advanced-card .ant-form-item:last-child {
+  margin-bottom: 0;
+}
+.pull-advanced-card .ant-form-item-explain {
+  font-size: 11px;
 }
 
 .pull-running-head {
