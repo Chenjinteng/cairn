@@ -539,8 +539,9 @@
 }
 
 /* 镜像拉取页:左主卡片包源 + 目标纵向堆叠,右高级选项卡片并排。
- * 提交按钮 + 单并发说明在卡片外面 —— 与主输入区保持距离,免得按钮像
- * 「属于某个卡片」的内部控件;FIFO 是说明性文字(muted),不带边框 / 背景。
+ * 提交按钮 + 单并发说明放回 panel 内部 —— 在源/目标 / 高级选项卡片
+ * 下面、跟 panel 边距 20px,属于「整张 panel 的提交动作」;FIFO 是
+ * 说明性文字(muted),不带边框 / 背景。
  * 窄屏(md 以下)塌成单列。*/
 .pull-form-row {
   display: grid;
@@ -588,14 +589,16 @@
   font-size: 11px;
 }
 
-/* 提交按钮 + 单并发说明:卡片外面一行,跟主输入区保持距离。
+/* 提交按钮 + 单并发说明:放在 panel 内部、卡片下面一行,跟源/目标 /
+ * 高级选项卡片拉开 20px 距离 —— 看起来是「panel 自己的提交条」,
+ * 不是某个卡片的内部控件。
  * 单并发 / FIFO 不是按钮,是说明文字 —— 用 muted 颜色 + 小图标,
  * 不带任何 chip / button 边框,避免看起来像可交互的次要按钮。*/
 .pull-actions {
   display: flex;
   align-items: center;
   gap: 16px;
-  margin-top: 16px;
+  margin-top: 20px;
   padding: 0 4px;
 }
 .pull-actions-note {
