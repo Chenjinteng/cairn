@@ -616,22 +616,24 @@
 }
 
 /*
- * 热度页两个图并排：按天趋势（左 7fr）+ Top 10 榜单（右 3fr）。
+ * 热度页两个图并排：按天趋势（左 6fr）+ Top 10 榜单（右 4fr）。
  *
- * 时间维度的热力图需要宽(53 列铺开);排名维度的条形图天生窄(条长
- * 即信息,标签再长也只是被截掉)。7:3 让两者都不勉强 —— 热力图能铺
- * 开看节奏,条形图标签在窄列里也能显示 ~10-20 字。
+ * v0.7.37 从 7:3 改到 6:4：原比例右 panel 太窄,Top 10 镜像名 12 字符
+ * 起步就被 ellipsis 截断（"bigops/regi..."）,条形本身也短到看不出
+ * 差距。热力图 53 列在 60% 容器里依然铺得开;条形图拿到 40% 后 label
+ * 列能容 15~20 字符,够「library/nginx:latest」这种常见路径完整显示。
  *
- * align-items: start —— 两个面板内容高度不一(条形图 10 行 ~280px,
- * 热力图 ~200px),让短的顶着上面而不是被拉成等高「两张空卡」。
+ * align-items: stretch(明确意图):之前 start 让两者顶部对齐、高度差
+ * 明显(~80px);改成 stretch 让 panel 等高,左 panel 多出的空间交给
+ * .heatmap 的 justify-content: center 把内容居中(避免底部留白突兀)。
  *
  * 窄屏(900px 以下)塌成单列,跟 .pull-form-row 一致。
  */
 .stats-chart-row {
   display: grid;
-  grid-template-columns: 7fr 3fr;
+  grid-template-columns: 6fr 4fr;
   gap: 12px 16px;
-  align-items: start;
+  align-items: stretch;
 }
 @media (max-width: 900px) {
   .stats-chart-row {
@@ -692,6 +694,15 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
+  /*
+   * v0.7.37: 6:4 + stretch 后左 panel 比右 panel 矮 ~80px(条形图 10 行
+   * ~280px vs 热力图 ~200px),panel stretch 把高度拉平,内容垂直居中
+   * 比顶部对齐好看 —— 上下空白对称,caption / svg / legend 整体居中。
+   * 不破坏 SVG 正方形(几何在 contribution-heatmap.tsx 里按容器宽度反算,
+   * 这里只管布局)。
+   */
+  height: 100%;
+  justify-content: center;
 }
 
 .heatmap-caption {
@@ -805,7 +816,13 @@
 
 .top-bar-row {
   display: grid;
-  grid-template-columns: 28px minmax(100px, 0.4fr) 1fr 56px;
+  /*
+   * label 列 minmax(120px, 0.5fr)：6:4 容器里右 panel 约 440px，
+   * 0.5fr 实际约 150-170px，能放下「library/nginx:latest」这种
+   * 15~20 字符的常见镜像名；长路径走 ellipsis 截断。
+   * value 列从 56 收到 36 —— 数字 1~4 位足够，加 padding 是浪费。
+   */
+  grid-template-columns: 28px minmax(120px, 0.5fr) 1fr 36px;
   align-items: center;
   gap: 12px;
   height: 28px;
