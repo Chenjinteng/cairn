@@ -6,21 +6,16 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
-## [0.7.44] - 2026-10-04
+## [0.7.45] - 2026-10-04
 
-UI 字体 fallback 链加 HarmonyOS Sans SC —— geometric sans,观感跟 Outfit 接近度 85%。系统装了就能用上,没装降级 Noto Sans SC。无 API / 后端变更。
+回退 v0.7.44 的 HarmonyOS Sans SC 改动。代码状态等同 v0.7.43,但版本号不能往回退(v0.7.44 已发布),用 v0.7.45 标识。无 API / 后端变更。
 
 ### 变更
 
-- **`--font-sans` 加 HarmonyOS Sans SC ([`web/src/theme.css`](./web/src/theme.css))**
-  - **动机:** v0.7.43 的 Noto Sans SC 是 humanist sans(工整均匀),跟 Outfit (geometric sans,圆润现代)接近度 70%,同屏中英文还有轻微不和谐感。HarmonyOS Sans SC 是 geometric sans,圆润度跟 Outfit 接近度 85%,装到系统后能拉到跟前者匹配的观感。
-  - **位置:** 在西文 fallback 后、`'Noto Sans SC'` 之前插一行 `'HarmonyOS Sans SC'`。浏览器按 font-family 链顺序匹配 glyph —— 装了 HarmonyOS 就走它,没装降级 Noto Sans SC,之后才到 macOS / Windows 自带字体。
-  - **不引 CDN / 不嵌入 ttf:** HarmonyOS Sans SC Regular + Bold ttf 16MB,embed 进 cairn 二进制会让其从 ~10MB 涨到 ~26MB,直接破坏"单进程单二进制 / 镜像 ~15MB"的设计目标。也不引 unpkg.com 这种 CDN,违背 cairn 离线友好原则。
-  - **用户自取:** 想看到 HarmonyOS Sans SC 渲染需要装到系统。
-    - macOS:从 Huawei 官方下载 ttf,拖到 `~/Library/Fonts/`,浏览器重启
-    - Windows:右键 ttf → "安装"
-    - Linux:从 [uniartisan/fonts-harmonyos-sans-cn](https://github.com/uniartisan/fonts-harmonyos-sans-cn) clone + dpkg 安装,或直接下载 ttf 复制到 `~/.local/share/fonts/` 后 `fc-cache -fv`
-  - **后续可选 PR:** cn-font-split subset embed 到 web 资源(预计 ~500KB woff2),让"不装系统的用户"也能看到 HarmonyOS Sans SC 渲染。单独 PR。
+- **撤回 `--font-sans` 的 HarmonyOS Sans SC fallback ([`web/src/theme.css`](./web/src/theme.css))**
+  - **原因:** 实际渲染效果不达预期(字形圆润度 / 笔画对比 / 部分字符过细等),决定回退。
+  - **回退后状态:** `--font-sans` fallback 链回到 v0.7.43,英文 Outfit + 中文 Noto Sans SC / PingFang SC / Microsoft YaHei。
+  - **版本号语义:** v0.7.45 的代码 = v0.7.43 的代码。版本号不能往回退(v0.7.44 已经发布到 origin/internal,不能重新发布同号),用 v0.7.45 标识"v0.7.43 + 回退 v0.7.44 的修改"。
 
 ---
 
