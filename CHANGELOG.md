@@ -6,6 +6,19 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.41] - 2026-10-04
+
+Bug 修复 follow-up:v0.7.40 的「拉取列表状态筛选 0 行时页面晃动」实际由**垂直高度塌陷**主导(横向滚动条只是次因)。无 API / 后端变更。
+
+### 修复
+
+- **拉取页表格 panel — `minHeight: 200 → 480` + Empty placeholder 垂直居中** ([`web/src/pages/pull-page.tsx`](./web/src/pages/pull-page.tsx) + [`web/src/app.css`](./web/src/app.css))
+  - **v0.7.40 没修干净:** 我把锅全甩给了 `scroll.x` 与列宽总和不一致(横向 reflow),修了 scroll.x=1110 + tableLayout=fixed 之后,**水平方向不再抖**,但**垂直方向还在抖** —— 表格 13 行时 panel 高 ~640px,Empty 状态塌到 `min-height: 200`,整页内容往上跳 ~440px,看起来还是"晃动"。
+  - **修法:** panel `minHeight: 200 → 480`(覆盖 ~9 行 + 表头 + padding 的常规高度,再多就让 panel 自然撑高)。
+  - 配套 CSS:`.ant-table-tbody > tr.ant-table-placeholder > td { padding: 80px 0 }` —— panel 拉到 480px 后,Empty 默认只占 ~140px,贴表头下面留 300+px 空白看着别扭,padding 顶到底把 Empty 推到中间,跟有数据时的视觉重心一致。
+
+---
+
 ## [0.7.40] - 2026-10-04
 
 Bug 修复:拉取页表格在状态筛选 0 行时横向滚动条 reflow 导致页面晃动。无 API / 后端变更。
