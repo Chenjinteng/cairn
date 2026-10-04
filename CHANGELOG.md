@@ -6,6 +6,22 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.39] - 2026-10-04
+
+Bug 修复:同步定时 Modal「下次触发」列相对时间方向错误。无 API / 后端变更。
+
+### 修复
+
+- **同步定时 modal ([`web/src/pages/sync-page.tsx`](./web/src/pages/sync-page.tsx)) — 「下次触发」改成面向未来的相对格式**
+  - **Bug:** 之前列 render 直接用 `formatRelative(iso)`,该函数计算 `diff = Date.now() - then`,对**未来时间戳**算出的 diff 是**负数**,撞进 `< 60_000` 那条「刚刚」分支。
+  - **现象:** 「Pull XX」定时规则,频率「每 15 分钟」+ 上次「4 分钟前」,实际下次应是「11 分钟后」,UI 错报「刚刚」—— 运维会以为 cron 没生效 / 调度卡死。
+  - **修法:** 新增 `formatFutureRelative` 函数,`diff = then - Date.now()`,分支: `< 30s → 即将触发`(容忍 DB / 网络 / 时钟偏差) / `< 60 分钟 → X 分钟后` / `< 24 小时 → X 小时后` / 否则 `X 天后`。
+  - **停用状态 (`s.enabled === false`) 显示「—」**,而不是「X 分钟后」—— 停用时 cron 不调度,显示时间会让运维以为任务还在跑。
+  - 顺手加 `Tooltip title={s.nextRunAt}`,hover 看绝对时间戳,跟「上次」列风格一致。
+  - 列 render 签名从 `(iso: string)` 改成 `(_, s)`,读 row 的 `enabled` 字段。
+
+---
+
 ## [0.7.38] - 2026-10-04
 
 Web UI 微调:拉取页 / 热度页 / 同步编辑 modal 几处控件密度与视觉平衡收口。无后端 / API / 数据格式变更,纯前端呈现。
