@@ -33,16 +33,19 @@
  * 主要解决 v0.6.27 prefetch 仍未生效的边界场景(用户比 prefetch 完成得
  * 还快 → initialTasks=null → loading=true → PageLoading 闪)。
  *
- * 默认 0ms:本地 cairn 后端的 stats 5 路并发 + sync 列表接口
- * 单次都在 200ms 内能回来,delay=200ms 时 visible 又变回 false,
- * 蒙板根本不弹 —— v0.7.47 把 PageLoading 的 antd Spin 换成 cairn-mark
- * 石塔建造动画(入场 ~800ms)后,这个「避免闪屏」的语义反而把动画
- * 藏起来了,用户根本看不到 cairn-mark 动效。改成 delay=0 让蒙板
- * 立即出现,每次切页面都能看到 cairn-mark 入场动画;代价是
- * 数据 < 700ms 回来时强制等 cai 入场跑完才 fade out,本地接口
- * 会感受到 ~300-500ms 的「切换延迟」,但 cairn-mark 动画是
- * 品牌化动效,看到比闪屏更重要。
- * 仍可在调用方显式 `delay={200}` 退回「避免闪屏」语义。
+ * v0.7.50: 默认参数保持 v0.6.28 的「避免闪屏」语义 —— delay=200ms +
+ * minDuration=250ms。v0.7.49 短暂改为 delay=0 + minDuration=700ms
+ * 让 cairn-mark 入场动画跑完,但代价是每次切页面强制等 700ms 才
+ * fade out,本地快接口感受到 ~300-500ms 切换延迟。UAT 反馈:
+ * 只要「镜像列表」页面(用户进入控制台看到的第一个页面)看到动画
+ * 就好,其它页面保持默认避免闪屏。
+ *
+ * 所以:**默认仍是 v0.6.28 行为**;**images-page.tsx 显式传**
+ * `delay={0} minDuration={700}`,让首屏镜像列表加载有 cairn-mark
+ * 入场动画。其它页面的 PageLoading 维持「避免闪屏」语义。
+ *
+ * 主要解决 v0.6.27 prefetch 仍未生效的边界场景(用户比 prefetch 完成得
+ * 还快 → initialTasks=null → loading=true → PageLoading 闪)。
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -73,20 +76,8 @@ export interface PageLoadingProps {
 export default function PageLoading({
   visible,
   tip = '加载中…',
-  /*
-   * v0.7.49:
-   *   delay 200ms → 0ms —— 让蒙板立即显示,每次切页面都能看到 cairn-mark 入场。
-   *   minDuration 250ms → 700ms —— 跟 cairn-mark 'build' 入场总时长(~800ms)对齐:
-   *     - stones 完成 ~820ms (stone-3 delay 360ms + duration 460ms)
-   *     - dot 完成 ~1060ms (delay 560ms + duration 500ms)
-   *     选 700ms 是 stones 完成 + dot 大部分进度,dot 落点收尾可以跟蒙板 fade
-   *     一起完成(用户看到「dot 落入中 + 蒙板渐隐」的连贯感)。
-   *   代价:数据 < 700ms 回来时强制等满 700ms 才 fade out,本地接口
-   *   感受到 ~300-500ms 切换延迟。v0.7.49 是「看到动画优先于避免闪屏」的权衡。
-   *   fadeDuration 350ms 保持不变 —— 蒙板消失节奏不变。
-   */
-  delay = 0,
-  minDuration = 700,
+  delay = 200,
+  minDuration = 250,
   fadeDuration = 350,
 }: PageLoadingProps) {
   /**

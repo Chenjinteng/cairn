@@ -548,7 +548,21 @@ export default function ImagesPage({
             }}
           />
           </div>
-          <PageLoading visible={loading} tip="正在读取镜像列表…" />
+          {/*
+   * v0.7.50: 显式传 delay={0} minDuration={700} 让首屏镜像列表加载时
+   * 能看到 cairn-mark 入场动画。镜像列表是用户进入控制台看到的第一个
+   * 页面,值得展示品牌化动效;其它页面的 PageLoading 维持 v0.6.28
+   * 「避免闪屏」默认(避免切页面强制等动画时长)。
+   * 选 700ms 而不是 1060ms:dot 完成时间太晚会让蒙板停留太久,
+   * 700ms 时 stones 全到位 + dot 大部分进度,dot 收尾跟蒙板 fade
+   * 一起完成,连贯感最好。
+   */}
+          <PageLoading
+            visible={loading}
+            tip="正在读取镜像列表…"
+            delay={0}
+            minDuration={700}
+          />
         </div>
       </div>
 
