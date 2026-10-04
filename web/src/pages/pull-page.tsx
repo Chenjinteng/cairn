@@ -1124,7 +1124,22 @@ export default function PullPage({ config, sidebarFilter, onPublishGroups }: Pro
           size="middle"
           columns={columns}
           dataSource={visibleJobs}
-          scroll={{ x: 1000 }}
+          /*
+           * v0.7.39 修复「状态筛选为 0 时页面晃动」:
+           *
+           * 之前 `scroll={{ x: 1000 }}` 与列宽之和(220+140+140+140+180+150+140 = 1110)
+           * 不一致 —— 表格有数据时,antd Table 把 tbody 内容宽度撑到 1110px,容器内
+           * 出现横向滚动条;筛选切到 0 行(Empty 状态)后,tbody 不再被内容撑大,
+           * 横向滚动条消失,容器宽度抖回 scroll.x(1000px),整页因此 reflow,
+           * 视觉上"晃动"。
+           *
+           * 同时 `tableLayout="fixed"` —— 列宽全部锁定为 width 属性,不再让 antd 用
+           * cell 内容反算列宽(空数据时没有 cell,反算会得到不同结果,进一步触发
+           * reflow)。两条一起改,空数据 / 有数据两个状态下表格尺寸完全一致,
+           * 不再触发任何 layout shift。
+           */
+          scroll={{ x: 1110 }}
+          tableLayout="fixed"
           pagination={false}
             expandable={{
               expandedRowRender: (job) => <JobPhases job={job} />,
