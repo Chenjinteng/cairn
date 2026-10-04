@@ -6,6 +6,33 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.47] - 2026-10-04
+
+控制台全站加载蒙板 `PageLoading` 的 antd `<Spin>` 替换为 cairn logo「石塔建造」动画 —— 从通用 spinner 升级为品牌化动效。无 API / 后端变更。
+
+### 变更
+
+- **`cairn-mark.tsx` 加 `animation` prop ([`web/src/components/cairn-mark.tsx`](./web/src/components/cairn-mark.tsx))**
+  - `'none'`（默认,保持现有静态行为 —— favicon / 控制台 nav / 现有所有调用点不变）
+  - `'build'`（一次性石塔建造,从下往上逐层堆,琥珀点最后落入。无持续效果 —— 适合 PageLoading 蒙板场景:蒙板消失 cairn 跟着消失,没必要持续呼吸抢戏）
+  - `'pulse-build'`（'build' + 琥珀点持续呼吸 —— 适合 splash / 长期停留的页头,比如 cairn-intro.html hero）
+  - `prefers-reduced-motion: reduce` 下任何 animation 都降级为静态(见下条 CSS)
+
+- **cairn-mark 动画 CSS ([`web/src/app.css`](./web/src/app.css))**
+  - 加 `.cairn-mark-anim-build` / `.cairn-mark-anim-pulse-build` 类 + 三个 keyframes (`cairn-mark-build-stone` / `cairn-mark-build-dot` / `cairn-mark-dot-pulse`)
+  - 入场总时长 ~800ms(比设计稿 demo 1.2s 短 33%,加载蒙板场景没耐心等 1s+;保留故事感但更克制)
+  - 跟 v0.6.22 已有的「antd spinner 全站减速 2s/圈」风格保持一致 —— cairn-mark 动画减速但没到 2s(0.5s 入场已经够克制)
+  - `prefers-reduced-motion: reduce` 兜底动画禁用,cairn 直接出现
+
+- **`PageLoading` 换 cairn-mark ([`web/src/components/page-loading.tsx`](./web/src/components/page-loading.tsx))**
+  - `<Spin size="large" />` → `<CairnMark size={64} animation="build" />`
+  - 顺手把 antd `Spin` 的 import 删掉
+  - 字号 13 → 12,跟 cairn-mark size=64 的视觉重量平衡
+
+- **设计稿 demo ([`docs/design/cairn-mark-animated-demo.html`](./docs/design/cairn-mark-animated-demo.html))** —— 保留 v0.7.46 设计阶段做的 3 方案对比 demo 文件,跟其他设计资产(carin-brand.html / UI-design.html / index.html)同目录
+
+---
+
 ## [0.7.46] - 2026-10-04
 
 产品定位 tagline 简化:「轻量级容器镜像基础设施平台」→「轻量级容器镜像管理平台」,英文 `Lightweight Container Image Infrastructure` → `Lightweight Container Image Management Platform`。无 API / 后端变更。

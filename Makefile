@@ -16,7 +16,7 @@
 #   make test                       # 跑本机门禁
 #
 # 环境变量(全部可覆盖,默认值见对应 target):
-#   IMAGE          cairn:0.7.46
+#   IMAGE          cairn:0.7.47
 #   PORT           8787(容器内监听)
 #   HOST_PORT      80(宿主机映射端口)
 #   DATA_DIR       /data/cairn(宿主机数据目录)
@@ -25,7 +25,7 @@
 #   NPM_REGISTRY   https://registry.npmmirror.com
 
 # ───────────────────────── 变量 ─────────────────────────
-IMAGE       ?= cairn:0.7.46
+IMAGE       ?= cairn:0.7.47
 PORT        ?= 8787
 HOST_PORT   ?= 80
 DATA_DIR    ?= /data/cairn
