@@ -8,21 +8,17 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <!--
-  v0.7.37: 字体策略 — 本页是「设计理想态」,与实际 cairn web 字体栈不同
+  v0.7.37: 字体栈说明 — 与实际 cairn web 统一走 Google Fonts
 
   本设计稿 link Google Fonts CDN 加载 Outfit / DM Serif Display / JetBrains Mono,
-  渲染出 cairn 品牌应有的视觉气质。
+  与 web/index.html <link href="fonts.googleapis.com/..."> 同一套源,
+  与 web/src/theme.css 三个 token (--font-sans / --font-display / --font-mono)
+  同一组栈（含 system fallback，CDN 不通时浏览器立刻 fallback 到系统栈）。
 
-  ⚠️ 实际 cairn web（web/src/theme.css / main.tsx）从 v0.5.38 起走 system stack,
-  不再 link Google Fonts（理由:离线部署零外部依赖,内网/agent 无 FOUT）:
-    - UI 主字体:  -apple-system / BlinkMacSystemFont / Segoe UI / PingFang SC
-    - Display:    Georgia / 'Times New Roman'
-    - Mono:       ui-monospace / SFMono-Regular / Menlo / Consolas
-
-  这两份字体栈**刻意不同**:
-    - 本目录的设计稿（cairn-brand.html / cairn-ui-design.html / index.html）= 设计理想态
-    - demo-A-*.html + 实际 cairn web                              = system stack
-  详见 docs/design-archive/2026-10-04_pre-v0.7.37/README.md 的字体策略说明。
+  v0.7.37 之前的 brief 窗口里（v0.7.37 刚刷新完那一刻）有一句"设计稿 vs 实际 web
+  字体栈刻意不同"的注释 —— 那是当时还没决定要不要回退到 v0.5.37 那个状态。
+  现在 web 已经回退（theme.css 三个 token 改回 Outfit + system fallback，
+  web/index.html 加回 Google Fonts <link>），设计稿无需再单独声明"理想态"。
 -->
 <style>
   :root {

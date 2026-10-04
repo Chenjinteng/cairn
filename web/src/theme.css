@@ -73,21 +73,21 @@
   --radius-md: 10px;
   --radius-lg: 12px;
 
-  /* v0.5.37：三字体 token 占位 —— 与 docs/design/cairn-ui-design.html § 2 Typography 对齐。
-   *   --font-display → hero / 页面大数字（44px 用）
-   *   --font-sans    → UI 主字体
-   *   --font-mono    → hash / digest / 时间戳 / id
+  /*
+   * 三字体 token —— 与 docs/design/cairn-ui-design.html § 2 Typography 对齐。
+   *   --font-sans    → UI 主字体（h1/h2/h3/body/button）;5 个 weight (300/400/500/600/700)
+   *   --font-display → hero / 页面大数字（44px 用）;1 个 weight
+   *   --font-mono    → hash / digest / 时间戳 / id;3 个 weight (400/500/600)
    *
-   * v0.5.38: 移除 Google Fonts CDN 后，token 顶部的品牌字体名（Outfit / DM Serif
-   * Display / JetBrains Mono）不再被引用,直接从栈里去掉。系统栈足以覆盖渲染,
-   * 西文走 SF Pro / Segoe UI / Roboto 等,等宽走 ui-monospace / Menlo / Consolas,
-   * 中文走 PingFang SC / Microsoft YaHei —— 与 Outfit 等圆润字形略有差异但视觉
-   * 接近,换来的是「离线部署零外部依赖」。
+   * 浏览器默认 font-display: swap,CDN 不通时立刻 fallback 到 system stack,
+   * 不会阻塞页面（公网:渲染 Outfit;内网/离线:渲染 SF Pro / Segoe UI / PingFang SC）;
+   * 这是 v0.5.37 之前的实际状态,v0.5.38 短暂改为纯 system stack 后,
+   * 现统一回 Outfit + system fallback,跟设计稿一致。
    */
-  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI',
+  --font-sans: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI',
     'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
-  --font-display: Georgia, 'Times New Roman', serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-display: 'DM Serif Display', Georgia, 'Times New Roman', serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   /*
    * 顶栏下方那道极淡的内阴影。做成 token 是因为深色下要换：黑色阴影压在深色底上

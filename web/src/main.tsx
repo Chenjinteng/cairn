@@ -14,9 +14,18 @@ import './app.css';
  * 同一屏里两套配色 —— 这是深色主题最常见的翻车方式。
  *
  * 深色以 AntD 的 `darkAlgorithm` 打底（它负责上百个我们没显式列出的派生色，
- * 比如禁用态、hover 态、阴影），再把语义色**对齐到 theme.css 的深色值** ——
+ * 比如禁用态、hover 态、阴影），再把语义色**对齐到 theme.css 的深色值** —— 
  * 两边必须是同一组值，否则会出现两种不同的蓝。
+ *
+ * v0.7.37: 跟 web/index.html 的 <link href="fonts.googleapis.com/..."> 一致,
+ * fontFamily 用 Outfit + system fallback（CDN 不通时 fallback 到系统栈）。
+ * 浅色 / 深色两套 token 共用同一字体栈 —— AntD 组件（按钮、表头、标签等）
+ * 与自定义 CSS 视觉一致。
  */
+const FONT_SANS =
+  "'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', " +
+  "'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif";
+
 const LIGHT_TOKENS = {
   /*
    * v0.5.22: 与 theme.css 浅色版同步 —— 主色与 info 都换成 Teal 600
@@ -28,6 +37,7 @@ const LIGHT_TOKENS = {
    * 校验对大小写不敏感;但与 theme.css 的小写一致会让「两端不同源」这件事
    * 更显眼,review 时容易发现。
    */
+  fontFamily: FONT_SANS,
   colorPrimary: '#0d9488',
   colorBgLayout: '#f7f5f0',
   colorBgContainer: '#ffffff',
@@ -45,6 +55,7 @@ const DARK_TOKENS = {
    * v0.5.37：与 theme.css 深色版同步 —— colorBgLayout/colorBorder 与
    * token 完全一致（参见 theme.css `[data-theme='dark']` 段）。
    */
+  fontFamily: FONT_SANS,
   colorPrimary: '#2dd4bf',
   colorBgLayout: '#0f131a',
   colorBgContainer: '#171b24',

@@ -6,21 +6,25 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>Cairn</title>
     <!--
-      v0.5.37：UI 改版 — 三字体，对齐 docs/design/cairn-ui-design.html § 2 Typography。
-        Outfit          → UI 主字体（h1/h2/h3/body/button）；5 个 weight（300/400/500/600/700）
-        DM Serif Display → hero（页面大数字 44px 用）；1 个 weight
-        JetBrains Mono  → hash / digest / 时间戳 / id；3 个 weight（400/500/600）
+      v0.5.37 引入 Google Fonts CDN + font-display: swap,与 docs/design/cairn-ui-design.html § 2 Typography 对齐。
+        Outfit           → UI 主字体（h1/h2/h3/body/button）;5 个 weight (300/400/500/600/700)
+        DM Serif Display → hero(页面大数字 44px 用);1 个 weight
+        JetBrains Mono   → hash / digest / 时间戳 / id;3 个 weight (400/500/600)
 
-      v0.5.38：去掉了 `fonts.googleapis.com` / `fonts.gstatic.com` 的 <link>。
-      原因：v0.5.37 引入了 Google Fonts CDN + `font-display: swap` 的兜底方案，
-      但实测在离线 / 受限网络（53 跳板机、企业 proxy、纯内网部署）下，
-      Chromium 仍会同步请求 woff2 文件直到超时（即便用了 `rel="preload"`），
-      表现为网络面板里出现一长串超时请求、首次访问慢 30s+。
-      现在完全不引入外部字体：theme.css 的 `--font-sans` / `--font-display` /
-      `--font-mono` 已经填了系统栈 fallback,渲染效果与之前 CDN 成功时差异
-      极小（中文浏览本地化无变化,西文走系统栈,Outfit 的圆润字形由 SF Pro /
-      Segoe UI 等系统字体替代,基本一致）。
+      v0.5.38 短期去掉:实测在离线 / 受限网络(53 跳板机、企业 proxy、纯内网部署)下,
+      Chromium 同步请求 woff2 文件直到超时(即便用了 `rel="preload"`),首次访问慢 30s+。
+      该期间 theme.css 三个 token 改纯系统栈,渲染效果与 CDN 成功时差异小
+      (西文走 SF Pro / Segoe UI,中文走 PingFang SC),换来「离线部署零外部依赖」。
+
+      v0.7.37 改回 Google Fonts + system fallback(本行 <link> 即对应实现)。
+      浏览器默认 font-display: swap,CDN 不通时立刻 fallback 到 system stack
+      (字体声明里 Outfit / DM Serif / JetBrains Mono 后面都跟系统栈);
+      不通≠阻塞,最坏情况是显示几秒 system stack 再到字体,与 v0.5.37 同款行为。
+      设计稿 (docs/design/) 跟代码统一走 Google Fonts,不再「刻意不同」。
     -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <script>
       /*
        * 在 React 挂载之前就把主题定下来。
