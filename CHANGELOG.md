@@ -6,6 +6,29 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.46] - 2026-10-04
+
+产品定位 tagline 简化:「轻量级容器镜像基础设施平台」→「轻量级容器镜像管理平台」,英文 `Lightweight Container Image Infrastructure` → `Lightweight Container Image Management Platform`。无 API / 后端变更。
+
+### 变更
+
+- **产品 tagline 精简(中英文同步,共 14 处活跃位置)**
+  - **中文:** `轻量级容器镜像基础设施平台` → `轻量级容器镜像管理平台`
+  - **英文:** `Lightweight Container Image Infrastructure` → `Lightweight Container Image Management Platform`
+  - **改的位置(活跃):**
+    - `docs/design/cairn-ui-design.html` (hero tagline + cn)
+    - `docs/design/index.html` (hero tagline + cn)
+    - `docs/design/cairn-brand.html` (hero tagline + cn,lockup-tag-en + lockup-tag-cn)
+    - `web/public/cairn-intro.html` (hero tagline + cn + meta description)
+    - `README.md` (顶部 tagline)
+    - `AGENTS.md` (产品定义 + v0.5.21 改名记录)
+  - **不动:**
+    - `docs/design-archive/2026-10-04_pre-v0.7.37/` 历史归档 —— 历史快照不动
+    - `CHANGELOG.md` 里 v0.5.23 改名记录 —— 历史决策不动;v0.5.23 改名原因是「从 registry-manager 风格的 UI 工具变成集成 registry 实现的完整基础设施」,这是当时的真实判断;现在改成「管理平台」是更轻量、更克制的产品定位,跟 v0.5.23 决策不冲突(cairn 仍然是基础设施,但 marketing 上更克制)。
+  - **原因:** v0.5.21 起原 tagline 9 字 + 「基础设施平台」读起来「太大」,改成 4 字 + 「管理平台」更轻、更克制,跟 cairn 「单进程单二进制 ~15MB 镜像」的轻量定位一致。
+
+---
+
 ## [0.7.45] - 2026-10-04
 
 回退 v0.7.44 的 HarmonyOS Sans SC 改动。代码状态等同 v0.7.43,但版本号不能往回退(v0.7.44 已发布),用 v0.7.45 标识。无 API / 后端变更。
