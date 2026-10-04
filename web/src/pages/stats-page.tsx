@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   Alert,
   Button,
@@ -24,6 +24,7 @@ import type { ColumnsType } from 'antd/es/table';
 import IgnoreRuleModal from '../components/ignore-rule-modal';
 import LoadError from '../components/load-error';
 import PageLoading from '../components/page-loading';
+import TopBarChart from '../components/top-bar-chart';
 
 import { useAppConfig } from '../config-store';
 
@@ -198,11 +199,6 @@ export default function StatsPage({
     open: false,
     suggested: '',
   });
-  /**
-   * 榜单的滚动容器。这一页下方还有趋势与最近事件，页面本身仍会滚动，
-   * 所以这里给表格一个高度上限（.table-scroll--bounded）而不是让它吃掉整个视口。
-   */
-  const topWrapRef = useRef<HTMLDivElement>(null);
 
   const statsEnabled = config?.statsEnabled === true;
 
@@ -334,64 +330,6 @@ export default function StatsPage({
       cancelled = true;
     };
   }, [days, topBy, statsEnabled, reloadKey]);
-
-  const topColumns: ColumnsType<StatsTopItem> = [
-    {
-      title: '仓库',
-      dataIndex: 'repository',
-      key: 'repository',
-      sorter: (left, right) => left.repository.localeCompare(right.repository),
-      render: (value: string) => (
-        <Tooltip title={value}>
-          <span className="ellipsis" style={{ display: 'block' }}>
-            {value}
-          </span>
-        </Tooltip>
-      ),
-    },
-    // by=tag 才有的列；by=repository 时整列不出现，避免一列全是 "—"。
-    ...(topBy === 'tag'
-      ? ([
-          {
-            title: 'Tag',
-            dataIndex: 'tag',
-            key: 'tag',
-            width: 160,
-            render: (value: string) => <span className="mono">{value || '—'}</span>,
-          },
-        ] as ColumnsType<StatsTopItem>)
-      : []),
-    {
-      title: '合计',
-      dataIndex: 'events',
-      key: 'events',
-      width: 100,
-      defaultSortOrder: 'descend',
-      sorter: (left, right) => left.events - right.events,
-    },
-    {
-      title: '拉取',
-      dataIndex: 'pull',
-      key: 'pull',
-      width: 100,
-      sorter: (left, right) => left.pull - right.pull,
-    },
-    {
-      title: '推送',
-      dataIndex: 'push',
-      key: 'push',
-      width: 100,
-      sorter: (left, right) => left.push - right.push,
-    },
-    {
-      title: '最近活动',
-      dataIndex: 'lastAt',
-      key: 'lastAt',
-      width: 170,
-      sorter: (left, right) => (left.lastAt ?? '').localeCompare(right.lastAt ?? ''),
-      render: (value: string | null) => formatDateTime(value),
-    },
-  ];
 
   /**
    * 「见过的客户端」列。
@@ -739,90 +677,10 @@ export default function StatsPage({
           当前窗口内没有 pulls,不需要用户去配 REGISTRY_NOTIFY_TOKEN / 排查外部 registry。
           真要排查走下面的「最近事件」面板与 KPI 自检。 */}
 
-      {!empty ? (
-        <div className="panel" style={{ padding: 16 }}>
-          <div className="stats-panel-head">
-            {/* v0.6.15 (UI-5): 标题从「Top 榜单」改成「Top 10 榜单」。
-             *  硬上限 10 条 → 表头文案也要直接说清,不再让用户去「猜是不是漏看了」。 */}
-            <h3 className="stats-panel-title">Top 10 榜单</h3>
-            <Segmented
-              options={BY_OPTIONS}
-              value={topBy}
-              onChange={(value) => setTopBy(value as StatsTopBy)}
-            />
-          </div>
-          {/*
-           * v0.6.15 (UI-5): 去掉 .table-scroll--bounded (max-height 460px)。
-           *
-           * 上一版用 bounded 容器是为了「榜单自己滚,表头粘住」,但 max-height
-           * 460px 在 10 行(antd size=middle 单行 ~54px × 10 + 表头 ~56 ≈ 596px)
-           * 之下仍然超过,出第二条竖向滚动条——用户已实测反馈「还有滚动条」。
-           *
-           * 改成 .table-scroll(无 max-height)+ 移走 sticky:
-           *   - 10 行自然撑到 ~600px,页面外层竖向滚动代替容器内滚动
-           *   - 表头不再 sticky —— 切维度「按仓库 ↔ 按 tag」不需要保留表头
-           *     在屏不动(切的动作会重渲染,表头本来就会被覆盖)
-           *   - 这是用户明确诉求「不要用滚」——榜单内部不能有第二条滚动条,
-           *     页面外层可以(那是页面级别的常规滚动)
-           *
-           * 如果后续 Top 数量上调,这条注释就是「为什么 max-height 不能加回来」
-           * 的备忘。
-           */}
-          <div className="table-scroll" ref={topWrapRef} style={{ position: 'relative' }}>
-            {/*
-             * v0.6.23: PageLoading 改成 position: absolute 覆盖在 table-scroll 内
-             * (解决 0.6.22 「拉址感」)。table-scroll 已经有 min-height: 240px
-             * (来自 .page--fill .table-scroll),所以 spinner 区域足够大。
-             *
-             * `loading && topItems.length === 0` 才需要居中 spinner —— 切时间窗
-             * 时已经显示旧数据,用 antd Table 自带半透层即可。
-             */}
-            <div hidden={loading && topItems.length === 0}>
-            <Table<StatsTopItem>
-              /*
-               * rowKey 必须**与 topBy 无关**。
-               *
-               * 早先写成 `topBy === 'tag' ? repo:tag : repo`：切换维度时同一个 record 的 key
-               * 会变，React 无法正确协调，表现为**旧行留在 DOM 里** ——
-               * 分页器显示"共 8 项"而 DOM 里有 16 行、`data-row-key` 重复,
-               * 界面看到的就是"Tag 列错位/空白"，而且每切换一次就多留一批。
-               * 用 \u0000 拼接：两种维度下都唯一，且切换维度时不变。
-               */
-              rowKey={(record) => `${record.repository}\u0000${record.tag ?? ''}`}
-              size="middle"
-              columns={topColumns}
-              dataSource={topItems.slice(0, TOP_LIMIT)}
-              scroll={{ x: 800 }}
-              /*
-               * v0.6.15 (UI-5): 移除 sticky。原来 `topWrapRef` 是为了
-               * 「榜单自己滚、表头粘住」,现在榜单改用页面外层滚动,容器不再
-               * 滚动,sticky 也就不需要 —— 留着只会调 topWrapRef.current
-               * 报错(切维度时 ref 临时为 null)。
-               */
-              /*
-               * v0.6.15 (UI-5): 榜单只显示 Top 10。两条原因：
-               *   1. 用户诉求 —— Top 10 足够看清热点，再多也是 1~2 次活动,
-               *      看不出相对热度。
-               *   2. `.table-scroll--bounded`（max-height 460px）下,15 项时表格
-               *      内部出第二条竖向滚动条（页面外层还有一条）,嵌套滚动条
-               *      操作别扭 —— Top 10 全部放得下,不再触发内层滚动。
-               * 服务端依旧按 by 分组返回前若干条(目前接口不限),
-               * 这里客户端切片 .slice(0, TOP_LIMIT) 是双保险:就算后端某天调大
-               * 上限也不会突破本页"只看 Top 10"的约定。
-               * 关闭分页器 —— Top 10 是硬上限,不存在「分页到第二页」,留着
-               * 分页 UI 反而误导。
-               */
-              pagination={false}
-              locale={{ emptyText: <Empty description="该时间窗内没有可排行的数据" /> }}
-            />
-            </div>
-            <PageLoading
-              visible={loading && topItems.length === 0}
-              tip="正在读取 Top 10 榜单…"
-            />
-          </div>
-        </div>
-      ) : null}
+      {/* v0.7.37：按天趋势先于 Top 榜单 —— 先看「什么时候热」,再看「什么最热」,
+          两个图互补的视觉顺序。Top 榜单从表格改成横向条形图（见 TopBarChart
+          注释）：5~6 列的表格太宽撑出横向滚动条,条形图直接比条长,
+          标签再长也不影响。 */}
 
       <div className="panel" style={{ padding: 16 }}>
         <h3 className="stats-panel-title">按天趋势（近 12 个月）</h3>
@@ -833,6 +691,34 @@ export default function StatsPage({
           since={config?.statsSince ?? null}
         />
       </div>
+
+      {!empty ? (
+        <div className="panel" style={{ padding: 16 }}>
+          <div className="stats-panel-head">
+            {/* v0.6.15 (UI-5): 标题从「Top 榜单」改成「Top 10 榜单」。
+             *  硬上限 10 条 → 表头文案也要直接说清,不再让用户去「猜是不是漏看了」。
+             *  v0.7.37: 表身从 antd Table 改为 TopBarChart,见组件注释。 */}
+            <h3 className="stats-panel-title">Top 10 榜单</h3>
+            <Segmented
+              options={BY_OPTIONS}
+              value={topBy}
+              onChange={(value) => setTopBy(value as StatsTopBy)}
+            />
+          </div>
+          <div hidden={loading && topItems.length === 0}>
+            <TopBarChart items={topItems.slice(0, TOP_LIMIT)} />
+          </div>
+          {/*
+           * `loading && topItems.length === 0` 才居中 spinner —— 切时间窗时
+           * 已有旧数据,不需要渐隐过度。位置改在 chart 之后渲染（而不是
+           * 覆盖），跟下面 client/events 表格的 PageLoading 模式一致。
+           */}
+          <PageLoading
+            visible={loading && topItems.length === 0}
+            tip="正在读取 Top 10 榜单…"
+          />
+        </div>
+      ) : null}
 
       {/*
         放在「最近事件」**上面**：这一块才是"谁在打"的答案（不受 200 条窗口限制、

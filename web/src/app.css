@@ -756,6 +756,86 @@
   margin-bottom: 0;
 }
 
+/*
+ * Top 榜单条形图。
+ *
+ * 单行 = 4 列 grid：序号 / 标签 / 条 / 数值。条在中间 flex 区域,
+ * 第一名永远填满,后续按 events / max 比例 —— 排名图的核心是「相对
+ * 大小」,max 必须是项内最大值而不是全局 100%。
+ *
+ * 标签列用 minmax(160px, 0.45fr) 而不是固定宽度:窄屏自动压,宽屏
+ * 给长镜像名多一点呼吸 —— 比 scroll-x 体面。
+ *
+ * fill 用 --color-primary 一档,跟热力图的最深档保持视觉权重一致。
+ * 不用分档(第一名金黄、第二名银...),Top 10 区分颜色对各家不同,设计
+ * 上看能简单点。
+ */
+.top-bar-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.top-bar-row {
+  display: grid;
+  grid-template-columns: 28px minmax(160px, 0.45fr) 1fr 56px;
+  align-items: center;
+  gap: 12px;
+  height: 28px;
+}
+
+.top-bar-rank {
+  color: var(--color-text-3);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  text-align: right;
+}
+
+.top-bar-label {
+  display: block;
+  font-size: 13px;
+  color: var(--color-text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.top-bar-track {
+  position: relative;
+  height: 14px;
+  background: var(--color-fill-2);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.top-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--color-primary);
+  /* 第一名永远是满条,百分比给到 100 时 width: 100% 边缘没有 1px 圆角
+   * 视觉切口 —— 加 min-width: 1px 在最小值的情况下也保留一条缝。 */
+  min-width: 1px;
+  border-radius: 3px;
+}
+
+.top-bar-value {
+  color: var(--color-text-1);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  font-size: 13px;
+  text-align: right;
+}
+
+.top-bar-empty {
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--color-text-3);
+  font-size: 13px;
+}
+
 .stats-code-head {
   display: flex;
   align-items: center;
