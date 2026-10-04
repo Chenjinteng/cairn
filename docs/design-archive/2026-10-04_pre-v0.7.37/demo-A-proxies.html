@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Cairn · 代理管理 (teal)</title>
+<style>
+:root {
+  --primary:#0d9488; --primary-fg:#fff; --primary-bg-active:#ccfbf1;
+  --secondary:#f2f4f7; --bg:#fff; --bg-hover:#f2f4f7; --bg-1:#fff; --bg-soft:#f4f5f8;
+  --ink:#1f2937; --ink-soft:#6b7280; --line:#e5e7eb;
+  --warning:#faad14; --info:#0d9488; --fail:#f43b2c; --success:#16a34a;
+}
+:root[data-theme="dark"] {
+  --primary:#2dd4bf; --primary-fg:#042f2e; --primary-bg-active:#2dd4bf26;
+  --secondary:#1f2430; --bg:#171b24; --bg-hover:#1f2530; --bg-1:#171b24; --bg-soft:#1b202a;
+  --ink:#e5e7eb; --ink-soft:#9ca3af; --line:#2d3340;
+  --warning:#ffc53d; --info:#2dd4bf; --fail:#ff6b5e; --success:#4ade80;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { background: var(--bg); color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif; font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+.app { display: grid; grid-template-rows: 56px 1fr; height: 100vh; }
+.header { display: grid; grid-template-columns: 220px 1fr auto; align-items: center; padding: 0 24px; border-bottom: 1px solid var(--line); background: var(--bg-1); }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 16px; }
+.brand-mark { width: 26px; height: 26px; background: var(--primary); border-radius: 6px; display: grid; place-items: center; color: var(--primary-fg); font-weight: 800; font-size: 14px; }
+.brand-version { font-size: 11px; color: var(--ink-soft); margin-left: 6px; }
+.nav { display: flex; gap: 4px; background: var(--bg-soft); padding: 3px; border-radius: 8px; }
+.nav-item { padding: 6px 14px; font-size: 13px; color: var(--ink-soft); border-radius: 6px; cursor: pointer; }
+.nav-item:hover { background: var(--bg-hover); }
+.nav-item.active { background: var(--bg-1); color: var(--ink); font-weight: 500; box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
+.user { font-size: 12px; color: var(--ink-soft); }
+.body { display: grid; grid-template-columns: 220px 1fr; overflow: hidden; }
+.sidebar { border-right: 1px solid var(--line); padding: 16px 12px; background: var(--bg-1); overflow-y: auto; }
+.side-group { font-size: 11px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.06em; padding: 12px 12px 6px; font-weight: 600; }
+.side-item { padding: 7px 12px; font-size: 13px; color: var(--ink-soft); border-radius: 6px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+.side-item:hover { background: var(--bg-hover); color: var(--ink); }
+.side-item.active { background: var(--primary-bg-active); color: var(--primary); font-weight: 500; }
+.side-item .badge { font-size: 11px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.side-item.active .badge { color: var(--primary); }
+
+.content { padding: 24px 28px; overflow-y: auto; }
+.page-head { margin-bottom: 20px; display: flex; justify-content: space-between; align-items: flex-end; }
+.page-title { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; }
+.page-sub { font-size: 12px; color: var(--ink-soft); margin-top: 2px; }
+.actions { display: flex; gap: 8px; }
+.btn { font-size: 13px; padding: 7px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg-1); color: var(--ink); cursor: pointer; font-family: inherit; }
+.btn.primary { background: var(--primary); color: var(--primary-fg); border-color: var(--primary); }
+.btn:hover { border-color: var(--ink-soft); }
+.btn.primary:hover { filter: brightness(1.05); }
+.btn.icon { padding: 6px 10px; }
+
+.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 20px; }
+.kpi { background: var(--bg-1); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+.kpi-label { font-size: 12px; color: var(--ink-soft); margin-bottom: 6px; }
+.kpi-value { font-size: 24px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; color: var(--ink); }
+.kpi-trend { font-size: 11px; color: var(--ink-soft); margin-top: 6px; font-variant-numeric: tabular-nums; }
+
+.panel { background: var(--bg-1); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; margin-bottom: 20px; }
+.panel-head { padding: 14px 18px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; font-size: 14px; font-weight: 600; }
+.panel-head .sub { font-size: 11px; color: var(--ink-soft); font-weight: 400; }
+
+.proxy-row { display: grid; grid-template-columns: 1.5fr 2fr 1fr auto auto auto; gap: 14px; align-items: center; padding: 14px 18px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.proxy-row:last-child { border-bottom: none; }
+.proxy-row:hover { background: var(--bg-hover); }
+.proxy-name { font-weight: 500; color: var(--ink); }
+.proxy-name .id { font-size: 10px; font-family: 'JetBrains Mono', monospace; color: var(--ink-soft); margin-left: 6px; font-weight: 400; }
+.proxy-url { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--ink); }
+.proxy-mode { font-size: 10px; padding: 2px 8px; border-radius: 4px; background: var(--bg-soft); color: var(--ink-soft); font-family: 'JetBrains Mono', monospace; text-align: center; }
+.proxy-status { font-size: 11px; font-weight: 500; padding: 2px 8px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; }
+.proxy-status.ok { background: #16a34a14; color: var(--success); }
+.proxy-status.slow { background: #faad1414; color: var(--warning); }
+.proxy-status.fail { background: #f43b2c14; color: var(--fail); }
+.proxy-status.never { background: var(--bg-soft); color: var(--ink-soft); }
+
+.theme-switcher { position: fixed; bottom: 16px; right: 16px; background: var(--bg-1); border: 1px solid var(--line); border-radius: 999px; padding: 4px; font-size: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+.theme-switcher button { border: none; background: transparent; padding: 6px 12px; border-radius: 999px; cursor: pointer; color: var(--ink-soft); }
+.theme-switcher button.active { background: var(--primary); color: var(--primary-fg); }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="header">
+    <div class="brand"><div class="brand-mark">C</div><span>Cairn</span><span class="brand-version">v0.5.36</span></div>
+    <div class="nav">
+      <div class="nav-item">镜像列表</div>
+      <div class="nav-item">镜像拉取</div>
+      <div class="nav-item">镜像热度</div>
+      <div class="nav-item">凭据管理</div>
+      <div class="nav-item active">代理管理</div>
+      <div class="nav-item">设置</div>
+    </div>
+    <div class="user">admin · registry.example.com</div>
+  </header>
+
+  <div class="body">
+    <aside class="sidebar">
+      <div class="side-group">协议</div>
+      <div class="side-item active"><span>全部</span><span class="badge">4</span></div>
+      <div class="side-item"><span>http</span><span class="badge">2</span></div>
+      <div class="side-item"><span>https</span><span class="badge">1</span></div>
+      <div class="side-item"><span>socks5</span><span class="badge">1</span></div>
+      <div class="side-group">用途</div>
+      <div class="side-item active">拉取源代理</div>
+      <div class="side-item">备份依赖</div>
+      <div class="side-item">CI 出网</div>
+      <div class="side-group">状态</div>
+      <div class="side-item"><span>连通</span><span class="badge">2</span></div>
+      <div class="side-item"><span>慢</span><span class="badge">1</span></div>
+      <div class="side-item"><span>失败</span><span class="badge">1</span></div>
+    </aside>
+
+    <main class="content">
+      <div class="page-head">
+        <div>
+          <div class="page-title">代理管理</div>
+          <div class="page-sub">出网代理配置 · 4 条代理 · 每 30 分钟自动探测</div>
+        </div>
+        <div class="actions">
+          <button class="btn">探测全部</button>
+          <button class="btn primary">+ 新增代理</button>
+        </div>
+      </div>
+
+      <div class="kpis">
+        <div class="kpi"><div class="kpi-label">代理总数</div><div class="kpi-value">4</div><div class="kpi-trend">2 http / 1 https / 1 socks5</div></div>
+        <div class="kpi"><div class="kpi-label">连通率 (24h)</div><div class="kpi-value">75%</div><div class="kpi-trend">18/24 次探测成功</div></div>
+        <div class="kpi"><div class="kpi-label">平均延迟</div><div class="kpi-value">218<span style="font-size:14px;color:var(--ink-soft);font-weight:400;margin-left:4px">ms</span></div><div class="kpi-trend">-12 ms vs 昨日</div></div>
+        <div class="kpi"><div class="kpi-label">依赖此代理的任务</div><div class="kpi-value">6</div><div class="kpi-trend">通过代理的有 4 个</div></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <span>代理列表</span>
+          <span class="sub">// sort by last probe ↓</span>
+        </div>
+
+        <div class="proxy-row">
+          <div>
+            <div class="proxy-name">内网 HTTP 代理<span class="id">proxy-20250901-090000-h1</span></div>
+          </div>
+          <div class="proxy-url">http://192.0.2.5:3128</div>
+          <div><span class="proxy-mode">http</span></div>
+          <div><span class="proxy-status ok">3 分钟前 · 45 ms</span></div>
+          <div><button class="btn icon">探测</button></div>
+          <div><button class="btn icon">⋯</button></div>
+        </div>
+
+        <div class="proxy-row">
+          <div>
+            <div class="proxy-name">公司 HTTPS 代理<span class="id">proxy-20251015-140312-h2</span></div>
+          </div>
+          <div class="proxy-url">https://proxy.corp.example.com:8443</div>
+          <div><span class="proxy-mode">https</span></div>
+          <div><span class="proxy-status ok">12 分钟前 · 187 ms</span></div>
+          <div><button class="btn icon">探测</button></div>
+          <div><button class="btn icon">⋯</button></div>
+        </div>
+
+        <div class="proxy-row">
+          <div>
+            <div class="proxy-name">外网 SOCKS5 (备用)<span class="id">proxy-20251108-220055-s1</span></div>
+          </div>
+          <div class="proxy-url">socks5://proxy-user@192.0.2.99:1080</div>
+          <div><span class="proxy-mode">socks5</span></div>
+          <div><span class="proxy-status slow">34 分钟前 · 1.8s (超时 2s)</span></div>
+          <div><button class="btn icon">探测</button></div>
+          <div><button class="btn icon">⋯</button></div>
+        </div>
+
+        <div class="proxy-row">
+          <div>
+            <div class="proxy-name">已下线 · 老 VPN<span class="id">proxy-20250120-110012-h4</span></div>
+          </div>
+          <div class="proxy-url">http://vpn-old.example.com:8080</div>
+          <div><span class="proxy-mode">http</span></div>
+          <div><span class="proxy-status fail">2 天前 · connection refused</span></div>
+          <div><button class="btn icon">探测</button></div>
+          <div><button class="btn icon">⋯</button></div>
+        </div>
+      </div>
+
+      <div style="margin-top:20px;padding:14px 18px;background:var(--bg-soft);border-radius:10px;font-size:12px;color:var(--ink-soft);">
+        // 探测方式: GET https://www.google.com/generate_204, 期望 204 + latency &lt; 3s · 任何 ≥ 4xx/5xx/超时 都视为失败 · 测前会先离线测试,不真出网
+      </div>
+    </main>
+  </div>
+</div>
+<div class="theme-switcher" id="ts">
+  <button class="active" data-t="light">浅色</button><button data-t="dark">深色</button>
+</div>
+<script>
+document.querySelectorAll('#ts button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#ts button').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  if (b.dataset.t === 'dark') document.documentElement.dataset.theme = 'dark';
+  else delete document.documentElement.dataset.theme;
+});
+</script>
+</body>
+</html>
