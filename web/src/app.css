@@ -538,10 +538,9 @@
   text-decoration: underline;
 }
 
-/* 镜像拉取页:左主卡片包源 + 目标纵向堆叠,右高级选项裸布局(不包卡片)并排。
- * 视觉重心是左侧主输入(包卡片),右侧是「常见但次要」的源代理 / 认证选择
- * —— 故意不包卡片,避免两个框视觉权重冲突;裸布局让"高级选项"看起来是
- * 辅助选项而非独立模块。
+/* 镜像拉取页:左主卡片包源 + 目标纵向堆叠,右高级选项卡片并排。
+ * 提交按钮 + 单并发说明在卡片外面 —— 与主输入区保持距离,免得按钮像
+ * 「属于某个卡片」的内部控件;FIFO 是说明性文字(muted),不带边框 / 背景。
  * 窄屏(md 以下)塌成单列。*/
 .pull-form-row {
   display: grid;
@@ -587,6 +586,24 @@
 }
 .pull-advanced .ant-form-item-explain {
   font-size: 11px;
+}
+
+/* 提交按钮 + 单并发说明:卡片外面一行,跟主输入区保持距离。
+ * 单并发 / FIFO 不是按钮,是说明文字 —— 用 muted 颜色 + 小图标,
+ * 不带任何 chip / button 边框,避免看起来像可交互的次要按钮。*/
+.pull-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 16px;
+  padding: 0 4px;
+}
+.pull-actions-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text-3);
+  font-size: 12px;
 }
 
 @media (max-width: 900px) {

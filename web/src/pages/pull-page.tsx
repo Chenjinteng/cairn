@@ -1029,23 +1029,31 @@ export default function PullPage({ config, sidebarFilter, onPublishGroups }: Pro
               </Form.Item>
             </div>
           </div>
-          <Space>
-            <Button
-              type="primary"
-              icon={<PlusOutlined />}
-              htmlType="submit"
-              loading={submitting}
-              disabled={Boolean(config && !config.allowPull)}
-            >
-              加入队列
-            </Button>
-            <Tooltip title="单并发：当前任务完成后才会启动下一个">
-              <Tag icon={<CloudDownloadOutlined />} color="default">
-                单并发 / FIFO
-              </Tag>
-            </Tooltip>
-          </Space>
         </Form>
+      </div>
+
+      {/*
+        v0.7.37: 提交按钮 + 单并发说明移到 panel 外面 —— 跟主输入卡片
+        保持距离(此前嵌在 panel 里,贴着源/目标卡片的左下角,视觉
+        上像是「卡片内部的次级按钮」)。单并发 / FIFO 是说明文字
+        (muted + 图标,无 chip 边框),不是按钮。
+      */}
+      <div className="pull-actions">
+        <Button
+          type="primary"
+          icon={<PlusOutlined />}
+          htmlType="submit"
+          loading={submitting}
+          disabled={Boolean(config && !config.allowPull)}
+        >
+          加入队列
+        </Button>
+        <Tooltip title="单并发：当前任务完成后才会启动下一个">
+          <span className="pull-actions-note">
+            <CloudDownloadOutlined />
+            单并发 / FIFO
+          </span>
+        </Tooltip>
       </div>
 
       {runningJob ? (
