@@ -406,7 +406,13 @@ export default function ImagesPage({
                   }
                 }}
               >
-                <Button icon={<DeleteOutlined />}>运行 GC</Button>
+                {/*
+  * v0.7.37: danger —— GC 会强制清理孤儿 blob,虽然有 Popconfirm 二次确认,
+  * 但按钮本身属于「破坏性操作」语义,默认 default 会让人误以为是普通刷新类
+  * 操作。danger 红色边框 + hover 红底白字,跟旁边「刷新」按钮(绿色实心)
+  * 视觉权重区分开 ——「刷新」是常态、「GC」是危险。
+  */}
+              <Button danger icon={<DeleteOutlined />}>运行 GC</Button>
               </Popconfirm>
             </Tooltip>
           ) : null}
