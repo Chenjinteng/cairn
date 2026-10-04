@@ -561,9 +561,12 @@
   min-width: 0;
 }
 
-/* 右高级选项:裸布局,只保留 padding 让跟左卡片视觉对齐;
- * 故意不设 bg / border / radius,避免两个框权重冲突。*/
+/* 右高级选项卡片:跟左主卡片同框样式(背景 / 边框 / 圆角),两个框独立并排,
+ * 视觉上是「主输入区」+「高级选项区」两块平等的卡片。*/
 .pull-advanced {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
   padding: 16px 20px;
   display: flex;
   flex-direction: column;
