@@ -1,6 +1,6 @@
 # Cairn
 
-> 轻量级容器镜像基础设施平台 —— 单进程单二进制,自带管理控制台,实现 CNCF Distribution(Docker Registry HTTP API V2)。
+> 轻量级容器镜像管理平台 —— 单进程单二进制,自带管理控制台,实现 CNCF Distribution(Docker Registry HTTP API V2)。
 
 <p align="left"><img src="./docs/logo.svg" alt="Cairn logo" width="64" /></p>
 
