@@ -6,6 +6,19 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.40] - 2026-10-04
+
+Bug 修复:拉取页表格在状态筛选 0 行时横向滚动条 reflow 导致页面晃动。无 API / 后端变更。
+
+### 修复
+
+- **拉取页表格 ([`web/src/pages/pull-page.tsx`](./web/src/pages/pull-page.tsx)) — `scroll.x` 与列宽对齐 + `tableLayout: 'fixed'`**
+  - **Bug:** `scroll={{ x: 1000 }}` 与列宽之和(220+140+140+140+180+150+140 = 1110)不一致 —— 表格有数据时 tbody 被内容撑到 1110px,容器内出现横向滚动条;筛选切到 0 行(Empty 状态)后,tbody 不再被内容撑大,横向滚动条消失,容器宽度从 1000px 跳到 1110px(或反之),整页 reflow,视觉上"晃动"。
+  - 同时列宽全部是 explicit `width` 但没设 `tableLayout: 'fixed'`,antd Table 用 cell 内容反算列宽,空数据 / 有数据两种状态反算结果不同,进一步触发 layout shift。
+  - **修法:** `scroll.x` 改到 1110(与列宽总和一致)+ `tableLayout="fixed"` 锁定列宽。两条一起,空数据 / 有数据两个状态下表格尺寸完全一致,不再触发任何 layout shift。
+
+---
+
 ## [0.7.39] - 2026-10-04
 
 Bug 修复:同步定时 Modal「下次触发」列相对时间方向错误。无 API / 后端变更。
