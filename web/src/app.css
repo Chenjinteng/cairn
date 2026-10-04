@@ -372,6 +372,16 @@
   overflow: auto;
 }
 
+/*
+ * v0.7.40: 表格 Empty 状态垂直居中 —— 默认 antd Empty 只贴表头下面
+ * (~140px),当 panel min-height 拉到 480px(防止筛 0 行时页面塌陷抖动)
+ * 后,Empty 留 400+px 空白看着别扭。给 ant-table-placeholder 的 td 加
+ * padding 顶到底,把 Empty 推到中间。
+ */
+.ant-table-tbody > tr.ant-table-placeholder > td {
+  padding: 80px 0;
+}
+
 .page--fill .table-scroll {
   flex: 1 1 auto;
   /* 留一个下限，别在窄矮窗口里被压成一条缝。 */

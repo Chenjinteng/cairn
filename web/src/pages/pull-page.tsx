@@ -1105,7 +1105,7 @@ export default function PullPage({ config, sidebarFilter, onPublishGroups }: Pro
         />
       ) : null}
 
-      <div className="panel" style={{ position: 'relative', minHeight: 200 }}>
+      <div className="panel" style={{ position: 'relative', minHeight: 480 }}>
         {/*
          * v0.6.23: PageLoading 改成 position: absolute 覆盖在 panel 内,不再
          * 占 flow 高度 —— 解决 0.6.22 「拉址感」(spinner 在 flow 里跟 Table
