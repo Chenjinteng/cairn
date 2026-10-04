@@ -98,6 +98,7 @@ import type {
 } from '../types';
 import type { SidebarGroup, SidebarItem, SidebarSelection } from '../components/page-sidebar';
 import PageLoading from '../components/page-loading';
+import MetricCard from '../components/metric-card';
 
 interface Props {
   /**
@@ -608,6 +609,36 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
     if (!d || d === 'all') return tasks;
     return tasks.filter((t) => t.direction === d);
   }, [tasks, sidebarFilter]);
+
+  /**
+   * v0.7.42: 页头 4 张总览卡片的数据派生,全部从 `tasks` 算,
+   * 不增加任何 API 调用。
+   *   - 总数：含启用 / 停用
+   *   - 运行中:lastRunStatus==='running' 的 task 数
+   *   - 最近一次成功:lastRunStatus==='success'
+   *   - 最近一次失败:lastRunStatus==='failed' || 'partial'(部分失败对运维等于失败)
+   *   - 没跑过的任务不计入成功也不计入失败 → 分母明确
+   */
+  const taskMetrics = useMemo(() => {
+    let enabled = 0;
+    let running = 0;
+    let success = 0;
+    let failed = 0;
+    for (const t of tasks) {
+      if (t.enabled) enabled++;
+      if (t.lastRunStatus === 'running') running++;
+      else if (t.lastRunStatus === 'success') success++;
+      else if (t.lastRunStatus === 'failed' || t.lastRunStatus === 'partial') failed++;
+    }
+    return {
+      total: tasks.length,
+      enabled,
+      disabled: tasks.length - enabled,
+      running,
+      success,
+      failed,
+    };
+  }, [tasks]);
 
   // ── 编辑 / 新建 ──────────────────────────────────────────────────
 
@@ -1642,6 +1673,47 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
           action={<Button size="small" onClick={() => void refresh()}>重试</Button>}
         />
       )}
+
+      {/*
+       * v0.7.42: 镜像同步页总览卡片。回答"现在要不要介入":
+       *   - 总数 + 启用/停用分布
+       *   - 运行中(>0 时图标 spin)
+       *   - 最近一次成功 / 失败
+       * 全部从 tasks 派生,跟热度页对齐风格,数据零成本。
+       */}
+      <div className="metric-grid" style={{ marginBottom: 16 }}>
+        <MetricCard
+          icon={<ApiOutlined />}
+          label={
+            <span>
+              任务总数
+              <span style={{ color: 'var(--color-text-3)', fontWeight: 400, marginLeft: 6 }}>
+                启用 {taskMetrics.enabled} · 停用 {taskMetrics.disabled}
+              </span>
+            </span>
+          }
+          value={taskMetrics.total}
+        />
+        <MetricCard
+          icon={<SyncOutlined spin={taskMetrics.running > 0} />}
+          label="运行中"
+          value={taskMetrics.running}
+        />
+        <MetricCard
+          icon={<CheckCircleOutlined />}
+          iconColor="var(--color-success)"
+          iconBackground="var(--color-fill-2)"
+          label="最近一次成功"
+          value={taskMetrics.success}
+        />
+        <MetricCard
+          icon={<CloseCircleOutlined />}
+          iconColor="var(--color-fail)"
+          iconBackground="var(--color-fail-bg)"
+          label="最近一次失败"
+          value={taskMetrics.failed}
+        />
+      </div>
 
       {/*
        * v0.6.22: 三态渲染从 ternary 改成「同时渲染 + 受控 visible」。
