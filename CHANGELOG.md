@@ -6,24 +6,30 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
-## [0.7.51] - 2026-10-04
+## [0.7.52] - 2026-10-04
 
-`PageLoading` 加 `cover` prop —— `'viewport'` 时用 `position: fixed` 覆盖整个 viewport，而不是只盖父容器 box。给「镜像列表」显式 opt-in，避免加载时 `.metric-grid` 顶部 4 张 MetricCard 露出来。无 API / 后端变更。
+撤回 v0.7.51 的 `PageLoading` `cover` prop 改动 —— `cover='viewport'` 用 `position: fixed + inset: 0` 覆盖整个 viewport,**会盖住顶栏 nav bar**（`.app-header { z-index: 20 }` vs PageLoading `z-index: 100`）,UAT 反馈加载体验不对。代码状态等同 v0.7.50,但版本号不能往回退（v0.7.51 已发布）,用 v0.7.52 标识。无 API / 后端变更。
 
 ### 变更
 
-- **`PageLoading` 加 `cover` prop ([`web/src/components/page-loading.tsx`](./web/src/components/page-loading.tsx))**
-  - `'parent'`（默认）：`position: absolute + inset: 0`,覆盖 nearest positioned ancestor 的 padding box。**v0.6.22 行为不变**,其它 6 个页面继续用这个
-  - `'viewport'`：`position: fixed + inset: 0`,覆盖整个 viewport,不跟随任何 scroll container。**给镜像列表用** —— 它的 `.page--fill` 顶部有 `.metric-grid`(仓库数 / Tag 数 / 镜像层合计 / 清单刷新时间),loading 期间露出来,用户可能扫到「仓库数 = 0」的瞬态值造成「看起来没数据」的错觉
+- **撤回 `PageLoading` `cover` prop（[`web/src/components/page-loading.tsx`](./web/src/components/page-loading.tsx)）**
+  - 删除 `cover?: 'parent' | 'viewport'` prop,回到 v0.6.22 默认 `position: absolute + inset: 0` 覆盖 nearest positioned ancestor
+  - 镜像列表的 PageLoading 行为回到 v0.7.50 —— 只覆盖 `.table-scroll`,**`.metric-grid` 顶部 4 张 MetricCard 在 loading 期间会露出来**（已知,但用户认为这个比"蒙板盖住 nav bar"可接受）
 
-- **「镜像列表」显式 opt-in `cover='viewport'` ([`web/src/pages/images-page.tsx`](./web/src/pages/images-page.tsx))**
-  - 注释里说明为什么用 viewport 而不是 parent:`.metric-grid` 在 loading 期间不该露
-  - 其它页面(sync / pull / stats / credentials / proxies / settings)继续用 `'parent'` 默认 —— 它们只有表格一个 section 需要遮盖
+- **撤回 `images-page.tsx` 的 `cover='viewport'` opt-in**
+  - PageLoading 调用回到 v0.7.50 形态（`delay=0` + `minDuration=700` opt-in 保留 —— 用户希望看到 cairn-mark 入场动画）
 
 ### 背景
 
-v0.7.50 给镜像列表 opt-in `delay=0 + minDuration=700`,但没解决覆盖范围:PageLoading 嵌在 `.table-scroll` 内只覆盖 Table 区域,`.page--fill` 顶部的 `.metric-grid` 在 loading 期间露出来 —— 用户在 v0.7.50 部署后报「蒙板只盖住一页列表,往下滚动看到没盖住的行」,实际是「MetricCard 在蒙板覆盖范围之外,滚动时能看到」。
-v0.7.51 引入 `cover='viewport'` 让镜像列表蒙板覆盖整个 viewport,彻底消除加载期其他 section 的可见性。
+v0.7.51 用 `cover='viewport'` 让镜像列表 PageLoading 覆盖整个 viewport,解决"`.metric-grid` 在 loading 期间露出来"的问题。但 `position: fixed + inset: 0` 的副作用是**蒙板 z-index: 100 高于 `.app-header` z-index: 20** —— 加载期间顶栏 nav bar 被盖住,用户无法切换其它页面。UAT 反馈"整个页面加载太奇怪"指的就是这个。
+
+### 后续
+
+如果以后想"加载时遮住 `.metric-grid` 但不遮 nav bar":
+- 方案 A:把 PageLoading 提到 `.app-content` 这一层(`position: relative` + inset: 0),覆盖 `.app-content` 而不是整个 viewport —— 顶栏和侧栏不会被遮
+- 方案 B:调 nav bar 的 z-index 高于 PageLoading(改成 200+),让 nav bar 始终显示在蒙板之上
+
+这两个方案单独 PR,本次不再做。
 
 ---
 
