@@ -6,6 +6,21 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.48] - 2026-10-04
+
+`cairn-intro.html` 产品介绍页 hero logo 加石塔建造动画 —— 把 v0.7.47 在控制台 PageLoading 上线的能力延伸到 splash hero。无 API / 后端变更。
+
+### 变更
+
+- **`cairn-intro.html` hero logo 加 cairn-mark 动画 ([`web/public/cairn-intro.html`](./web/public/cairn-intro.html))**
+  - 给 hero 的 inline SVG 加 `.cairn-mark-anim-pulse-build` 类(同 v0.7.47 cairn-mark.tsx 的 `pulse-build` 动画方案),给 rect/circle 加 `stone stone-1/2/3` / `dot` 子类
+  - 内联 3 个 keyframes(`cairn-mark-build-stone` / `cairn-mark-build-dot` / `cairn-mark-dot-pulse`) —— cairn-intro.html 是 web/public/ 下的纯静态 HTML,不在 React 树里,读不到 app.css,必须内联。keyframes 跟 web/src/app.css 同源,后续如果改时序记得两边同步
+  - 用 `pulse-build`(一次性建造 + 琥珀点持续呼吸),不是 `build` —— hero 是首屏品牌展示,要让 cairn 有「活」的感觉;PageLoading 蒙板场景用 `build`(蒙板消失 cairn 跟着消失,没必要持续)
+  - `prefers-reduced-motion: reduce` 自动降级为静态 cairn,不影响可访问性
+  - 顶部 HTML 注释里加 v0.7.47/0.7.48 变更记录(沿用已有的「每版一条」的格式)
+
+---
+
 ## [0.7.47] - 2026-10-04
 
 控制台全站加载蒙板 `PageLoading` 的 antd `<Spin>` 替换为 cairn logo「石塔建造」动画 —— 从通用 spinner 升级为品牌化动效。无 API / 后端变更。
