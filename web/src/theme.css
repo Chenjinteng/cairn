@@ -95,6 +95,13 @@
    * 再卡一次首屏,得不偿失。系统有就用,没有 fallback 到本地其他字体。
    */
   --font-sans: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    /* v0.7.44:加 HarmonyOS Sans SC(geometric sans,观感最接近 Outfit,
+       接近度 85%)。系统装了就用,没装降级到下面的开源 CJK。
+       字体本身不开 CDN embed —— ttf 16MB 会撑爆 cairn 二进制
+       (设计目标 ~10MB,镜像 ~15MB),跟"单进程单二进制"原则冲突。
+       想要"无依赖"看到 HarmonyOS Sans SC 渲染,后续做 cn-font-split
+       subset embed(预计 500KB woff2),单独 PR。 */
+    'HarmonyOS Sans SC',
     /* 跨平台开源 CJK(Linux / 通用 / Google) */
     'Noto Sans SC', 'Noto Sans CJK SC', 'Source Han Sans SC', 'Source Han Sans CN',
     /* macOS / iOS */
