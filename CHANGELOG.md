@@ -6,6 +6,54 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.38] - 2026-10-04
+
+Web UI 微调:拉取页 / 热度页 / 同步编辑 modal 几处控件密度与视觉平衡收口。无后端 / API / 数据格式变更,纯前端呈现。
+
+### 修复
+
+- **拉取页（[`web/src/pages/pull-page.tsx`](./web/src/pages/pull-page.tsx)）— 高级选项移出折叠**
+  - 「源端代理 / 源认证」从 `<Collapse>` 提到外层,跟源 / 目标镜像组成 2 列 grid(左 `pull-main-card` 包源 + 目标纵向堆叠,右 `pull-advanced` 独立卡片,左右等宽框样式)。
+  - 这两个选项是高频操作(每次新建任务都可能切),折叠一次点一次太烦;放右侧窄卡片保持可见又不挤占主输入空间。
+  - 配套 CSS `.pull-form-row` / `.pull-main-card` / `.pull-advanced` / `.pull-advanced-title`(`web/src/app.css`),窄屏(900px 以下)塌成单列。
+
+- **拉取页 — 提交按钮 + 单并发说明放回 panel 内部**
+  - 之前按钮在 panel 外(避免视觉上「像卡片的次级按钮」),再放进 panel 内,留在源/目标 + 高级选项卡片下面,`margin-top: 20px` 跟卡片拉开距离 —— 属于「整张 panel 的提交动作」而非卡片内部控件。
+  - 「单并发 / FIFO」仍是 muted 说明文字 + 图标(`<span className="pull-actions-note">`),不挂 chip 边框,跟按钮区分开。
+
+- **拉取页 — 源 / 目标镜像输入框移除预填值**
+  - `<Form>` 上的 `initialValues={{ image: 'library/alpine:3.19', destImage: 'library/alpine:3.19' }}` 去掉,改用 placeholder 作为示例提示(`alpine:3.19` / `与源镜像同名`)。
+  - 预填常见 image 会让人误以为是「默认值」/「已有任务」,实际每次都新开任务。
+
+- **热度页（[`web/src/pages/stats-page.tsx`](./web/src/pages/stats-page.tsx)）— Top 10 榜单:表格 → 横向条形图**
+  - 新建 [`web/src/components/top-bar-chart.tsx`](./web/src/components/top-bar-chart.tsx)(原生 SVG + CSS,无新依赖 —— 跟按天趋势「不引图表库」克制一致)。
+  - 选型理由:Top N 本质是按量级排序,横向条形图(Pareto 排名图)直接比条长,不用读数字脑内比较;标签再长也不影响布局(左 `minmax(120px, 0.5fr)` + ellipsis,不会撑出横向滚动条)。
+  - 配套 CSS `.top-bar-*`(`web/src/app.css`)。`by=repository` / `by=tag` Segmented 切换保留,Tooltip 展示拉/推分项 + 最近活动。
+
+- **热度页 — 按天趋势 + Top 10 榜单并排 6:4**
+  - `.stats-chart-row` 用 grid `grid-template-columns: 6fr 4fr`(v0.7.37 的 7:3 + 6:4 迭代里最终选 6:4)。
+  - `align-items: stretch` 让两 panel 等高,`.heatmap` 加 `justify-content: center` 让 caption / svg / legend 在 panel 里垂直居中(避免左 panel 底部留白突兀)。
+  - 窄屏(900px 以下)塌成单列,跟 `.pull-form-row` 一致。
+
+- **热度页 — 按天趋势从 12 个月改到 6 个月**
+  - `HEATMAP_DAYS: 365 → 180`,caption / title 同步「近 6 个月」。
+  - 理由:12 个月(53 列)在并排布局里太宽,跟右 panel 视觉重量失衡;6 个月(≈27 列)既保留月标尺节奏,又跟右 panel 更平衡。
+  - `heatmap.ts` 几何逻辑通用,无需调整;`parseTagsFilter` 等下游不受影响。
+
+- **镜像列表页（[`web/src/pages/images-page.tsx`](./web/src/pages/images-page.tsx)）— 运行 GC 按钮 danger**
+  - `<Button>` 加 `danger` prop,红色边框 + hover 红底白字(走 `--color-error`)。
+  - 跟旁边「刷新」按钮(默认绿色实心)形成「常态 / 危险」二分 —— GC 会强制清理孤儿 blob,虽然 Popconfirm 二次确认链路不变,但按钮本身的视觉权重应该跟语义对齐。
+
+- **同步编辑 modal（[`web/src/pages/sync-page.tsx`](./web/src/pages/sync-page.tsx)）— Include / Tags 两文本框合并**
+  - 两条独立 `<Form.Item>`(各占 label / extra / rows=3)合成上面 Radio.Group + 下面共用 TextArea。
+  - 新增 `filterMode: 'include' | 'tags'` 字段:Radio.Group 切换 + Form.Item 的 `name` 动态切(`include` / `tagsFilter`),form store 保留两边,切换 mode 不丢内容。
+  - 编辑现有任务时按 `task.tagsFilter` 是否非空自动切到对应 mode,不用手动点 Segmented。
+  - 实时解析预览块(`✓ N 条有效 spec`)只在 `filterMode === 'tags'` 时渲染 —— include 模式下 parseTagsFilter 不适用,显示会让用户误以为两个字段都是「tags 标签」语义。
+  - 控件选型:`Radio.Group` + `Radio.Button`,跟本 modal 的「方向 / 远端凭据」统一风格,避免 Segmented 跟 Radio.Button 视觉混用。
+  - 后端字段没变:`runPull` 入口看 `tagsFilter` 非空优先走精确清单的判定不变。
+
+---
+
 ## [0.7.37] - 2026-10-04
 
 review cleanup:把 [docs/review/v0.7.36-cross-module.md](./docs/review/v0.7.36-cross-module.md) 里 4 项 Tier 1 / Tier 2 落地（小版本,纯清理,0 行为变更）。Tier 1 §1.3（internal/api god 包拆 bounded context）排进 [docs/ROADMAP.md](./docs/ROADMAP.md) 待开工,本轮不做。
