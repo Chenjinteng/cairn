@@ -2,19 +2,19 @@
 
 ===D:/Programms/MinimaxCode/cairn/===
 .dockerignore[FV6T]: F:Excludes .git, .env*, web/node_modules, internal/webui/dist and local artifacts from the Docker build context | R:code:Dockerfile | A:docker build (Docker BuildKit) | S:Excluding .env* is mandatory — re-adding leaks plaintext secrets into the image layer; excluding internal/webui/dist is mandatory because Dockerfile copies it explicitly from the web-builder stage
-.env.example[FC6T]: F:Documents env vars consumed at runtime and build, with the v0.5.9 split between UI/SQLite business config and infrastructure env vars | R:code:docker-compose.yml,code:Dockerfile | A:shell environment, docker compose environment | S:REGISTRY_CREDENTIAL_KEY loss makes stored credentials permanently unrecoverable; HOST_PORT requires container restart (v0.5.40 boot-time-only field)
+.env.example[FC6T]: F:cairn env template; v0.7.37 IMAGE=cairn:0.7.37; v0.5.9 split business→UI/SQLite, infra env(PORT/HOST_PORT/KEY/CAIRN_ENV) stays | R:code:docker-compose.yml, code:Dockerfile, code:Makefile | A:shell env(operator), docker compose env block, Go runtime via os.Getenv | S:KEY loss permanently locks vault(AES-256-GCM); HOST_PORT is boot-only(v0.5.40, container rebuild required)
 .gitattributes[FG4T]: F:Forces `* text=auto eol=lf` so AOCI baseline.json stays byte-identical across platforms | R:code:.aoci/baseline.json | A:git checkout (filters text files through the rule) | S:Without this rule, Windows autocrlf rewrites baselines to CRLF and marks the whole tree stale on every checkout
 .gitignore[FC6T]: F:Top-level ignore list — binaries, go workspace files, vendor/, env files, registry.config.json, frontend deps, editor noise, scratch dirs | R:code:Dockerfile,code:docker-compose.yml,code:Makefile | A:git status, `aoci scan` file inventory | S:Removing any /env or /registry.config.json entry could allow secrets or local config to leak into commits
 AGENTS.md[SG7L]: F:Repo AI constraints — single-process rule, data-dir constants, version rules, 5-place sync, Go toolchain pin, V2 protocol facts, not-doing list | R:code:internal/config/config.go,code:internal/version/version.go,code:docker-compose.yml | A:AI assistant reading this file before any code change | S:Container paths (/app/data, /app/data/registry) are compile-time constants — only host bind-mount moves them. v0.5.9: REGISTRY_* env vars no longer read. Mid-version bumps must be human-specified.
-CHANGELOG.md[SO5L]: F:User-facing changelog in Keep a Changelog format, newest release on top, each entry describing what changed, why and observable behaviour | R:code:internal/version/version.go,code:AGENTS.md | A:human reader (changelog consumer) | S:Each release entry must be written as 'what changed / why / observable behaviour', not 'fix bug' — see AGENTS.md §version rules
+CHANGELOG.md[SO5L]: F:User-facing changelog in Keep a Changelog format, newest first; v0.7.37 documents 4 review cleanup findings | R:code:internal/version/version.go, code:AGENTS.md, code:internal/registry/client.go, code:internal/pull/queue.go, code:internal/config/config.go, code:internal/sync/writer.go | A:human reader(operator, release consumer) | S:Each entry must describe what changed/why/observable behaviour, not 'fix bug'(AGENTS.md §version rules)
 CODE_OF_CONDUCT.md[SG2T]: F:Standard Contributor Covenant 2.1 community Code of Conduct | R:code:CONTRIBUTING.md | A:human reader (contributor) | S:-
 CONTRIBUTING.md[SQ6S]: F:Contribution guide — `make gates` pre-PR gate, Conventional Commits with version impact mapping, 5-place version-sync checklist, scope and PR/issue workflow | R:code:AGENTS.md,code:Makefile,code:.github/pull_request_template.md,code:.github/ISSUE_TEMPLATE/bug_report.md,code:.github/ISSUE_TEMPLATE/feature_request.md | A:human reader (prospective contributor) | S:Conventional Commits prefix-to-version mapping is operational — `feat:` mid-version +1, `fix:`/`refactor:`/`perf:` minor +1; mixed-round takes higher bucket
 Dockerfile[FV8S]: F:Three-stage build — web-builder (pnpm install + build), builder (`CGO_ENABLED=0 go build -tags webui`), scratch runtime — with BuildKit cache mounts | R:code:Makefile,code:docker-compose.yml,code:web/package.json,code:go.mod,code:cmd/server/main.go | A:docker build (Docker BuildKit) | S:GO_IMAGE ARG must stay in sync with the `go X.Y.0` directive in go.mod per AGENTS.md §Go toolchain — mismatch breaks Go stdlib API availability. The web-builder stage must export COREPACK_NPM_REGISTRY in ENV (not just the first RUN) so the second RUN also uses the configured registry (v0.7.29 fix)
 LICENSE[SO2S]: F:Apache License 2.0 full text | R:- | A:human reader (license compliance) | S:-
-Makefile[XV8M]: F:Pipeline Makefile — clone/build/deploy/health/config/gates/tests/data-mgmt — GOPROXY defaulting to goproxy.io for restricted networks | R:code:Dockerfile,code:docker-compose.yml,code:AGENTS.md,code:.env.example,code:.github/workflows/ci.yml | A:make (developer / CI local) | S:IMAGE default in Makefile and `image:` default in docker-compose.yml must match — `make rebuild` produces the tag referenced by compose; divergence makes compose up pull the old image. RUNNER_BASE=http://proxy.example.com:8080 is hard-coded and points to internal infra only
+Makefile[XV8M]: F:Pipeline Makefile(clone/build/deploy/health/config/gates/tests/data-mgmt); v0.7.37 IMAGE?=cairn:0.7.37 + comment updated | R:code:Dockerfile, code:docker-compose.yml, code:AGENTS.md, code:.env.example, code:.github/workflows/ci.yml | A:make(developer/CI local) | S:IMAGE default in Makefile must match docker-compose.yml image: default—divergence pulls old image; RUNNER_BASE=http://proxy.example.com:8080 is internal-infra-only hardcoded
 NOTICE[SO3T]: F:Third-party attribution listing Go stdlib, chi, golang.org/x/sync and modernc.org/sqlite as direct deps, plus UI-convention disclaimer | R:code:go.mod | A:human reader (license compliance) | S:-
 README.md[SU7M]: F:Top-level README — product pitch, 4 hard constraints (single-binary, library backend, observability), capability matrix, architecture, quick start | R:code:docker-compose.yml,code:Dockerfile,code:.env.example,code:AGENTS.md,code:docs/ROADMAP.md | A:human reader (operator / evaluator) | S:Container-internal port (8787) is a compile-time constant per AGENTS.md §data-dir; only HOST_PORT is host-side configurable
-docker-compose.yml[FV7T]: F:Compose service — Dockerfile build args, port mapping `${HOST_PORT:-8787}:8787`, runtime env (REGISTRY_CREDENTIAL_KEY/CAIRN_ENV/HOST_PORT), bind mount for data | R:code:Dockerfile,code:.env.example,code:Makefile | A:docker compose (operator) | S:Single host bind mount (not named volume) — backup = `tar` the host directory. `${HOST_DATA_DIR:-/data/cairn}` is the only operator-movable path; `/app/data` is compile-time
+docker-compose.yml[FV7T]: F:Compose service—Dockerfile build args, port mapping ${HOST_PORT:-8787}:8787, runtime env, data bind mount; v0.7.37 image: cairn:0.7.37 | R:code:Dockerfile, code:.env.example, code:Makefile | A:docker compose(operator) | S:Single host bind mount(not named volume)—backup = tar the host directory; ${HOST_DATA_DIR:-/data/cairn} is the only operator-movable path; /app/data is compile-time constant
 go.mod[FV8T]: F:cairn Go module清单(go 1.26+chi+sqlite+kin-openapi) | R:code:go.sum | A:- | S:third-party只3直接依赖,严格遵守单进程单二进制
 go.sum[FV6T]: F:第三方依赖checksum文件(纯校验,不进二进制) | R:code:go.mod | A:- | S:-
 
@@ -35,7 +35,7 @@ main.go[EG8T]: F:Process entry — `-healthz` probe mode (avoids legacy second-s
 main.go[EQ7S]: F:CI tool mirroring `docker load` checks (VERSION=1.0, manifest refs, repositories→config sha256, diff_ids→layer sha256) without docker daemon | R:code:go.mod | A:CI invocation (after pulling an exported tar) | S:Layer tar byte-streams are not extracted or verified here — storage's TestExportTarSingleArch covers that path. This tool only validates docker-load-compatible shape
 
 ===D:/Programms/MinimaxCode/cairn/docs/===
-ROADMAP.md[SP5S]: F:Roadmap listing milestone slots, current 0.6.0 regsync built-in, 0.5.19 engineering-completion status, and a deliberate-not-doing list | R:code:AGENTS.md,code:CHANGELOG.md,code:internal/version/version.go | A:human reader (planning / contribution) | S:Roadmap records only mid-version slots; minor hotfixes go to CHANGELOG.md. 0.6.0 was reassigned from TLS (deferred per AGENTS.md) to regsync
+ROADMAP.md[SP5S]: F:Roadmap listing milestone slots, 0.6.0 regsync built-in, 0.5.19 engineering-completion status; v0.7.37 adds internal/api bounded-context split | R:code:AGENTS.md, code:CHANGELOG.md, code:internal/version/version.go | A:human reader(planning, contribution) | S:Roadmap records only mid-version slots; minor hotfixes go to CHANGELOG.md; 0.6.0 was reassigned from TLS(deferred per AGENTS.md) to regsync
 logo.svg[SZ2T]: F:Cairn品牌favicon SVG(64×64,三塔teal+琥珀点) | R:code:docs/design/index.html | A:- | S:仅作brand资产文档,非运行时web资源
 modules.md[SG7S]: F:cairn 15 internal包分层架构图与依赖矩阵(L0~L4+cmd入口) | R:code:docs/review/v0.7.36-cross-module.md | A:- | S:v0.7.36配套文档,以HEAD 2458e8d为准;inb=5的storage/db/config是中心
 resilience.md[SR5S]: F:0.5.18韧性轮计划(B组并发/F组前端假死/L组遗留)+验收标准 | R:code:docs/sync-known-issues.md | A:- | S:该轮未单独发版,B/F/L已并入0.5.46-0.5.50
@@ -75,7 +75,7 @@ knownhosts.go[DC5T]: F:pull.known_hosts CSV规范化(normalizeHostCSV+port启发
 sync_handlers.go[AI8L]: F:/api/sync/* 15 endpoints装配+tasks/runs/schedules增删改查 | R:code:internal/db/sync.go | A:- | S:ListRuns缺GetTask前置守卫(vs ListSchedules有);vault nil时503
 
 ===D:/Programms/MinimaxCode/cairn/internal/config/===
-config.go[FC7L]: F:cairn Config结构+Mutable(13 keys)+4 env兜底(PORT/HOST_PORT/KEY/CAIRN_ENV) | R:code:internal/db/db.go | A:- | S:业务配置v0.5.9起全走SQLite,设REGISTRY_* env等于无效
+config.go[FC7L]: F:cairn Config struct + Mutable(13 keys) + DayInterval/RetentionSweepInterval/UploadSessionTTL(v0.7.37); v0.5.9 business→SQLite, infra env kept | R:code:internal/db/db.go, code:internal/server/server.go, code:internal/storage/filesystem.go | A:- | S:Business config v0.5.9+ all SQLite; REGISTRY_* env reads removed(设了等于没设); DayInterval/RetentionSweepInterval/UploadSessionTTL are compile-time consts
 
 ===D:/Programms/MinimaxCode/cairn/internal/credentials/===
 credentials.go[PS7M]: F:AES-256-GCM加密整文件凭据库(Vault:List/Get/Put/Delete+writeMu写者串行) | R:code:internal/api/handlers_extra.go | A:- | S:锁顺序v.writeMu->v.mu,writeMu跨mutate+persist持锁防last-writer-wins
@@ -96,15 +96,15 @@ proxies.go[PN6M]: F:出口代理明文JSON存储(List/Get/Put/Delete+Store.Probe
 
 ===D:/Programms/MinimaxCode/cairn/internal/pull/===
 executor.go[AW7L]: F:镜像拉取编排器(Orchestrator.RunOne+SourceResolver+15min layer timeout) | R:code:internal/registry/client.go | A:- | S:上游解析顺序 SourceURL>credential>Mutable>DefaultUpstream;platformAllow 从 Cfg 读不走缓存(v0.5.16)
-queue.go[AW6M]: F:FIFO 拉取队列(Job+JobView;State queued/running/succeeded/failed/cancelled) | R:code:internal/db/db.go | A:- | S:单并发;Cancel 协作式翻转 flag 不杀在途 PATCH;DB 句柄不在 Executor
+queue.go[AW6M]: F:FIFO 拉取队列(Job+JobView; 5 States); v0.7.37: panic recovery via &PanicError{Value, Stack}(was fmt.Errorf %v; errors.As/Is now work) | R:code:internal/db/db.go, code:internal/pull/executor.go | A:- | S:单并发; Cancel 协作式翻转 flag 不杀在途 PATCH; DB 句柄不在 Executor; PanicError.Unwrap returns inner error iff r was already error
 
 ===D:/Programms/MinimaxCode/cairn/internal/registry/===
-bearer.go[II5S]: F:V2 Bearer token 流程(401 challenge+POST realm+retry;parseChallenge) | R:code:internal/registry/client.go | A:- | S:token 缓存按 (realm, service, scope, basic-auth) 元组;第二次 401 触发 stale 失效
-blob.go[IN6M]: F:Blob 存在/拉取流式(BlobExists+GetBlob;不走 32MB 内存) | R:code:internal/registry/client.go | A:- | S:GetBlob 自行跑 http.Do 不走 doRequest (后者 drain 到内存);401->Bearer retry 自实现
-client.go[IN8L]: F:CNCF Distribution 客户端(Client+Config+NewClient+Bearer 集成) | R:code:internal/version/version.go | A:- | S:UserAgent 是 var 不是 const (Finding 1.1);manifestAccept 4 类型才能避 404
+bearer.go[II5S]: F:V2 Bearer token 流程(401 challenge + POST realm + retry; parseChallenge); v0.7.37 uses version.UserAgent(was registry.UserAgent var) | R:code:internal/registry/client.go, code:internal/version/version.go | A:- | S:token 缓存按 (realm, service, scope, basic-auth) 元组; 第二次 401 触发 stale 失效
+blob.go[IN6M]: F:Blob 存在/拉取流式(BlobExists + GetBlob; 不走 32MB 内存); v0.7.37: 3 set points use version.UserAgent(was registry.UserAgent var) | R:code:internal/registry/client.go, code:internal/version/version.go | A:- | S:GetBlob 自行跑 http.Do 不走 doRequest(后者 drain 到内存); 401→Bearer retry 自实现
+client.go[IN8L]: F:CNCF Distribution 客户端(Client+Config+NewClient+Bearer 集成); v0.7.37: UserAgent local var removed, 3 set points now use version.UserAgent | R:code:internal/version/version.go | A:- | S:UserAgent was var 而非 const(review §1.1, v0.7.37 修); manifestAccept 4 类型才能避 404(V2 spec returns 404 not 400/406)
 delete.go[IN5T]: F:DeleteManifest + tagsForDigest (返回受影响 tag 列表) | R:code:internal/registry/client.go | A:- | S:只接受 digest 形式,tag 形式返 400 DIGEST_INVALID 是预期行为
 errors.go[CG4T]: F:registry 客户端 typed Error (Status/Code/Message/URL+IsNotFound) | R:- | A:- | S:IsNotFound 识别 404 + 4 个 V2 错误码 (MANIFEST_UNKNOWN 等);Code 空时退化格式
-inventory.go[IN6M]: F:/v2/_catalog 分页 ListRepositories (seen 去重 + maxCatalogPages 5000) | R:code:internal/registry/client.go | A:- | S:tags:null 空仓保留不被剔除 (AGENTS.md 强制);v0.6.1 dedupe 防 misbehaving 服务端死循环
+inventory.go[IN6M]: F:/v2/_catalog 分页 ListRepositories(seen 去重 + maxCatalogPages 5000); v0.7.37: set point uses version.UserAgent(was registry.UserAgent var) | R:code:internal/registry/client.go, code:internal/version/version.go | A:- | S:tags:null 空仓保留不被剔除(AGENTS.md 强制); v0.6.1 dedupe 防 misbehaving 服务端死循环
 registry.go[IG7T]: F:Registry 接口 + CachedRegistry TTL 缓存 (Inventory 方法) | R:code:internal/registry/client.go | A:- | S:Inventory 用 mutex 而非 singleflight (errgroup 限并发);ttl<=0 禁用缓存
 types.go[DZ5T]: F:Manifest/Layer/Repository/TagInfo/Inventory/FailedTag 类型定义 | R:- | A:- | S:Raw 字段 json.RawMessage 存原始 json 不丢字段;Size = sum(layers) 不是磁盘
 
@@ -112,11 +112,11 @@ types.go[DZ5T]: F:Manifest/Layer/Repository/TagInfo/Inventory/FailedTag 类型�
 routes.go[AN8L]: F:/v2/* OCI Distribution 端点 (apiVersion/_catalog/repos+dispatchRepoRoute) | R:code:internal/storage/filesystem.go | A:- | S:通配 /* dispatcher 自切分 repo+action (vs chi {repo} 跨不了 /);v0.5.33 auth 时 /v2/ 必须 401
 
 ===D:/Programms/MinimaxCode/cairn/internal/server/===
-server.go[EG8M]: F:启动装配中心(Build cfg->Storage->V2->SQLite->Vault->Proxies->...) | R:code:internal/config/config.go | A:- | S:任何子组件启动失败只降级相关 endpoint 503 (不带走整个 server)
+server.go[EG8M]: F:启动装配中心(Build cfg→Storage→V2→SQLite→Vault→Proxies→...); v0.7.37: retentionLoop uses config.RetentionSweepInterval(was `24 * time.Hour`) | R:code:internal/config/config.go, code:internal/storage/filesystem.go | A:- | S:任何子组件启动失败只降级相关 endpoint 503(不带走整个 server)
 
 ===D:/Programms/MinimaxCode/cairn/internal/storage/===
 export.go[IZ5M]: F:docker save 兼容 tar 导出 (manifest.json+repositories+VERSION+blobs) | R:code:internal/storage/filesystem.go | A:- | S:多平台只导出单 platform (amd64 默认);layer blob 不重新 tar 原样写入
-filesystem.go[PG9L]: F:Filesystem backend (sync.Map per-repo 锁 + content-addressed blob) | R:code:internal/server/server.go | A:- | S:不同 digest 并行安全 (verify+rename);repo lock 是 channel 模式;discoverRepos v0.5.24 修 GC 数据丢失
+filesystem.go[PG9L]: F:Filesystem backend(sync.Map per-repo 锁 + content-addressed blob); v0.7.37: sweepUploads uses config.UploadSessionTTL(was `-24 * time.Hour`) | R:code:internal/server/server.go, code:internal/config/config.go | A:- | S:不同 digest 并行安全(verify + rename); repo lock 是 channel 模式; discoverRepos v0.5.24 修 GC 数据丢失; this file added internal/config import(v0.7.37)
 storage.go[IG7M]: F:Storage 接口 + ErrNotFound/ErrInvalidDigest/ErrPlatformMissing/ErrUnsupportedManifest | R:code:internal/storage/filesystem.go | A:- | S:ErrPlatformMissing 区分于 ErrNotFound (多平台需要选 platform);layout 与 CNCF Distribution 兼容
 
 ===D:/Programms/MinimaxCode/cairn/internal/sync/===
@@ -127,10 +127,10 @@ probe.go[IN5T]: F:同步目的地连通性探测 (5s timeout+GET /v2/+AuthStatus
 scheduler.go[AW6T]: F:cron 调度器 (30s ticker+ListDue+Engine.Start+ScheduleUpdateAfterFire) | R:code:internal/sync/store.go | A:- | S:ticker 模式不是 per-schedule goroutine (内存O(1)+state 从 DB 续);Loop 内部错误吞掉不能挂
 store.go[PG7M]: F:sync Store 包装 db.Db (UNIQUE->ErrTaskNameConflict+sql.ErrNoRows 翻译) | R:code:internal/db/sync.go | A:- | S:Store 借 db handle 不 Close;errors.Is() 友好而非 grep SQLite 错误串
 types.go[DB5M]: F:sync 域类型 (Direction/RunStatus/SyncTask/SyncRun/Schedule/RunItem+Validate) | R:- | A:- | S:RemotePassword 字段 json:\"-\" 永不出;Validate 三态凭据 merge (inline/credential/empty)
-writer.go[IN7M]: F:出站推送 (EnsureBlob+PutManifest;HEAD/POST/PATCH/PUT 上传 + Basic auth) | R:code:internal/version/version.go | A:- | S:SyncUserAgent 走版本派生 (0.6.29 起避免字面量漂);hc.Timeout 10min 防大 layer 超时
+writer.go[IN7M]: F:出站推送(EnsureBlob + PutManifest; HEAD/POST/PATCH/PUT 上传 + Basic auth); v0.7.37: 删自实现 itoa(19 行)改 strconv.Itoa(sync 包早 import strconv, review §2.2) | R:code:internal/version/version.go, code:internal/registry/client.go | A:- | S:SyncUserAgent 走版本派生(0.6.29 起避免字面量漂); hc.Timeout 10min 防大 layer 超时
 
 ===D:/Programms/MinimaxCode/cairn/internal/version/===
-version.go[FZ8T]: F:cairn Version 常量 (0.7.36)+ 3 个派生 UserAgent (cairn/cairn-sync/cairn-sync-probe) | R:- | A:- | S:5 处版本号必须同 commit 改:本文件/docker-compose.yml/.env.example/README/CHANGELOG
+version.go[FZ8T]: F:cairn Version 常量(v0.7.37) + 3 个派生 UserAgent(cairn / cairn-sync / cairn-sync-probe) | R:- | A:- | S:5 处版本号必须同 commit 改:本文件 / docker-compose.yml / .env.example / README / CHANGELOG.md; UserAgent 系列前缀保留 'cairn/' 优先于 'cairn/' 品牌一致(外部可识别性)
 
 ===D:/Programms/MinimaxCode/cairn/internal/webui/===
 assets_built.go[LZ2T]: F:webui build tag 下 go:embed all:dist + assetsFS (检 index.html) | R:code:internal/webui/webui.go | A:- | S:缺 index.html 返回空集让 Handler 走 404;all: 含下划线/点开头文件
