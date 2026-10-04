@@ -6,6 +6,22 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.49] - 2026-10-04
+
+PageLoading 蒙板显示策略调整 —— 让 `delay=200ms` / `minDuration=250ms` 的 v0.6.28「避免闪屏」默认值不再隐藏 cairn-mark 入场动画。UAT 反馈"切换页面看不到蒙板"。
+
+### 变更
+
+- **`PageLoading` delay / minDuration 调整 ([`web/src/components/page-loading.tsx`](./web/src/components/page-loading.tsx))**
+  - `delay` 200ms → **0ms**:本地 cairn 接口通常 < 200ms 回来,旧 delay 让 visible=true → visible=false 在 delay 窗口内发生,蒙板**根本不显示**;v0.7.47 引入 cairn-mark 入场动画后,这个"避免闪屏"语义把品牌动效藏起来了。改成 0ms 让蒙板立即出现,每次切页面都能看到 cairn-mark 入场
+  - `minDuration` 250ms → **700ms**:跟 cairn-mark 'build' 入场总时长对齐 —— stones 完成 ~820ms,dot 完成 ~1060ms;选 700ms 是 stones 完成 + dot 大部分进度,dot 落点收尾可以跟蒙板 fade 一起完成(用户看到"dot 落入中 + 蒙板渐隐"的连贯感)
+  - `fadeDuration` 350ms 不变 —— 蒙板消失节奏不变
+  - **代价:** 数据 < 700ms 回来时强制等满 700ms 才 fade out,本地接口感受到 ~300-500ms 切换延迟
+  - **权衡:** "看到 cairn-mark 品牌动效" > "避免闪屏";v0.7.49 是这个权衡的落地
+  - **保留回退路径:** 调用方仍可显式 `delay={200}` 退回「避免闪屏」语义
+
+---
+
 ## [0.7.48] - 2026-10-04
 
 `cairn-intro.html` 产品介绍页 hero logo 加石塔建造动画 —— 把 v0.7.47 在控制台 PageLoading 上线的能力延伸到 splash hero。无 API / 后端变更。
