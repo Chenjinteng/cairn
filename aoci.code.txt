@@ -1,0 +1,186 @@
+#AOCI-CODE-VOLUME: 1
+
+===D:/Programms/MinimaxCode/cairn/===
+.dockerignore[FV6T]: F:Excludes .git, .env*, web/node_modules, internal/webui/dist and local artifacts from the Docker build context | R:code:Dockerfile | A:docker build (Docker BuildKit) | S:Excluding .env* is mandatory — re-adding leaks plaintext secrets into the image layer; excluding internal/webui/dist is mandatory because Dockerfile copies it explicitly from the web-builder stage
+.env.example[FC6T]: F:Documents env vars consumed at runtime and build, with the v0.5.9 split between UI/SQLite business config and infrastructure env vars | R:code:docker-compose.yml,code:Dockerfile | A:shell environment, docker compose environment | S:REGISTRY_CREDENTIAL_KEY loss makes stored credentials permanently unrecoverable; HOST_PORT requires container restart (v0.5.40 boot-time-only field)
+.gitattributes[FG4T]: F:Forces `* text=auto eol=lf` so AOCI baseline.json stays byte-identical across platforms | R:code:.aoci/baseline.json | A:git checkout (filters text files through the rule) | S:Without this rule, Windows autocrlf rewrites baselines to CRLF and marks the whole tree stale on every checkout
+.gitignore[FC6T]: F:Top-level ignore list — binaries, go workspace files, vendor/, env files, registry.config.json, frontend deps, editor noise, scratch dirs | R:code:Dockerfile,code:docker-compose.yml,code:Makefile | A:git status, `aoci scan` file inventory | S:Removing any /env or /registry.config.json entry could allow secrets or local config to leak into commits
+AGENTS.md[SG7L]: F:Repo AI constraints — single-process rule, data-dir constants, version rules, 5-place sync, Go toolchain pin, V2 protocol facts, not-doing list | R:code:internal/config/config.go,code:internal/version/version.go,code:docker-compose.yml | A:AI assistant reading this file before any code change | S:Container paths (/app/data, /app/data/registry) are compile-time constants — only host bind-mount moves them. v0.5.9: REGISTRY_* env vars no longer read. Mid-version bumps must be human-specified.
+CHANGELOG.md[SO5L]: F:User-facing changelog in Keep a Changelog format, newest release on top, each entry describing what changed, why and observable behaviour | R:code:internal/version/version.go,code:AGENTS.md | A:human reader (changelog consumer) | S:Each release entry must be written as 'what changed / why / observable behaviour', not 'fix bug' — see AGENTS.md §version rules
+CODE_OF_CONDUCT.md[SG2T]: F:Standard Contributor Covenant 2.1 community Code of Conduct | R:code:CONTRIBUTING.md | A:human reader (contributor) | S:-
+CONTRIBUTING.md[SQ6S]: F:Contribution guide — `make gates` pre-PR gate, Conventional Commits with version impact mapping, 5-place version-sync checklist, scope and PR/issue workflow | R:code:AGENTS.md,code:Makefile,code:.github/pull_request_template.md,code:.github/ISSUE_TEMPLATE/bug_report.md,code:.github/ISSUE_TEMPLATE/feature_request.md | A:human reader (prospective contributor) | S:Conventional Commits prefix-to-version mapping is operational — `feat:` mid-version +1, `fix:`/`refactor:`/`perf:` minor +1; mixed-round takes higher bucket
+Dockerfile[FV8S]: F:Three-stage build — web-builder (pnpm install + build), builder (`CGO_ENABLED=0 go build -tags webui`), scratch runtime — with BuildKit cache mounts | R:code:Makefile,code:docker-compose.yml,code:web/package.json,code:go.mod,code:cmd/server/main.go | A:docker build (Docker BuildKit) | S:GO_IMAGE ARG must stay in sync with the `go X.Y.0` directive in go.mod per AGENTS.md §Go toolchain — mismatch breaks Go stdlib API availability. The web-builder stage must export COREPACK_NPM_REGISTRY in ENV (not just the first RUN) so the second RUN also uses the configured registry (v0.7.29 fix)
+LICENSE[SO2S]: F:Apache License 2.0 full text | R:- | A:human reader (license compliance) | S:-
+Makefile[XV8M]: F:Pipeline Makefile — clone/build/deploy/health/config/gates/tests/data-mgmt — GOPROXY defaulting to goproxy.io for restricted networks | R:code:Dockerfile,code:docker-compose.yml,code:AGENTS.md,code:.env.example,code:.github/workflows/ci.yml | A:make (developer / CI local) | S:IMAGE default in Makefile and `image:` default in docker-compose.yml must match — `make rebuild` produces the tag referenced by compose; divergence makes compose up pull the old image. RUNNER_BASE=http://proxy.example.com:8080 is hard-coded and points to internal infra only
+NOTICE[SO3T]: F:Third-party attribution listing Go stdlib, chi, golang.org/x/sync and modernc.org/sqlite as direct deps, plus UI-convention disclaimer | R:code:go.mod | A:human reader (license compliance) | S:-
+README.md[SU7M]: F:Top-level README — product pitch, 4 hard constraints (single-binary, library backend, observability), capability matrix, architecture, quick start | R:code:docker-compose.yml,code:Dockerfile,code:.env.example,code:AGENTS.md,code:docs/ROADMAP.md | A:human reader (operator / evaluator) | S:Container-internal port (8787) is a compile-time constant per AGENTS.md §data-dir; only HOST_PORT is host-side configurable
+docker-compose.yml[FV7T]: F:Compose service — Dockerfile build args, port mapping `${HOST_PORT:-8787}:8787`, runtime env (REGISTRY_CREDENTIAL_KEY/CAIRN_ENV/HOST_PORT), bind mount for data | R:code:Dockerfile,code:.env.example,code:Makefile | A:docker compose (operator) | S:Single host bind mount (not named volume) — backup = `tar` the host directory. `${HOST_DATA_DIR:-/data/cairn}` is the only operator-movable path; `/app/data` is compile-time
+go.mod[FV8T]: F:cairn Go module清单(go 1.26+chi+sqlite+kin-openapi) | R:code:go.sum | A:- | S:third-party只3直接依赖,严格遵守单进程单二进制
+go.sum[FV6T]: F:第三方依赖checksum文件(纯校验,不进二进制) | R:code:go.mod | A:- | S:-
+
+===D:/Programms/MinimaxCode/cairn/.github/ISSUE_TEMPLATE/===
+bug_report.md[SQ4T]: F:GitHub bug report template requiring repro steps, env info, logs and /api/config snapshot | R:code:CONTRIBUTING.md | A:GitHub new-issue form | S:-
+feature_request.md[SQ4T]: F:GitHub feature request template with self-checks against ROADMAP 'deliberately not doing' list and AGENTS.md hard constraints | R:code:docs/ROADMAP.md,code:AGENTS.md | A:GitHub new-issue form | S:-
+
+===D:/Programms/MinimaxCode/cairn/.github/===
+pull_request_template.md[SQ5T]: F:GitHub PR template requiring `make gates` pass, 5-place version sync, and behaviour/deploy/API breaking-change self-declaration | R:code:CONTRIBUTING.md,code:AGENTS.md | A:GitHub PR description | S:-
+
+===D:/Programms/MinimaxCode/cairn/.github/workflows/===
+ci.yml[XV6T]: F:GitHub Actions workflow mirroring `make gates` (tsc + go build + go build -tags webui + go test -race) with BuildKit-aware Go proxy pinning to goproxy.io | R:code:Makefile,code:Dockerfile,code:web/package.json | A:GitHub Actions runner | S:GOPROXY is hard-pinned to https://goproxy.io,direct because proxy.golang.org times out in restricted networks; Go-version is read from go.mod via setup-go v5
+
+===D:/Programms/MinimaxCode/cairn/cmd/server/===
+main.go[EG8T]: F:Process entry — `-healthz` probe mode (avoids legacy second-server bind collision), slog JSON logger, config.Load, server.Build, SIGTERM/SIGINT drain | R:code:internal/config/config.go,code:internal/server/server.go,code:internal/version/version.go | A:OS process, Docker HEALTHCHECK | S:`-healthz` mode was introduced because the old HEALTHCHECK used a second server on :8787 and always exited 1, marking the container permanently unhealthy — probe mode dials the running instance's /healthz instead
+
+===D:/Programms/MinimaxCode/cairn/cmd/verify-export/===
+main.go[EQ7S]: F:CI tool mirroring `docker load` checks (VERSION=1.0, manifest refs, repositories→config sha256, diff_ids→layer sha256) without docker daemon | R:code:go.mod | A:CI invocation (after pulling an exported tar) | S:Layer tar byte-streams are not extracted or verified here — storage's TestExportTarSingleArch covers that path. This tool only validates docker-load-compatible shape
+
+===D:/Programms/MinimaxCode/cairn/docs/===
+ROADMAP.md[SP5S]: F:Roadmap listing milestone slots, current 0.6.0 regsync built-in, 0.5.19 engineering-completion status, and a deliberate-not-doing list | R:code:AGENTS.md,code:CHANGELOG.md,code:internal/version/version.go | A:human reader (planning / contribution) | S:Roadmap records only mid-version slots; minor hotfixes go to CHANGELOG.md. 0.6.0 was reassigned from TLS (deferred per AGENTS.md) to regsync
+logo.svg[SZ2T]: F:Cairn品牌favicon SVG(64×64,三塔teal+琥珀点) | R:code:docs/design/index.html | A:- | S:仅作brand资产文档,非运行时web资源
+modules.md[SG7S]: F:cairn 15 internal包分层架构图与依赖矩阵(L0~L4+cmd入口) | R:code:docs/review/v0.7.36-cross-module.md | A:- | S:v0.7.36配套文档,以HEAD 2458e8d为准;inb=5的storage/db/config是中心
+resilience.md[SR5S]: F:0.5.18韧性轮计划(B组并发/F组前端假死/L组遗留)+验收标准 | R:code:docs/sync-known-issues.md | A:- | S:该轮未单独发版,B/F/L已并入0.5.46-0.5.50
+sync-known-issues.md[SR5M]: F:镜像同步0.6.x UAT已知问题SYNC-1到SYNC-4+0.6.8修复要点 | R:code:internal/api/sync_handlers.go | A:- | S:SYNC-1/2是同一链路,前端10s abort砍在途仓库;0.6.8改异步模型修
+
+===D:/Programms/MinimaxCode/cairn/docs/design/===
+cairn-brand.html[SL4L]: F:Static brand-identity page defining color tokens (--primary teal), typography (DM Serif / Outfit / JetBrains Mono), grid and logo conventions for Cairn | R:code:docs/design/cairn-ui-design.html,code:web/src/theme.css | A:human reader (design review) | S:-
+cairn-ui-design.html[SU5L]: F:Static UI design spec page mirroring web/src/theme.css and web/src/main.tsx tokens, with light/dark palette and component-level visual rules | R:code:docs/design/cairn-brand.html,code:web/src/theme.css,code:web/src/main.tsx | A:human reader (UI design / implementation reference) | S:--primary #0d9488 (light) / --primary #2dd4bf (dark) tokens here are the source of truth for theme; mismatches with web/src/theme.css are bugs
+demo-A-credentials.html[SU4M]: F:Static UI mockup of the credentials management page (theme A: teal) | R:code:docs/design/cairn-ui-design.html,code:web/src/pages/credentials-page.tsx | A:human reader (design review) | S:-
+demo-A-images.html[SU5M]: F:Static UI mockup of the images list page using the current teal color palette (palette A) | R:code:docs/design/cairn-ui-design.html,code:web/src/pages/images-page.tsx | A:human reader (design review) | S:-
+demo-A-overview.html[SU4S]: F:Static overview page mockup showing all 6 cairn admin pages at thumbnail scale in the current teal palette | R:code:docs/design/cairn-ui-design.html | A:human reader (design review) | S:-
+demo-A-proxies.html[SU4T]: F:Static UI mockup of the proxy management page (theme A: teal) | R:code:docs/design/cairn-ui-design.html,code:web/src/pages/proxies-page.tsx | A:human reader (design review) | S:-
+demo-A-pull.html[SU4M]: F:Static UI mockup of the image pull page (theme A: teal) | R:code:docs/design/cairn-ui-design.html,code:web/src/pages/pull-page.tsx | A:human reader (design review) | S:-
+demo-A-settings.html[SU3T]: F:teal主题设置页HTML mockup(表单/toggle/UA列表/主题切换) | R:code:docs/design/index.html | A:- | S:仅设计评审用,非运行时资源
+demo-A-stats.html[SU3M]: F:teal主题镜像热度页 mockup(4列KPI+24h heatmap+sparkline) | R:code:docs/design/index.html | A:- | S:静态演示,4级热力同色渐变
+index.html[SU3M]: F:Cairn设计资产总览页(品牌字+卡片网格,串到3个mockup) | R:code:docs/logo.svg | A:- | S:仅docs/design子目录导航用
+
+===D:/Programms/MinimaxCode/cairn/docs/issues/===
+README.md[SG5T]: F:0.6.11缺陷总览(MA/REG/TH三区+修复版本+复现curl) | R:code:docs/issues/management-api.md,code:docs/issues/registry-protocol.md | A:- | S:21条编号分三段,0.6.12-0.6.15已闭环11条
+management-api.md[SG6M]: F:/api/* 5条MA缺陷详解(MA-1/3/4/5/6)+源码file:line+修复版本 | R:code:internal/api/dispatch.go | A:- | S:MA-1根源是chiURLParam不解码%2F,与/v2/*协议侧做法不一致
+registry-protocol.md[SG6S]: F:/v2/* 协议6条缺陷详解(REG-1到REG-6)+修复版本 | R:code:internal/api/api.go | A:- | S:全部6条已在0.6.12-0.6.13修完;REG-1/4偏离协议是真bug
+test-harness.md[SG5M]: F:测试脚手架10条缺陷详解(TH-1到TH-10)+Makefile与runner口径 | R:code:Makefile | A:- | S:runner资产不在cairn仓(53容器),本仓只挂Makefile目标
+ui-0.6.14.md[SG5M]: F:0.6.14 UAT UI-1到UI-6b缺陷登记+0.6.15-0.6.31拍板记录 | R:code:web/src/pages/settings-page.tsx | A:- | S:UI-6b镜像tar导出暂缓,UI-4同步明细独立立项
+
+===D:/Programms/MinimaxCode/cairn/docs/review/===
+_evidence-v0.7.36.md[SG7L]: F:v0.7.36架构review原始证据(44文件/18,366行/inbound矩阵) | R:code:docs/review/v0.7.36-cross-module.md | A:- | S:配套证据只读不修改;以HEAD 2458e8d为准
+v0.7.36-cross-module.md[SG7M]: F:v0.7.36跨模块review 6项finding(架构3+代码2+命名1) | R:code:docs/review/_evidence-v0.7.36.md | A:- | S:Finding 1.3提示internal/api 71端点是future refactor最大杠杆点
+
+===D:/Programms/MinimaxCode/cairn/internal/api/===
+api.go[AG9M]: F:/api/* chi路由装配入口+healthz/readyz+slog请求日志+dev CORS | R:code:internal/api/dispatch.go | A:- | S:slog按5xx/4xx/2xx-write/2xx-read分级,2xx-read默认Debug不刷屏
+dispatch.go[AN7S]: F:/api/repositories/* 通配dispatcher(MA-1修复+v0.7.1 %2F解码) | R:code:internal/api/api.go | A:- | S:v0.7.1 url.PathUnescape才能让%2F仓库名走对磁盘路径
+errors.go[CG4S]: F:/api/*统一错误体+writeJSON信封({success,code,message,data}) | R:- | A:- | S:errors.As透传*registry.Error的Code/URL;5xx走Error其余Debug
+handlers.go[AG8L]: F:Handlers结构+GetConfig/UpdateConfig/Probe+URL/host推断 | R:code:internal/config/config.go | A:- | S:UpdateConfig对4类字段验证(url/int/bool/stringcsv/hostcsv);空值清覆盖
+handlers_extra.go[AG9L]: F:ExtraHandlers+48 endpoints+Mutable写路径+同步接入点 | R:code:internal/api/sync_handlers.go | A:- | S:2038行全仓最大单文件,Finding 1.3提示按bounded context拆
+inventory_cache.go[CP6S]: F:/api/inventory 30s TTL进程内缓存(Get/Set/Invalidate/GetOrBuild) | R:code:internal/api/api.go | A:- | S:cache nil-safe;process-local,跨进程没有invalidation
+knownhosts.go[DC5T]: F:pull.known_hosts CSV规范化(normalizeHostCSV+port启发式https/http) | R:code:internal/config/config.go | A:- | S:上限64条;443/8443/5000端口视为https
+sync_handlers.go[AI8L]: F:/api/sync/* 15 endpoints装配+tasks/runs/schedules增删改查 | R:code:internal/db/sync.go | A:- | S:ListRuns缺GetTask前置守卫(vs ListSchedules有);vault nil时503
+
+===D:/Programms/MinimaxCode/cairn/internal/config/===
+config.go[FC7L]: F:cairn Config结构+Mutable(13 keys)+4 env兜底(PORT/HOST_PORT/KEY/CAIRN_ENV) | R:code:internal/db/db.go | A:- | S:业务配置v0.5.9起全走SQLite,设REGISTRY_* env等于无效
+
+===D:/Programms/MinimaxCode/cairn/internal/credentials/===
+credentials.go[PS7M]: F:AES-256-GCM加密整文件凭据库(Vault:List/Get/Put/Delete+writeMu写者串行) | R:code:internal/api/handlers_extra.go | A:- | S:锁顺序v.writeMu->v.mu,writeMu跨mutate+persist持锁防last-writer-wins
+
+===D:/Programms/MinimaxCode/cairn/internal/db/===
+db.go[PG9L]: F:SQLite连接+SCHEMA_VERSION=14 append-only迁移+WAL/busy_timeout 5s | R:code:internal/db/sync.go | A:- | S:migrations字典必须append-only,SCHEMA_VERSION与新迁移必须同commit
+sync.go[PG7L]: F:sync_tasks/sync_runs/sync_run_items/sync_schedules CRUD+三状态凭据merge | R:code:internal/api/sync_handlers.go | A:- | S:RemoteCredentialID引用credentials库(v0.6.8 SYNC-3 schema v7);current_repo/current_tag是进度指针不是失败清单
+
+===D:/Programms/MinimaxCode/cairn/internal/docs/===
+docs.go[SG5S]: F:/api/docs* 嵌入式Swagger UI+openapi.yaml mount(3 routes: index/spec/dist) | R:code:internal/docs/openapi.yaml | A:- | S:dist/ 路径穿越防护 (path.Clean + 拒绝 ..);embed FS Go 1.16+ 原生
+openapi.yaml[SG6L]: F:Cairn OpenAPI 3.0.3 规范(11 tag: health/config/inventory/repos/...) | R:code:internal/docs/docs.go | A:- | S:由 docs.go 通过 embed.FS 提供;hand-rolled 0.7.19 起不再依赖 swag CLI
+
+===D:/Programms/MinimaxCode/cairn/internal/events/===
+events.go[MM7L]: F:Distribution webhook 接收+heat 聚合(ShouldCount 三层:mediaType/HEAD-PUT/UA) | R:code:internal/db/db.go | A:- | S:只数 HEAD/PUT (GET 不算 pull);self UA 进 totals.self 不进最近事件环
+
+===D:/Programms/MinimaxCode/cairn/internal/proxies/===
+proxies.go[PN6M]: F:出口代理明文JSON存储(List/Get/Put/Delete+Store.Probe写LastProbeStatus) | R:code:internal/api/handlers_extra.go | A:- | S:proxy URL 非密钥级,plain JSON 不上 AES-GCM;List 返回 shallow copies
+
+===D:/Programms/MinimaxCode/cairn/internal/pull/===
+executor.go[AW7L]: F:镜像拉取编排器(Orchestrator.RunOne+SourceResolver+15min layer timeout) | R:code:internal/registry/client.go | A:- | S:上游解析顺序 SourceURL>credential>Mutable>DefaultUpstream;platformAllow 从 Cfg 读不走缓存(v0.5.16)
+queue.go[AW6M]: F:FIFO 拉取队列(Job+JobView;State queued/running/succeeded/failed/cancelled) | R:code:internal/db/db.go | A:- | S:单并发;Cancel 协作式翻转 flag 不杀在途 PATCH;DB 句柄不在 Executor
+
+===D:/Programms/MinimaxCode/cairn/internal/registry/===
+bearer.go[II5S]: F:V2 Bearer token 流程(401 challenge+POST realm+retry;parseChallenge) | R:code:internal/registry/client.go | A:- | S:token 缓存按 (realm, service, scope, basic-auth) 元组;第二次 401 触发 stale 失效
+blob.go[IN6M]: F:Blob 存在/拉取流式(BlobExists+GetBlob;不走 32MB 内存) | R:code:internal/registry/client.go | A:- | S:GetBlob 自行跑 http.Do 不走 doRequest (后者 drain 到内存);401->Bearer retry 自实现
+client.go[IN8L]: F:CNCF Distribution 客户端(Client+Config+NewClient+Bearer 集成) | R:code:internal/version/version.go | A:- | S:UserAgent 是 var 不是 const (Finding 1.1);manifestAccept 4 类型才能避 404
+delete.go[IN5T]: F:DeleteManifest + tagsForDigest (返回受影响 tag 列表) | R:code:internal/registry/client.go | A:- | S:只接受 digest 形式,tag 形式返 400 DIGEST_INVALID 是预期行为
+errors.go[CG4T]: F:registry 客户端 typed Error (Status/Code/Message/URL+IsNotFound) | R:- | A:- | S:IsNotFound 识别 404 + 4 个 V2 错误码 (MANIFEST_UNKNOWN 等);Code 空时退化格式
+inventory.go[IN6M]: F:/v2/_catalog 分页 ListRepositories (seen 去重 + maxCatalogPages 5000) | R:code:internal/registry/client.go | A:- | S:tags:null 空仓保留不被剔除 (AGENTS.md 强制);v0.6.1 dedupe 防 misbehaving 服务端死循环
+registry.go[IG7T]: F:Registry 接口 + CachedRegistry TTL 缓存 (Inventory 方法) | R:code:internal/registry/client.go | A:- | S:Inventory 用 mutex 而非 singleflight (errgroup 限并发);ttl<=0 禁用缓存
+types.go[DZ5T]: F:Manifest/Layer/Repository/TagInfo/Inventory/FailedTag 类型定义 | R:- | A:- | S:Raw 字段 json.RawMessage 存原始 json 不丢字段;Size = sum(layers) 不是磁盘
+
+===D:/Programms/MinimaxCode/cairn/internal/registryd/===
+routes.go[AN8L]: F:/v2/* OCI Distribution 端点 (apiVersion/_catalog/repos+dispatchRepoRoute) | R:code:internal/storage/filesystem.go | A:- | S:通配 /* dispatcher 自切分 repo+action (vs chi {repo} 跨不了 /);v0.5.33 auth 时 /v2/ 必须 401
+
+===D:/Programms/MinimaxCode/cairn/internal/server/===
+server.go[EG8M]: F:启动装配中心(Build cfg->Storage->V2->SQLite->Vault->Proxies->...) | R:code:internal/config/config.go | A:- | S:任何子组件启动失败只降级相关 endpoint 503 (不带走整个 server)
+
+===D:/Programms/MinimaxCode/cairn/internal/storage/===
+export.go[IZ5M]: F:docker save 兼容 tar 导出 (manifest.json+repositories+VERSION+blobs) | R:code:internal/storage/filesystem.go | A:- | S:多平台只导出单 platform (amd64 默认);layer blob 不重新 tar 原样写入
+filesystem.go[PG9L]: F:Filesystem backend (sync.Map per-repo 锁 + content-addressed blob) | R:code:internal/server/server.go | A:- | S:不同 digest 并行安全 (verify+rename);repo lock 是 channel 模式;discoverRepos v0.5.24 修 GC 数据丢失
+storage.go[IG7M]: F:Storage 接口 + ErrNotFound/ErrInvalidDigest/ErrPlatformMissing/ErrUnsupportedManifest | R:code:internal/storage/filesystem.go | A:- | S:ErrPlatformMissing 区分于 ErrNotFound (多平台需要选 platform);layout 与 CNCF Distribution 兼容
+
+===D:/Programms/MinimaxCode/cairn/internal/sync/===
+cron.go[KW5S]: F:5字段 cron 表达式解析 (ParseCron+cronField+domStar/dowStar) | R:- | A:- | S:dom/dow 都 = * 才全走 OR,任一具体就 Vixie cron AND 语义;不支持月份/周名
+engine.go[AW8L]: F:Sync Engine (Start 立即返回+TryLock 拒同 task 重入+detached ctx) | R:code:internal/credentials/credentials.go | A:- | S:Start 后用 WithoutCancel 摘除 HTTP ctx;同 task 二次 Start TryLock 失败返 409;v0.7.23 加 cancel
+filter.go[KB5T]: F:include 过滤器 (NewFilter+Match+Apply;filepath.Match 不跨 /) | R:- | A:- | S:坏 pattern 静默跳过不挂 run;空 pattern 视作 match-all;* 不跨 segment
+probe.go[IN5T]: F:同步目的地连通性探测 (5s timeout+GET /v2/+AuthStatus 6 类) | R:code:internal/version/version.go | A:- | S:ProbeUserAgent 走独立 UA (cairn-sync-probe/);AuthStatus 6 类映射前端色标
+scheduler.go[AW6T]: F:cron 调度器 (30s ticker+ListDue+Engine.Start+ScheduleUpdateAfterFire) | R:code:internal/sync/store.go | A:- | S:ticker 模式不是 per-schedule goroutine (内存O(1)+state 从 DB 续);Loop 内部错误吞掉不能挂
+store.go[PG7M]: F:sync Store 包装 db.Db (UNIQUE->ErrTaskNameConflict+sql.ErrNoRows 翻译) | R:code:internal/db/sync.go | A:- | S:Store 借 db handle 不 Close;errors.Is() 友好而非 grep SQLite 错误串
+types.go[DB5M]: F:sync 域类型 (Direction/RunStatus/SyncTask/SyncRun/Schedule/RunItem+Validate) | R:- | A:- | S:RemotePassword 字段 json:\"-\" 永不出;Validate 三态凭据 merge (inline/credential/empty)
+writer.go[IN7M]: F:出站推送 (EnsureBlob+PutManifest;HEAD/POST/PATCH/PUT 上传 + Basic auth) | R:code:internal/version/version.go | A:- | S:SyncUserAgent 走版本派生 (0.6.29 起避免字面量漂);hc.Timeout 10min 防大 layer 超时
+
+===D:/Programms/MinimaxCode/cairn/internal/version/===
+version.go[FZ8T]: F:cairn Version 常量 (0.7.36)+ 3 个派生 UserAgent (cairn/cairn-sync/cairn-sync-probe) | R:- | A:- | S:5 处版本号必须同 commit 改:本文件/docker-compose.yml/.env.example/README/CHANGELOG
+
+===D:/Programms/MinimaxCode/cairn/internal/webui/===
+assets_built.go[LZ2T]: F:webui build tag 下 go:embed all:dist + assetsFS (检 index.html) | R:code:internal/webui/webui.go | A:- | S:缺 index.html 返回空集让 Handler 走 404;all: 含下划线/点开头文件
+assets_stub.go[LZ2T]: F:非 webui tag 下 stub (assetsFS 返 nil 让 Handler 走 404) | R:code:internal/webui/webui.go | A:- | S:无 build tag 仍能编译,只是 0 资产;go:build !webui 选择
+webui.go[LZ5T]: F:嵌入式 React SPA mount (Handler+Assets+Enabled+SPA fallback) | R:code:internal/api/api.go | A:- | S:SPA fallback 非文件路径返 index.html 让 react-router 接;无资产 Handler 返 404+重建提示
+
+===D:/Programms/MinimaxCode/cairn/web/===
+.gitignore[FV3T]: F:web 目录 .gitignore (node_modules/dist/.vite/日志/.env 变体) | R:code:web/package.json | A:- | S:-
+README.md[SG5T]: F:web 目录 README (copy 自 registry-manager 与 cairn 差异表) | R:code:web/package.json | A:- | S:三处代码层差异: vite.config 去 root / package.json 重命名 / 其它原样 copy
+index.html[CU5T]: F:Vite 入口 HTML shell (三字体声明+主题预设置+root mount) | R:code:web/src/main.tsx | A:- | S:主题脚本同步执行于 React 前避免首屏闪;v0.5.38 去外链字体避免受限网络超时
+package.json[FV5T]: F:cairn-web package.json (pnpm 12.5.1 + node 22+ + vite 6 + react 18) | R:code:web/pnpm-lock.yaml | A:- | S:4 dev script (dev/build/preview/type-check);dependency 锁版本用 ^
+pnpm-lock.yaml[FV6L]: F:pnpm 9.0 lockfile (pnpm 12.5.1+vite/react/antd 全量 sha512) | R:code:web/package.json | A:- | S:integrity sha512 校验;packageManager 与 .npmrc 同步
+pnpm-workspace.yaml[FV3T]: F:pnpm workspace 配置 (只允许 builds.esbuild) | R:code:web/package.json | A:- | S:单 package 仓库仅一个 workspace 节点
+tsconfig.json[FV4T]: F:TS 配置 (strict mode + Vite 客户端 target + paths alias) | R:code:web/package.json | A:- | S:strict 模式开启禁用隐式 any;paths 与 vite.config 同步
+vite.config.ts[FV4T]: F:Vite 配置 (dev server + /api proxy + build outDir) | R:code:web/package.json | A:- | S:容器外 dev 默认 :5273 + /api proxy 到 cairn :8787;build outDir 写死 ../internal/webui/dist
+
+===D:/Programms/MinimaxCode/cairn/web/public/===
+cairn-intro.html[SU5L]: F:Cairn 产品介绍静态页 (能力地图+架构+控制台清单) | R:code:web/public/favicon.svg | A:- | S:走系统字体栈不再引 Google Fonts;v0.7.1 修 %2F 仓库名 download 0 字节 bug
+favicon.svg[SZ2T]: F:Cairn 品牌 favicon (三塔 teal + 琥珀点 64x64) | R:code:web/src/components/cairn-mark.tsx | A:- | S:单 SVG 跨所有 DPI 主题 (浏览器自动重采样);brand 资产硬编码不变主题
+
+===D:/Programms/MinimaxCode/cairn/web/src/===
+App.tsx[AU7L]: F:App 根 (路由+App层缓存+主题+侧栏分发+后台预取 sync/stats) | R:code:web/src/api.ts | A:- | S:sync/stats 预取 6 路填 App 缓存;StrictMode 双跑也只一次;切页 PageFilter 不重置
+api.ts[IN8L]: F:API 客户端 (40+ typed 函数 + request 信封 + TIMEOUT/NETWORK_ERROR 区分) | R:code:internal/api/errors.go | A:- | S:失败不抛异常返结构体;10s/120s 双档预算;204 空 body 成功通道
+app.css[FU5L]: F:全站 CSS 样式 (709 行: 浅/深主题变量+响应式+面板) | R:code:web/src/theme.css | A:- | S:浅/深主题走 [data-theme] 属性选择器;CSS 变量统一 --color-* 命名
+config-store.ts[CC5S]: F:/api/config 单一入口 store (缓存+单飞+失败不自动重试) | R:code:web/src/api.ts | A:- | S:useSyncExternalStore 需稳定引用所以共享单 state 对象;失败不清空已有 config
+heatmap.ts[KA5M]: F:贡献日历纯几何与分档逻辑 (pickCellSize+buildHeatmap) | R:code:web/src/components/contribution-heatmap.tsx | A:- | S:单独 .ts 而非写在组件是为能在 Node 里断言 (渲染不可断言);UTC 日期
+main.tsx[EU5S]: F:React 入口 (ConfigProvider+LIGHT/DARK_TOKENS+antd locale zh_CN) | R:code:web/src/App.tsx | A:- | S:主题初值读 index.html 已设属性避免双真相来源;deep/dark 同步 token 防止撞色
+theme.css[FU5M]: F:主题变量 CSS (浅/深主题 + antd token 同步) | R:code:web/src/app.css | A:- | S:data-theme 属性选择器切换;CSS 变量 --color-* --font-* 与 app.css 同源
+types.ts[DZ8L]: F:前端类型定义 (Inventory/AppConfig/Credential/Proxy/SyncTask/...) | R:code:internal/credentials/credentials.go | A:- | S:与 internal/api/handlers.go 的 AppConfig 字段锁同步;SyncTask.Password 字段 json:\"-\" 永不显示
+utils.ts[CU6L]: F:前端工具函数 (formatDateTime+formatBytes+humanize 等) | R:code:web/src/lib/parse-tags-filter.ts | A:- | S:时间格式化走 UTC ISO 切片防时区跳变;dustin/go-humanize 用于字节数 humanize
+
+===D:/Programms/MinimaxCode/cairn/web/src/components/===
+cairn-mark.tsx[CU4T]: F:Cairn 品牌标识 SVG 组件 (3 塔 teal+琥珀点 16/24/32/64/128 五档) | R:code:web/public/favicon.svg | A:- | S:brand 资产硬编码不变主题;light/dark 双变体色彩区分
+contribution-heatmap.tsx[CA5S]: F:GitHub 风格贡献热力图组件 (按天事件强度 0-4 分档) | R:code:web/src/heatmap.ts | A:- | S:无事件的日期也画格子 (灰色信息);格宽按容器实际宽度反算
+error-boundary.tsx[CR4T]: F:全站兜底错误边界 (Result+刷新按钮+console.error 堆栈) | R:- | A:- | S:render 抛异常接住显示错误+刷新;与 LoadError 互补
+ignore-rule-modal.tsx[CC5S]: F:UA 忽略规则编辑模态 (用户配置 stats.ignore_useragents) | R:code:internal/events/events.go | A:- | S:与 events.Handler.SetBaseIgnoreUAs 写入 SQLite settings;空 pattern 不静默 match-all
+image-detail-drawer.tsx[CB6L]: F:镜像 tag 详情抽屉 (manifest/layers/platform/size) | R:code:web/src/api.ts | A:- | S:多平台 dropdown (linux/amd64/arm64 等);tar 下载文件名带架构避免撞名
+load-error.tsx[CR4T]: F:首屏加载失败统一呈现 (Result+重试按钮;不自动重试) | R:code:web/src/api.ts | A:- | S:状态码 0/undefined 时不拼 HTTP;非幂等接口不让静默重试
+metric-card.tsx[CA4T]: F:统计 KPI 卡片 (数字+标签+趋势;无依赖图表库) | R:- | A:- | S:36 行极简组件;纯 CSS 卡片;不引 echarts/recharts
+page-loading.tsx[CR5M]: F:全站统一加载占位 (spinner+淡入淡出+delay 200ms) | R:- | A:- | S:v0.6.28 delay 200ms 防止快接口 (<200ms) 闪蒙板;绝对定位覆盖内容
+page-sidebar.tsx[CU5S]: F:页内 sub-nav 侧栏 (220px, 受控+分组上浮+scroll-spy) | R:code:web/src/App.tsx | A:- | S:侧栏只放视图状态不放副作用操作;同状态只出现一次
+
+===D:/Programms/MinimaxCode/cairn/web/src/lib/===
+parse-tags-filter.ts[DB5S]: F:Tags 过滤 textarea 实时解析预览 (镜像 Go 端 sync filter 语义) | R:code:internal/sync/filter.go | A:- | S:5 类 skipped 原因 (comment/blank/no_tag/empty_repo/empty_tag);切第一个冒号
+
+===D:/Programms/MinimaxCode/cairn/web/src/pages/===
+credentials-page.tsx[CI6L]: F:凭据管理页 (Vault 列表/CRUD/测试连接) | R:code:internal/credentials/credentials.go | A:- | S:Password 字段 json:\"-\" 永不显示;空密码 update 保留现有值 (与 UpdateProxy 语义不同)
+images-page.tsx[CB7L]: F:镜像浏览主页 (列表+搜索+多选+drawer 详情) | R:code:web/src/components/image-detail-drawer.tsx | A:- | S:inventory+tags 查询走 /api/inventory 缓存;空态明确写不是没数据是没读到
+proxies-page.tsx[CU7L]: F:代理管理页 (列表/CRUD/探测所有) | R:code:web/src/api.ts | A:- | S:探测 5s timeout 复用 sync.ProbeConnection;LastProbeStatus 实时刷新
+pull-page.tsx[CU8L]: F:拉取作业页 (提交+队列+历史+取消+实时进度) | R:code:web/src/api.ts | A:- | S:历史按保留期清理 (pull.history.retention.days 默认 90);in-flight 走轮询不阻塞
+settings-page.tsx[CC7L]: F:设置页 (Mutable 字段 CRUD + 测试连接 + 监听端口只读) | R:code:web/src/api.ts | A:- | S:MutableKeysSet 白名单校验 url/int/bool/stringcsv/hostcsv;空值清覆盖
+stats-page.tsx[CA7L]: F:统计页 (KPI/热力图/top榜单/客户端) | R:code:web/src/components/contribution-heatmap.tsx | A:- | S:5 路并发 fetch (summary/top/series/events/clients);Top 榜单限 Top 10 (v0.6.15 收口)
+sync-page.tsx[CW8L]: F:同步任务页 (任务列表+CRUD+运行+历史明细) | R:code:web/src/lib/parse-tags-filter.ts | A:- | S:run 返 202 立即返回+轮询 runs 状态;cron 用 FixedZone (Asia/Shanghai 8h) 防 tzdata 缺失
