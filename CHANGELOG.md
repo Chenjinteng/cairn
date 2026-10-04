@@ -6,6 +6,23 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.43] - 2026-10-04
+
+补全 UI 字体的 CJK fallback,Linux 容器内 + 跨平台浏览器的中文现在能渲染到 Noto Sans SC / PingFang SC / Microsoft YaHei 等设计的字体,而不是默认 sans-serif。无 API / 后端变更。
+
+### 变更
+
+- **UI 字体 token — CJK fallback 补全 ([`web/src/theme.css`](./web/src/theme.css))**
+  - **问题:** 旧的 `--font-sans` fallback 链只覆盖 macOS / Windows(`PingFang SC` / `Hiragino Sans GB` / `Microsoft YaHei`);Linux 容器内 + 跨平台浏览器的中文走默认 sans-serif,大多数 Linux 默认不是 Noto,会落到 DejaVu Sans / WenQuanYi —— 跟英文 Outfit 比观感差很多。`--font-display` (DM Serif Display,hero 大字)则完全没有 CJK fallback,中文 hero 走系统 serif fallback (Times / SimSun),跟英文观感不一致。
+  - **修法:**
+    - `--font-sans` 在西文 fallback 之后、`PingFang SC` 之前,插入跨平台开源 CJK 链:`'Noto Sans SC', 'Noto Sans CJK SC', 'Source Han Sans SC', 'Source Han Sans CN'`。Noto 是多数发行版预装的,`fonts-noto-cjk` 一行就能装;Source Han Sans 是 Adobe 官方名。
+    - `--font-display` 在 serif fallback 之后插入 CJK serif 链:`'Noto Serif CJK SC', 'Source Han Serif SC', 'Songti SC', 'STSong', 'SimSun', 'NSimSun'`。
+    - `--font-mono` **不动**:cairn 里 mono 主要展示 digest (hex/base64),CJK 字符极少见。
+  - **不引 Noto CDN:** cairn 是离线友好的(内网/无外网环境),多引一条 CDN 会再卡 30s+ 首屏。系统装了 Noto 就用,没装 fallback 到本地其他字体。
+  - **影响面:** 仅 CSS,不动后端 / API;前端 build artifact (`internal/webui/dist/`) CSS +0.24 KB。
+
+---
+
 ## [0.7.42] - 2026-10-04
 
 镜像同步页加 4 张总览卡片,运维一眼判断要不要介入。无 API / 后端变更。
