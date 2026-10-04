@@ -6,6 +6,28 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.50] - 2026-10-04
+
+`PageLoading` 默认参数改回 v0.6.28 的「避免闪屏」语义（`delay=200ms` / `minDuration=250ms`）。**只**给「镜像列表」页面（用户进入控制台看到的第一个页面）显式传 `delay={0} minDuration={700}` 让 cairn-mark 入场动画跑完。其它页面维持默认避免闪屏。
+
+### 变更
+
+- **`PageLoading` 默认参数回滚 ([`web/src/components/page-loading.tsx`](./web/src/components/page-loading.tsx))**
+  - v0.7.49 把默认 `delay` 200 → 0、minDuration 250 → 700,代价是每次切页面强制等 700ms 才 fade out,本地快接口感受到 ~300-500ms 切换延迟
+  - v0.7.50 回滚到 v0.6.28 默认(`delay=200ms` / `minDuration=250ms`),保留 v0.6.28 「避免闪屏」语义
+  - 注释里说清楚调用方怎么 opt-in(见下)
+
+- **「镜像列表」PageLoading 显式 opt-in 新参数 ([`web/src/pages/images-page.tsx`](./web/src/pages/images-page.tsx))**
+  - 镜像列表是用户进入 cairn 控制台看到的第一个页面,值得展示 cairn-mark 品牌化动效
+  - 显式传 `delay={0}` 让蒙板立即出现,`minDuration={700}` 让 cairn-mark 'build' 入场跑完大部分(stones 完成 ~820ms,dot 完成 ~1060ms;700ms 时 stones 全到位 + dot 大部分进度,dot 收尾跟蒙板 fade 一起完成,连贯感最好)
+  - 其它 6 个页面(sync / pull / stats / credentials / proxies / settings)的 PageLoading 不动,继续享受「避免闪屏」语义
+
+### 背景
+
+v0.7.49 的全站延迟改动跟 v0.6.28 「避免闪屏」设计冲突。UAT 反馈「切换页面看不到蒙板」后我先把全局默认改了,代价是每次切换 ~500ms 延迟。再反馈「其它页面保持默认」后改成 v0.7.50 的精确 opt-in 方案 —— PageLoading 默认行为不动,**只有镜像列表页面**显式 opt-in 新参数。
+
+---
+
 ## [0.7.49] - 2026-10-04
 
 PageLoading 蒙板显示策略调整 —— 让 `delay=200ms` / `minDuration=250ms` 的 v0.6.28「避免闪屏」默认值不再隐藏 cairn-mark 入场动画。UAT 反馈"切换页面看不到蒙板"。
