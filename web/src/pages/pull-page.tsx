@@ -787,7 +787,7 @@ export default function PullPage({ config, sidebarFilter, onPublishGroups }: Pro
             高级选项作为辅助选项在右侧更协调。
           */}
           <div className="pull-form-row">
-            <div className="pull-form-left">
+            <div className="pull-main-card">
               <Form.Item
                 label="源镜像名"
                 name="image"
@@ -860,8 +860,8 @@ export default function PullPage({ config, sidebarFilter, onPublishGroups }: Pro
               </Form.Item>
             </div>
 
-            <div className="pull-advanced-card">
-              <div className="pull-advanced-card-title">高级选项</div>
+            <div className="pull-advanced">
+              <div className="pull-advanced-title">高级选项</div>
               <Form.Item
                 label="源端代理"
                 extra="仅作用于本次拉取访问源；本仓库自身的代理走服务配置。"

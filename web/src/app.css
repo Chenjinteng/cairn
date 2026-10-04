@@ -538,53 +538,58 @@
   text-decoration: underline;
 }
 
-/* 镜像拉取页：左侧源 + 目标纵向堆叠,右侧高级选项窄卡片并排。
- * 视觉重心是左侧主输入,右侧是「常见但次要」的源代理 / 认证选择,
- * 源 / 目标上下比左右看起来更接近传统的「主输入区」语义。
- * 窄屏(md 以下)塌成单列:左列两个 Form.Item 各占一行,高选项卡片整宽。*/
+/* 镜像拉取页:左主卡片包源 + 目标纵向堆叠,右高级选项裸布局(不包卡片)并排。
+ * 视觉重心是左侧主输入(包卡片),右侧是「常见但次要」的源代理 / 认证选择
+ * —— 故意不包卡片,避免两个框视觉权重冲突;裸布局让"高级选项"看起来是
+ * 辅助选项而非独立模块。
+ * 窄屏(md 以下)塌成单列。*/
 .pull-form-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(260px, 0.85fr);
   gap: 12px 16px;
   align-items: stretch;
 }
-.pull-form-left {
+
+/* 左主卡片:把源镜像 + 目标镜像两个 Form.Item 包成一个卡片容器。*/
+.pull-main-card {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 16px 20px;
   display: flex;
   flex-direction: column;
   min-width: 0;
 }
+
+/* 右高级选项:裸布局,只保留 padding 让跟左卡片视觉对齐;
+ * 故意不设 bg / border / radius,避免两个框权重冲突。*/
+.pull-advanced {
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+}
+/* 标题跟 Form.Item label 同字号字重,但用 text-1 而不是 text-2,视觉上
+ * 比 sub label 略深一点,作为「组」标题明显。*/
+.pull-advanced-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-1);
+  margin-bottom: 12px;
+}
+.pull-advanced .ant-form-item {
+  margin-bottom: 12px;
+}
+.pull-advanced .ant-form-item:last-child {
+  margin-bottom: 0;
+}
+.pull-advanced .ant-form-item-explain {
+  font-size: 11px;
+}
+
 @media (max-width: 900px) {
   .pull-form-row {
     grid-template-columns: 1fr;
   }
-}
-
-/* 高级选项窄卡片:展开态,跟源/目标并排,但内容紧凑一点。*/
-.pull-advanced-card {
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  padding: 12px 14px;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-}
-.pull-advanced-card-title {
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--color-text-3);
-  font-weight: 600;
-  margin-bottom: 8px;
-}
-.pull-advanced-card .ant-form-item {
-  margin-bottom: 12px;
-}
-.pull-advanced-card .ant-form-item:last-child {
-  margin-bottom: 0;
-}
-.pull-advanced-card .ant-form-item-explain {
-  font-size: 11px;
 }
 
 .pull-running-head {
