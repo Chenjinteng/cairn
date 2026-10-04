@@ -615,6 +615,30 @@
   }
 }
 
+/*
+ * 热度页两个图并排：按天趋势（左 7fr）+ Top 10 榜单（右 3fr）。
+ *
+ * 时间维度的热力图需要宽(53 列铺开);排名维度的条形图天生窄(条长
+ * 即信息,标签再长也只是被截掉)。7:3 让两者都不勉强 —— 热力图能铺
+ * 开看节奏,条形图标签在窄列里也能显示 ~10-20 字。
+ *
+ * align-items: start —— 两个面板内容高度不一(条形图 10 行 ~280px,
+ * 热力图 ~200px),让短的顶着上面而不是被拉成等高「两张空卡」。
+ *
+ * 窄屏(900px 以下)塌成单列,跟 .pull-form-row 一致。
+ */
+.stats-chart-row {
+  display: grid;
+  grid-template-columns: 7fr 3fr;
+  gap: 12px 16px;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .stats-chart-row {
+    grid-template-columns: 1fr;
+  }
+}
+
 .pull-running-head {
   display: flex;
   align-items: baseline;
@@ -781,7 +805,7 @@
 
 .top-bar-row {
   display: grid;
-  grid-template-columns: 28px minmax(160px, 0.45fr) 1fr 56px;
+  grid-template-columns: 28px minmax(100px, 0.4fr) 1fr 56px;
   align-items: center;
   gap: 12px;
   height: 28px;

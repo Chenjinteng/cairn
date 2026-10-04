@@ -677,48 +677,51 @@ export default function StatsPage({
           当前窗口内没有 pulls,不需要用户去配 REGISTRY_NOTIFY_TOKEN / 排查外部 registry。
           真要排查走下面的「最近事件」面板与 KPI 自检。 */}
 
-      {/* v0.7.37：按天趋势先于 Top 榜单 —— 先看「什么时候热」,再看「什么最热」,
-          两个图互补的视觉顺序。Top 榜单从表格改成横向条形图（见 TopBarChart
-          注释）：5~6 列的表格太宽撑出横向滚动条,条形图直接比条长,
-          标签再长也不影响。 */}
+      {/* v0.7.37：按天趋势 + Top 10 榜单并排,7:3 —— 热力图回答「什么时候热」
+          (时间维度要宽,53 列铺开),条形图回答「什么最热」(条长即信息,
+          排名靠前一眼能看出来)。Top 单独占一行时条太长,跟热力图并排
+          后宽度收敛,标签在窄列里也读得清。窄屏(900px 以下)塌成单列,
+          跟 .pull-form-row 一致。 */}
 
-      <div className="panel" style={{ padding: 16 }}>
-        <h3 className="stats-panel-title">按天趋势（近 12 个月）</h3>
-        <ContributionHeatmap
-          points={points}
-          days={HEATMAP_DAYS}
-          retentionDays={config?.statsRetentionDays ?? null}
-          since={config?.statsSince ?? null}
-        />
-      </div>
-
-      {!empty ? (
+      <div className="stats-chart-row">
         <div className="panel" style={{ padding: 16 }}>
-          <div className="stats-panel-head">
-            {/* v0.6.15 (UI-5): 标题从「Top 榜单」改成「Top 10 榜单」。
-             *  硬上限 10 条 → 表头文案也要直接说清,不再让用户去「猜是不是漏看了」。
-             *  v0.7.37: 表身从 antd Table 改为 TopBarChart,见组件注释。 */}
-            <h3 className="stats-panel-title">Top 10 榜单</h3>
-            <Segmented
-              options={BY_OPTIONS}
-              value={topBy}
-              onChange={(value) => setTopBy(value as StatsTopBy)}
-            />
-          </div>
-          <div hidden={loading && topItems.length === 0}>
-            <TopBarChart items={topItems.slice(0, TOP_LIMIT)} />
-          </div>
-          {/*
-           * `loading && topItems.length === 0` 才居中 spinner —— 切时间窗时
-           * 已有旧数据,不需要渐隐过度。位置改在 chart 之后渲染（而不是
-           * 覆盖），跟下面 client/events 表格的 PageLoading 模式一致。
-           */}
-          <PageLoading
-            visible={loading && topItems.length === 0}
-            tip="正在读取 Top 10 榜单…"
+          <h3 className="stats-panel-title">按天趋势（近 12 个月）</h3>
+          <ContributionHeatmap
+            points={points}
+            days={HEATMAP_DAYS}
+            retentionDays={config?.statsRetentionDays ?? null}
+            since={config?.statsSince ?? null}
           />
         </div>
-      ) : null}
+
+        {!empty ? (
+          <div className="panel" style={{ padding: 16 }}>
+            <div className="stats-panel-head">
+              {/* v0.6.15 (UI-5): 标题从「Top 榜单」改成「Top 10 榜单」。
+               *  硬上限 10 条 → 表头文案也要直接说清,不再让用户去「猜是不是漏看了」。
+               *  v0.7.37: 表身从 antd Table 改为 TopBarChart,见组件注释。 */}
+              <h3 className="stats-panel-title">Top 10 榜单</h3>
+              <Segmented
+                options={BY_OPTIONS}
+                value={topBy}
+                onChange={(value) => setTopBy(value as StatsTopBy)}
+              />
+            </div>
+            <div hidden={loading && topItems.length === 0}>
+              <TopBarChart items={topItems.slice(0, TOP_LIMIT)} />
+            </div>
+            {/*
+             * `loading && topItems.length === 0` 才居中 spinner —— 切时间窗时
+             * 已有旧数据,不需要渐隐过度。位置改在 chart 之后渲染（而不是
+             * 覆盖），跟下面 client/events 表格的 PageLoading 模式一致。
+             */}
+            <PageLoading
+              visible={loading && topItems.length === 0}
+              tip="正在读取 Top 10 榜单…"
+            />
+          </div>
+        ) : null}
+      </div>
 
       {/*
         放在「最近事件」**上面**：这一块才是"谁在打"的答案（不受 200 条窗口限制、
