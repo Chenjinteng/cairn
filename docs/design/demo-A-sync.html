@@ -2,20 +2,25 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>Cairn · 代理管理 (teal) · v0.7.37</title>
+<title>Cairn · 镜像同步 (teal) · v0.7.37</title>
 <style>
 /*
- * v0.7.37 demo · 代理管理
+ * v0.7.37 demo · 镜像同步（v0.5.40+ 引入）
  *
- * 与 v0.5.36 时期 demo 的差异：
- *   - 侧栏分组：原 demo "协议 / 用途 / 状态" 三组改为
- *     "协议"（按 url scheme 分桶：http / https / socks5 / 其它 / 未知）
- *     + "状态"（可用 / 不可用 / 未探测，按 probeBucketOf 派生）
- *     "用途"（拉取源代理 / 备份依赖 / CI 出网）废止 —— 实际 schema 没有 purpose 字段
- *   - badge 全部来自真实代理列表（v0.5.37.4 上浮）
- *   - 操作（探测全部 / 新增代理）归页头 `.page-actions`
- *   - 字体走 system stack（v0.5.38 起离线部署零外部依赖）
- *   - header 56 → 58px，page-title 22 → 16px，KPI value 24 → 22px
+ * 与 v0.5.36 时期 design 的差异：这一页在 v0.5.36 的设计稿里**完全不存在**。
+ * 设计稿原本只有 6 个 Tab（images / pull / stats / credentials / proxies / settings），
+ * 没预留 sync 的位置。
+ *
+ * 与「镜像拉取」（pull）的区别：
+ *   - pull：单次任务,源 → 目标,完成即结束
+ *   - sync：仓库级别周期同步,定时触发 + cron 表达式,
+ *     跑完会保留 history（v0.6.20+ Task 行 / Run 行可展开）
+ *
+ * 侧栏分组：仅"方向" 1 组（全部 / 拉 pull / 推 push）
+ *   - badge 来自真实 sync 任务列表（v0.5.37.4 上浮）
+ *   - 任务为空时整组不发,显示占位文案
+ *
+ * 字体 / 布局 token 与 v0.7.37 其他 demo 对齐。
  */
 :root {
   --primary:           #0d9488;
@@ -169,7 +174,9 @@ html, body {
   border-color: var(--primary);
 }
 .btn.primary:hover { filter: brightness(1.05); }
-.btn.icon { padding: 6px 10px; }
+.btn.danger { color: var(--fail); border-color: var(--fail); }
+.btn.danger:hover { background: var(--fail); color: var(--primary-fg); }
+.btn.icon { padding: 4px 8px; font-size: 11px; }
 
 /* ──── KPI ──── */
 .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
@@ -187,67 +194,91 @@ html, body {
   font-size: 11px; color: var(--ink-soft); margin-top: 6px;
   font-variant-numeric: tabular-nums;
 }
+.kpi-trend.up { color: var(--success); }
+.kpi-trend.warn { color: var(--warning); }
 
 /* ──── Panel ──── */
 .panel {
   background: var(--bg-1); border: 1px solid var(--line);
   border-radius: 12px; overflow: hidden;
+  margin-bottom: 20px;
 }
 .panel-head {
   padding: 14px 18px;
   border-bottom: 1px solid var(--line);
   display: flex; justify-content: space-between; align-items: center;
   font-size: 14px; font-weight: 500;
+  gap: 12px;
 }
 .panel-head .sub {
   font-size: 12px; color: var(--ink-soft); font-weight: 400;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
-.proxy-row {
+/* ──── Sync task row ──── */
+.task-row {
   display: grid;
-  grid-template-columns: 1.5fr 2fr 1fr auto auto auto;
+  grid-template-columns: 80px 1fr auto auto auto auto auto;
   gap: 14px; align-items: center;
   padding: 14px 18px;
   border-bottom: 1px solid var(--line);
   font-size: 13px;
 }
-.proxy-row:last-child { border-bottom: none; }
-.proxy-row:hover { background: var(--bg-hover); }
-.proxy-name { font-weight: 500; color: var(--ink); }
-.proxy-name .id {
-  font-size: 10px;
+.task-row:last-child { border-bottom: none; }
+.task-row:hover { background: var(--bg-hover); }
+.task-direction {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 8px; border-radius: 4px;
+  font-size: 11px; font-weight: 500;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  color: var(--ink-soft); margin-left: 6px; font-weight: 400;
-}
-.proxy-url {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px; color: var(--ink);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.proxy-mode {
-  font-size: 10px; padding: 2px 8px; border-radius: 4px;
-  background: var(--bg-soft); color: var(--ink-soft);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  text-align: center;
   text-transform: uppercase;
 }
-.proxy-status {
-  font-size: 11px; font-weight: 500;
+.task-direction.pull {
+  background: var(--primary-bg-active); color: var(--primary);
+}
+.task-direction.push {
+  background: rgba(250,173,20,0.14); color: var(--warning);
+}
+.task-name {
+  font-weight: 500; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.task-name .remote {
+  font-size: 11px; color: var(--ink-soft); font-weight: 400;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  margin-top: 2px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.task-status {
+  font-size: 10px; font-weight: 500;
   padding: 2px 8px; border-radius: 4px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  text-transform: uppercase;
 }
-.proxy-status.ok      { background: rgba(39,194,116,0.12); color: var(--success); }
-.proxy-status.slow    { background: rgba(250,173,20,0.14); color: var(--warning); }
-.proxy-status.fail    { background: rgba(244,59,44,0.10); color: var(--fail); }
-.proxy-status.never   { background: var(--bg-soft); color: var(--ink-soft); }
-
-.foot-note {
-  margin-top: 20px; padding: 14px 18px;
-  background: var(--bg-soft);
-  border-radius: 10px;
-  font-size: 12px; color: var(--ink-soft);
+.task-status.running { background: var(--primary-bg-active); color: var(--primary); }
+.task-status.idle    { background: var(--bg-soft); color: var(--ink-soft); }
+.task-status.disabled { background: var(--bg-soft); color: var(--ink-soft); }
+.task-status.error   { background: rgba(244,59,44,0.10); color: var(--fail); }
+.task-meta {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+.task-actions { display: flex; gap: 4px; }
+
+/* ──── Sub tip ──── */
+.tip {
+  margin-top: 20px; padding: 14px 18px;
+  background: var(--primary-bg-active);
+  border-radius: 10px;
+  font-size: 12px; color: var(--ink);
+  line-height: 1.7;
+}
+.tip strong { color: var(--ink); }
+.tip code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
 }
 </style>
 </head>
@@ -271,9 +302,9 @@ html, body {
       <div class="nav-item">镜像列表</div>
       <div class="nav-item">镜像拉取</div>
       <div class="nav-item">镜像热度</div>
-      <div class="nav-item">镜像同步</div>
+      <div class="nav-item active">镜像同步</div>
       <div class="nav-item">凭据管理</div>
-      <div class="nav-item active">代理管理</div>
+      <div class="nav-item">代理管理</div>
       <div class="nav-item">设置</div>
     </div>
     <div class="user">
@@ -285,22 +316,14 @@ html, body {
   <div class="body">
     <!--
         v0.7.37 侧栏分组（v0.5.37.4 上浮）：
-          - 协议：代理 URL 的 scheme 分桶（http / https / socks5 / 其它 / 未知）
-          - 状态：可用 / 不可用 / 未探测（与「状态」列同一口径，见 probeBucketOf）
-        原 demo 的"用途"组废止 —— 当前 schema 没有 purpose 字段，
-        拉取 / 备份 / CI 这三种用法都由 settings.allow* 控制，不由 proxy 自身承担。
-      -->
+          - 方向：全部 / 拉 pull / 推 push
+          - badge 来自真实 sync 任务列表
+    -->
     <aside class="sidebar">
-      <div class="side-group">协议</div>
-      <div class="side-item active"><span>全部</span><span class="badge">4</span></div>
-      <div class="side-item"><span>http</span><span class="badge">2</span></div>
-      <div class="side-item"><span>https</span><span class="badge">1</span></div>
-      <div class="side-item"><span>socks5</span><span class="badge">1</span></div>
-
-      <div class="side-group">状态</div>
-      <div class="side-item"><span>可用</span><span class="badge">2</span></div>
-      <div class="side-item"><span>不可用</span><span class="badge">1</span></div>
-      <div class="side-item"><span>未探测</span><span class="badge">1</span></div>
+      <div class="side-group">方向</div>
+      <div class="side-item active"><span>全部</span><span class="badge">6</span></div>
+      <div class="side-item"><span>拉（Pull）</span><span class="badge">4</span></div>
+      <div class="side-item"><span>推（Push）</span><span class="badge">2</span></div>
 
       <div class="sidebar-footer">
         v0.7.37 ·
@@ -313,75 +336,132 @@ html, body {
     <main class="content">
       <div class="page-head">
         <div>
-          <h1 class="page-title">代理管理</h1>
-          <p class="page-sub">出网代理配置 · 4 条代理 · 每 30 分钟自动探测</p>
+          <h1 class="page-title">镜像同步</h1>
+          <p class="page-sub">仓库级别周期同步 · 6 个任务 · 定时触发 · v0.5.40+ 引入，与单次 pull 解耦</p>
         </div>
         <div class="actions">
-          <button class="btn">探测全部</button>
-          <button class="btn primary">+ 新增代理</button>
+          <button class="btn">批量操作</button>
+          <button class="btn primary">+ 新建同步任务</button>
         </div>
       </div>
 
       <div class="kpis">
-        <div class="kpi"><div class="kpi-label">代理总数</div><div class="kpi-value">4</div><div class="kpi-trend">2 http / 1 https / 1 socks5</div></div>
-        <div class="kpi"><div class="kpi-label">连通率 (24h)</div><div class="kpi-value">75%</div><div class="kpi-trend">18/24 次探测成功</div></div>
-        <div class="kpi"><div class="kpi-label">平均延迟</div><div class="kpi-value">218<span style="font-size:14px;color:var(--ink-soft);font-weight:400;margin-left:4px">ms</span></div><div class="kpi-trend">-12 ms vs 昨日</div></div>
-        <div class="kpi"><div class="kpi-label">依赖此代理的任务</div><div class="kpi-value">6</div><div class="kpi-trend">通过代理的有 4 个</div></div>
+        <div class="kpi"><div class="kpi-label">任务总数</div><div class="kpi-value">6</div><div class="kpi-trend">4 pull / 2 push</div></div>
+        <div class="kpi"><div class="kpi-label">运行中</div><div class="kpi-value">1</div><div class="kpi-trend up">实时</div></div>
+        <div class="kpi"><div class="kpi-label">已禁用</div><div class="kpi-value">1</div><div class="kpi-trend warn">offline</div></div>
+        <div class="kpi"><div class="kpi-label">24h 运行</div><div class="kpi-value">18</div><div class="kpi-trend up">15 成功 / 2 失败</div></div>
       </div>
 
       <div class="panel">
         <div class="panel-head">
-          <span>代理列表</span>
-          <span class="sub">// sort by last probe ↓</span>
+          <span>同步任务</span>
+          <span class="sub">// sort by next run ↑</span>
         </div>
 
-        <div class="proxy-row">
+        <div class="task-row">
+          <span class="task-direction pull">↓ pull</span>
           <div>
-            <div class="proxy-name">内网 HTTP 代理<span class="id">proxy-20250901-090000-h1</span></div>
+            <div class="task-name">harbor-prod-nightly<span class="remote"> remote https://harbor.corp.example.com · library/* → webauto/*</span></div>
           </div>
-          <div class="proxy-url">http://192.0.2.5:3128</div>
-          <div><span class="proxy-mode">http</span></div>
-          <div><span class="proxy-status ok">3 分钟前 · 45 ms</span></div>
-          <div><button class="btn icon">探测</button></div>
-          <div><button class="btn icon">⋯</button></div>
+          <span class="task-status running">running</span>
+          <span class="task-meta">cron 0 2 * * *</span>
+          <span class="task-meta">下次第 2h 17m</span>
+          <span class="task-meta">已运行 142 次</span>
+          <div class="task-actions">
+            <button class="btn icon">▶</button>
+            <button class="btn icon">✎</button>
+            <button class="btn icon danger">×</button>
+          </div>
         </div>
 
-        <div class="proxy-row">
+        <div class="task-row">
+          <span class="task-direction pull">↓ pull</span>
           <div>
-            <div class="proxy-name">公司 HTTPS 代理<span class="id">proxy-20251015-140312-h2</span></div>
+            <div class="task-name">k8s-images-daily<span class="remote"> remote registry.k8s.io · * → webauto/k8s-*</span></div>
           </div>
-          <div class="proxy-url">https://proxy.corp.example.com:8443</div>
-          <div><span class="proxy-mode">https</span></div>
-          <div><span class="proxy-status ok">12 分钟前 · 187 ms</span></div>
-          <div><button class="btn icon">探测</button></div>
-          <div><button class="btn icon">⋯</button></div>
+          <span class="task-status idle">idle</span>
+          <span class="task-meta">cron 0 3 * * *</span>
+          <span class="task-meta">下次第 3h 02m</span>
+          <span class="task-meta">已运行 87 次</span>
+          <div class="task-actions">
+            <button class="btn icon">▶</button>
+            <button class="btn icon">✎</button>
+            <button class="btn icon danger">×</button>
+          </div>
         </div>
 
-        <div class="proxy-row">
+        <div class="task-row">
+          <span class="task-direction push">↑ push</span>
           <div>
-            <div class="proxy-name">外网 SOCKS5 (备用)<span class="id">proxy-20251108-220055-s1</span></div>
+            <div class="task-name">mirror-to-harbor<span class="remote"> local webauto/* → https://harbor-backup.corp.example.com</span></div>
           </div>
-          <div class="proxy-url">socks5://proxy-user@192.0.2.99:1080</div>
-          <div><span class="proxy-mode">socks5</span></div>
-          <div><span class="proxy-status slow">34 分钟前 · 1.8s (超时 2s)</span></div>
-          <div><button class="btn icon">探测</button></div>
-          <div><button class="btn icon">⋯</button></div>
+          <span class="task-status idle">idle</span>
+          <span class="task-meta">cron */30 * * * *</span>
+          <span class="task-meta">下次第 12m</span>
+          <span class="task-meta">已运行 1,247 次</span>
+          <div class="task-actions">
+            <button class="btn icon">▶</button>
+            <button class="btn icon">✎</button>
+            <button class="btn icon danger">×</button>
+          </div>
         </div>
 
-        <div class="proxy-row">
+        <div class="task-row">
+          <span class="task-direction pull">↓ pull</span>
           <div>
-            <div class="proxy-name">已下线 · 老 VPN<span class="id">proxy-20250120-110012-h4</span></div>
+            <div class="task-name">ghcr-tools<span class="remote"> remote ghcr.io · dexidp/* → webauto/ghcr-*</span></div>
           </div>
-          <div class="proxy-url">http://vpn-old.example.com:8080</div>
-          <div><span class="proxy-mode">http</span></div>
-          <div><span class="proxy-status fail">2 天前 · connection refused</span></div>
-          <div><button class="btn icon">探测</button></div>
-          <div><button class="btn icon">⋯</button></div>
+          <span class="task-status error">error</span>
+          <span class="task-meta">cron 0 4 * * *</span>
+          <span class="task-meta">下次 -</span>
+          <span class="task-meta">最近 401 · 2 天前</span>
+          <div class="task-actions">
+            <button class="btn icon">▶</button>
+            <button class="btn icon">✎</button>
+            <button class="btn icon danger">×</button>
+          </div>
+        </div>
+
+        <div class="task-row">
+          <span class="task-direction push">↑ push</span>
+          <div>
+            <div class="task-name">nightly-disaster-recovery<span class="remote"> local webauto/* → s3://cairn-backup/registry</span></div>
+          </div>
+          <span class="task-status disabled">disabled</span>
+          <span class="task-meta">cron 0 1 * * 0</span>
+          <span class="task-meta">下次 -</span>
+          <span class="task-meta">已运行 12 次</span>
+          <div class="task-actions">
+            <button class="btn icon">▶</button>
+            <button class="btn icon">✎</button>
+            <button class="btn icon danger">×</button>
+          </div>
+        </div>
+
+        <div class="task-row">
+          <span class="task-direction pull">↓ pull</span>
+          <div>
+            <div class="task-name">quay-cert-manager<span class="remote"> remote quay.io · jetstack/cert-manager* → webauto/quay-*</span></div>
+          </div>
+          <span class="task-status idle">idle</span>
+          <span class="task-meta">cron 0 0 * * 0</span>
+          <span class="task-meta">下次第 5d 23h</span>
+          <span class="task-meta">已运行 38 次</span>
+          <div class="task-actions">
+            <button class="btn icon">▶</button>
+            <button class="btn icon">✎</button>
+            <button class="btn icon danger">×</button>
+          </div>
         </div>
       </div>
 
-      <div class="foot-note">
-        // 探测方式: GET https://www.google.com/generate_204, 期望 204 + latency &lt; 3s · 任何 ≥ 4xx/5xx/超时 都视为失败 · 测前会先离线测试,不真出网
+      <div class="tip">
+        <strong>v0.6.20+</strong>：每行 Task 可点击「▶」展开查看历史 Run（success / failed 各几次、平均耗时、最近失败原因）。
+        <br>
+        <strong>v0.6.11（SYNC-3）</strong>：认证三档互斥 —— <code>anonymous</code> / <code>inline</code>(内联用户名密码) / <code>credential</code>(引用凭据库)。
+        引用凭据推荐;内联用于 0.6.10 之前的老任务。
+        <br>
+        <strong>v0.7.21</strong>：<code>tags_filter</code> 与 <code>include</code> 正交 —— 前者跳过 catalog 走精确 spec,后者在 catalog 返的 repos 里 glob。
       </div>
     </main>
   </div>

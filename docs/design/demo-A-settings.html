@@ -2,205 +2,450 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>Cairn · 设置 (teal)</title>
+<title>Cairn · 设置 (teal) · v0.7.37 · anchor scroll-spy</title>
 <style>
+/*
+ * v0.7.37 demo · 设置
+ *
+ * 与 v0.5.36 时期 demo 的差异：
+ *   - 侧栏：原 demo 的 ".subtabs" 容器 + 5 个 sub-tab 按钮废止，
+ *     改为 v0.5.37.4 引入的 anchor scroll-spy 模式（page-sidebar.tsx mode:'anchor'）：
+ *     - 侧栏只有一个分组"快速跳转"，items 是页面锚点（settings-connection、settings-switches、
+ *       settings-platforms、settings-heat）
+ *     - 滚动时通过 IntersectionObserver 高亮当前命中的锚点
+ *     - 点击平滑滚动到对应区块
+ *     - "运行时"分组（端口 / env）废止 —— 这两项是基础设施 env（PORT / HOST_PORT / CAIRN_ENV），
+ *       不走 UI 设置
+ *     - "忽略的 User-Agent" 入口从本页迁到 stats 页（v0.5.18 后）
+ *   - 操作（测试连接 / 刷新清单）归页头 `.page-actions`
+ *   - 字体走 system stack（v0.5.38 起离线部署零外部依赖）
+ *   - header 56 → 58px，page-title 22 → 16px
+ */
 :root {
-  --primary:#0d9488; --primary-fg:#fff; --primary-bg-active:#ccfbf1;
-  --secondary:#f2f4f7; --bg:#fff; --bg-hover:#f2f4f7; --bg-1:#fff; --bg-soft:#f4f5f8;
-  --ink:#1f2937; --ink-soft:#6b7280; --line:#e5e7eb;
-  --warning:#faad14; --info:#0d9488; --fail:#f43b2c; --success:#16a34a;
+  --primary:           #0d9488;
+  --primary-fg:        #ffffff;
+  --primary-bg-active: #ccfbf1;
+  --secondary:         #f2f4f7;
+  --bg:                #ffffff;
+  --bg-hover:          #f2f4f7;
+  --bg-1:              #ffffff;
+  --bg-soft:           #f4f5f8;
+  --bg-page:           #f7f5f0;
+  --ink:               #1e252e;
+  --ink-mid:           #475468;
+  --ink-soft:          #7588a3;
+  --line:              #eaecf0;
+  --line-soft:         #e9e3d6;
+  --warning:           #faad14;
+  --info:              #0d9488;
+  --fail:              #f43b2c;
+  --success:           #27c274;
 }
 :root[data-theme="dark"] {
-  --primary:#2dd4bf; --primary-fg:#042f2e; --primary-bg-active:#2dd4bf26;
-  --secondary:#1f2430; --bg:#171b24; --bg-hover:#1f2530; --bg-1:#171b24; --bg-soft:#1b202a;
-  --ink:#e5e7eb; --ink-soft:#9ca3af; --line:#2d3340;
-  --warning:#ffc53d; --info:#2dd4bf; --fail:#ff6b5e; --success:#4ade80;
+  --primary:           #2dd4bf;
+  --primary-fg:        #042f2e;
+  --primary-bg-active: #2dd4bf26;
+  --secondary:         #1f2430;
+  --bg:                #171b24;
+  --bg-hover:          #1f2530;
+  --bg-1:              #171b24;
+  --bg-soft:           #1b202a;
+  --bg-page:           #0f131a;
+  --ink:               #e6eaf2;
+  --ink-mid:           #aab6c8;
+  --ink-soft:          #7d8ba1;
+  --line:              #2a313d;
+  --line-soft:         #2a313d;
+  --warning:           #ffc53d;
+  --info:              #2dd4bf;
+  --fail:              #ff6b5e;
+  --success:           #3ddc84;
 }
-* { margin:0; padding:0; box-sizing:border-box; }
-html, body { background: var(--bg); color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif; font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
-.app { display: grid; grid-template-rows: 56px 1fr; height: 100vh; }
-.header { display: grid; grid-template-columns: 220px 1fr auto; align-items: center; padding: 0 24px; border-bottom: 1px solid var(--line); background: var(--bg-1); }
-.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 16px; }
-.brand-mark { width: 26px; height: 26px; background: var(--primary); border-radius: 6px; display: grid; place-items: center; color: var(--primary-fg); font-weight: 800; font-size: 14px; }
-.brand-version { font-size: 11px; color: var(--ink-soft); margin-left: 6px; }
-.nav { display: flex; gap: 4px; background: var(--bg-soft); padding: 3px; border-radius: 8px; }
-.nav-item { padding: 6px 14px; font-size: 13px; color: var(--ink-soft); border-radius: 6px; cursor: pointer; }
-.nav-item:hover { background: var(--bg-hover); }
-.nav-item.active { background: var(--bg-1); color: var(--ink); font-weight: 500; box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
-.user { font-size: 12px; color: var(--ink-soft); }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+  background: var(--bg-page); color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  font-size: 14px; line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+.app { display: grid; grid-template-rows: 58px 1fr; height: 100vh; }
 
+/* ──── Header ──── */
+.header {
+  display: grid; grid-template-columns: 220px 1fr auto;
+  align-items: center;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-1);
+}
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 15px; }
+.brand-mark svg { width: 26px; height: 26px; display: block; }
+.brand-version {
+  font-size: 11px; color: var(--ink-soft);
+  padding: 1px 7px; background: var(--bg-soft);
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.nav { display: flex; gap: 4px; background: var(--bg-soft); padding: 3px; border-radius: 8px; }
+.nav-item {
+  padding: 5px 8px; font-size: 13px; color: var(--ink-soft);
+  border-radius: 6px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.nav-item:hover { background: var(--bg-hover); }
+.nav-item.active {
+  background: var(--bg-1); color: var(--ink); font-weight: 500;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+}
+.user {
+  font-size: 12px; color: var(--ink-soft);
+  display: inline-flex; align-items: center; gap: 10px;
+}
+.user .theme-toggle {
+  width: 28px; height: 28px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--bg-1);
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+/* ──── Body ──── */
 .body { display: grid; grid-template-columns: 220px 1fr; overflow: hidden; }
-.sidebar { border-right: 1px solid var(--line); padding: 16px 12px; background: var(--bg-1); overflow-y: auto; }
-.side-group { font-size: 11px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.06em; padding: 12px 12px 6px; font-weight: 600; }
-.side-item { padding: 7px 12px; font-size: 13px; color: var(--ink-soft); border-radius: 6px; cursor: pointer; }
+.sidebar {
+  border-right: 1px solid var(--line);
+  padding: 16px 12px;
+  background: var(--bg-1);
+  overflow-y: auto;
+  font-size: 13px;
+  display: flex; flex-direction: column;
+}
+.sidebar-content { flex: 1; }
+.side-group {
+  font-size: 11px; color: var(--ink-soft);
+  text-transform: uppercase; letter-spacing: 0.06em;
+  padding: 12px 12px 6px;
+  font-weight: 600;
+}
+.side-item {
+  padding: 7px 12px; font-size: 13px; color: var(--ink-soft);
+  border-radius: 6px; cursor: pointer;
+  display: block;
+  border: none;
+  background: transparent;
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+}
 .side-item:hover { background: var(--bg-hover); color: var(--ink); }
-.side-item.active { background: var(--primary-bg-active); color: var(--primary); font-weight: 500; }
+.side-item.active {
+  background: var(--primary-bg-active); color: var(--primary); font-weight: 500;
+}
+.sidebar-footer {
+  margin-top: 16px; padding-top: 12px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 11px; color: var(--ink-soft); text-align: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  flex: 0 0 auto;
+}
+.sidebar-footer a { color: inherit; text-decoration: none; border-bottom: 1px dotted currentColor; }
 
 .content { padding: 24px 28px; overflow-y: auto; }
-.page-head { margin-bottom: 20px; display: flex; justify-content: space-between; align-items: flex-end; }
-.page-title { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; }
-.page-sub { font-size: 12px; color: var(--ink-soft); margin-top: 2px; }
+.page-head {
+  margin-bottom: 20px;
+  display: flex; justify-content: space-between; align-items: flex-end;
+  gap: 16px;
+}
+.page-title { font-size: 16px; font-weight: 500; color: var(--ink); margin: 0; }
+.page-sub { font-size: 14px; color: var(--ink-soft); margin-top: 4px; max-width: 880px; }
 .actions { display: flex; gap: 8px; }
 
-/* ──── Sub tabs ──── */
-.subtabs { display: flex; gap: 4px; background: var(--bg-soft); padding: 3px; border-radius: 8px; margin-bottom: 18px; }
-.subtab { padding: 6px 14px; font-size: 13px; color: var(--ink-soft); border-radius: 6px; cursor: pointer; }
-.subtab:hover { background: var(--bg-hover); }
-.subtab.active { background: var(--bg-1); color: var(--ink); font-weight: 500; box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
-
-/* ──── Settings form ──── */
-.section { background: var(--bg-1); border: 1px solid var(--line); border-radius: 12px; padding: 20px 24px; margin-bottom: 16px; }
-.section-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
-.section-sub { font-size: 12px; color: var(--ink-soft); margin-bottom: 18px; }
-.form-row { display: grid; grid-template-columns: 200px 1fr; gap: 16px 20px; padding: 14px 0; border-bottom: 1px dashed var(--line); align-items: start; }
-.form-row:last-child { border-bottom: none; }
-.form-label { font-size: 13px; font-weight: 500; color: var(--ink); padding-top: 8px; }
-.form-label .hint { display: block; font-size: 11px; color: var(--ink-soft); font-weight: 400; margin-top: 2px; }
-.form-input {
-  border: 1px solid var(--line); border-radius: 8px;
-  padding: 8px 12px; font-size: 13px; background: var(--bg-1); color: var(--ink);
-  font-family: 'JetBrains Mono', monospace; width: 100%;
+.btn {
+  font-size: 13px; padding: 7px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--bg-1); color: var(--ink);
+  cursor: pointer; font-family: inherit;
 }
-.form-input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-bg-active); }
-.form-input[readonly] { background: var(--bg-soft); color: var(--ink-soft); cursor: not-allowed; }
-.form-help { font-size: 11px; color: var(--ink-soft); margin-top: 6px; }
-.form-mono { font-family: 'JetBrains Mono', monospace; font-size: 12px; padding: 8px 12px; background: var(--bg-soft); border-radius: 6px; border: 1px solid var(--line); display: inline-block; }
-
-.btn { font-size: 13px; padding: 7px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg-1); color: var(--ink); cursor: pointer; font-family: inherit; }
-.btn.primary { background: var(--primary); color: var(--primary-fg); border-color: var(--primary); }
+.btn:hover { border-color: var(--ink-soft); }
+.btn.primary {
+  background: var(--primary); color: var(--primary-fg);
+  border-color: var(--primary);
+}
+.btn.primary:hover { filter: brightness(1.05); }
 .btn.danger { color: var(--fail); border-color: var(--fail); }
 .btn.danger:hover { background: var(--fail); color: var(--primary-fg); }
-.btn:hover { border-color: var(--ink-soft); }
-.btn.primary:hover { filter: brightness(1.05); }
 
-.toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 14px 0; border-bottom: 1px dashed var(--line); }
+/* ──── Settings sections ──── */
+.section {
+  background: var(--bg-1); border: 1px solid var(--line);
+  border-radius: 12px; padding: 20px 24px;
+  margin-bottom: 16px;
+  /* v0.5.37 锚点滚动补偿：避免区块标题贴着滚动容器顶部 */
+  scroll-margin-top: 12px;
+}
+.section-title {
+  font-size: 16px; font-weight: 500;
+  color: var(--ink);
+  margin-bottom: 4px;
+}
+.section-sub {
+  font-size: 13px; color: var(--ink-soft);
+  margin-bottom: 18px;
+}
+.form-row {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: 16px 20px;
+  padding: 14px 0;
+  border-bottom: 1px dashed var(--line);
+  align-items: start;
+}
+.form-row:last-child { border-bottom: none; }
+.form-label {
+  font-size: 13px; font-weight: 500;
+  color: var(--ink); padding-top: 8px;
+}
+.form-label .hint {
+  display: block;
+  font-size: 11px; color: var(--ink-soft);
+  font-weight: 400; margin-top: 2px;
+}
+.form-input {
+  border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px 12px; font-size: 13px;
+  background: var(--bg-1); color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  width: 100%;
+}
+.form-input:focus {
+  outline: none; border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-bg-active);
+}
+.form-input[readonly] {
+  background: var(--bg-soft);
+  color: var(--ink-soft);
+  cursor: not-allowed;
+}
+.form-help {
+  font-size: 11px; color: var(--ink-soft);
+  margin-top: 6px;
+}
+.form-help code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.form-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px; padding: 8px 12px;
+  background: var(--bg-soft); color: var(--ink-soft);
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  display: inline-block;
+}
+.form-mono.readonly {
+  background: var(--bg-soft); color: var(--ink-soft);
+  cursor: not-allowed;
+}
+
+/* ──── Toggle ──── */
+.toggle-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 0; border-bottom: 1px dashed var(--line);
+}
 .toggle-row:last-child { border-bottom: none; }
-.toggle-text .label { font-size: 13px; font-weight: 500; }
-.toggle-text .hint { font-size: 11px; color: var(--ink-soft); margin-top: 2px; }
+.toggle-text .label { font-size: 13px; font-weight: 500; color: var(--ink); }
+.toggle-text .hint {
+  font-size: 11px; color: var(--ink-soft);
+  margin-top: 2px;
+}
+.toggle { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
 .toggle input { display: none; }
-.toggle { display: flex; align-items: center; gap: 8px; }
-.toggle-track { width: 32px; height: 18px; background: var(--line); border-radius: 999px; position: relative; cursor: pointer; transition: background .15s; }
-.toggle-track::after { content: ''; position: absolute; width: 14px; height: 14px; background: var(--bg-1); border-radius: 50%; top: 2px; left: 2px; transition: transform .15s; box-shadow: 0 1px 2px rgba(0,0,0,0.2); }
+.toggle-track {
+  width: 36px; height: 20px;
+  background: var(--line);
+  border-radius: 999px; position: relative;
+  transition: background .15s;
+}
+.toggle-track::after {
+  content: ''; position: absolute;
+  width: 16px; height: 16px;
+  background: var(--bg-1); border-radius: 50%;
+  top: 2px; left: 2px;
+  transition: transform .15s;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+}
 .toggle input:checked + .toggle-track { background: var(--primary); }
-.toggle input:checked + .toggle-track::after { transform: translateX(14px); }
+.toggle input:checked + .toggle-track::after { transform: translateX(16px); }
 
-/* Stats purge */
-.danger-card { background: #f43b2c08; border-color: var(--fail); }
+/* ──── Danger ──── */
+.danger-card {
+  background: rgba(244,59,44,0.04);
+  border-color: var(--fail);
+}
 .danger-card .section-title { color: var(--fail); }
 
-/* User-agent table */
-.ua-list { background: var(--bg-1); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin-top: 12px; }
-.ua-row { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); font-size: 12px; }
-.ua-row:last-child { border-bottom: none; }
-.ua-pattern { font-family: 'JetBrains Mono', monospace; color: var(--ink); }
-.ua-note { font-size: 10px; color: var(--ink-soft); margin-top: 2px; }
+/* ──── Platforms (multi-tag picker) ──── */
+.platform-tags {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  margin-top: 4px;
+}
+.platform-tag {
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 13px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--ink-mid);
+  background: var(--bg-1);
+  cursor: pointer;
+  user-select: none;
+}
+.platform-tag.on {
+  background: var(--primary-bg-active);
+  color: var(--primary);
+  border-color: transparent;
+  font-weight: 500;
+}
+.platform-tag:hover:not(.on) {
+  border-color: var(--ink-soft);
+}
 
-.theme-switcher { position: fixed; bottom: 16px; right: 16px; background: var(--bg-1); border: 1px solid var(--line); border-radius: 999px; padding: 4px; font-size: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
-.theme-switcher button { border: none; background: transparent; padding: 6px 12px; border-radius: 999px; cursor: pointer; color: var(--ink-soft); }
-.theme-switcher button.active { background: var(--primary); color: var(--primary-fg); }
+/* ──── Heat retention ──── */
+.retention-row {
+  display: flex; align-items: center; gap: 12px;
+}
+.retention-row .form-mono {
+  width: 100px; text-align: center;
+}
 </style>
 </head>
 <body>
 <div class="app">
+
   <header class="header">
-    <div class="brand"><div class="brand-mark">C</div><span>Cairn</span><span class="brand-version">v0.5.36</span></div>
+    <div class="brand">
+      <span class="brand-mark">
+        <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-label="Cairn">
+          <rect x="6" y="46" width="52" height="12" rx="3" fill="#0d9488"/>
+          <rect x="14" y="32" width="36" height="10" rx="2.5" fill="#0d9488"/>
+          <rect x="22" y="20" width="20" height="9" rx="2" fill="#0d9488"/>
+          <circle cx="32" cy="10" r="3.5" fill="#f59e0b"/>
+        </svg>
+      </span>
+      <span>Cairn</span>
+      <span class="brand-version">v0.7.37</span>
+    </div>
     <div class="nav">
       <div class="nav-item">镜像列表</div>
       <div class="nav-item">镜像拉取</div>
       <div class="nav-item">镜像热度</div>
+      <div class="nav-item">镜像同步</div>
       <div class="nav-item">凭据管理</div>
       <div class="nav-item">代理管理</div>
       <div class="nav-item active">设置</div>
     </div>
-    <div class="user">admin · registry.example.com</div>
+    <div class="user">
+      <span style="font-family:ui-monospace,monospace">测试环境 (http://192.0.2.10:8787)</span>
+      <span class="theme-toggle" id="theme-btn" aria-label="切换主题">🌙</span>
+    </div>
   </header>
 
   <div class="body">
+    <!--
+        v0.7.37 侧栏分组（v0.5.37.4 anchor scroll-spy）：
+          - "快速跳转" 1 组，items 是页面锚点（settings-connection / settings-switches /
+            settings-platforms / settings-heat）
+          - 滚动时 IntersectionObserver 高亮当前命中锚点；点击平滑滚动
+        原 demo 的"设置分组（5 项）" + "运行时（端口 / env）"两组废止：
+          - 5 个 sub-tab 中"拉取配置 / 忽略规则 / 高级"是 v0.5.18 前的老接口，
+            实际只在 4 个 anchor 里
+          - "运行时"的端口 / env 是基础设施 env（容器内 PORT / HOST_PORT / CAIRN_ENV），
+            不走 UI
+    -->
     <aside class="sidebar">
-      <div class="side-group">设置分组</div>
-      <div class="side-item active">仓库地址 & 认证</div>
-      <div class="side-item">拉取配置</div>
-      <div class="side-item">热度 & 日志</div>
-      <div class="side-item">忽略规则</div>
-      <div class="side-item">高级 / 危险区</div>
-      <div class="side-group">运行时</div>
-      <div class="side-item">端口 8787</div>
-      <div class="side-item">env=prod</div>
+      <div class="sidebar-content">
+        <div class="side-group">快速跳转</div>
+        <button class="side-item active" data-anchor="settings-connection">仓库连接</button>
+        <button class="side-item" data-anchor="settings-switches">功能开关</button>
+        <button class="side-item" data-anchor="settings-platforms">拉取镜像的架构</button>
+        <button class="side-item" data-anchor="settings-heat">热度记录</button>
+      </div>
+      <div class="sidebar-footer">
+        v0.7.37 ·
+        <a href="cairn-intro.html">产品介绍</a> ·
+        <a href="/api/docs">API 文档</a> ·
+        © Cairn
+      </div>
     </aside>
 
     <main class="content">
       <div class="page-head">
         <div>
-          <div class="page-title">设置</div>
-          <div class="page-sub">运行时配置 · 改动立即生效(热替换)· 不需要重启容器</div>
+          <h1 class="page-title">设置</h1>
+          <p class="page-sub">运行时配置 · 改动立即生效(热替换) · 不需要重启容器</p>
         </div>
         <div class="actions">
+          <!-- v0.5.37.4: 测试连接 / 刷新清单归页头 .page-actions -->
           <button class="btn">↻ 探测远端</button>
           <button class="btn primary">保存所有修改</button>
         </div>
       </div>
 
-      <div class="subtabs">
-        <div class="subtab active">仓库地址 & 认证</div>
-        <div class="subtab">拉取配置</div>
-        <div class="subtab">热度 & 日志</div>
-        <div class="subtab">忽略规则</div>
-        <div class="subtab">高级</div>
-      </div>
-
-      <div class="section">
-        <div class="section-title">仓库地址</div>
+      <!-- ═══ 1. 仓库连接 ═══ -->
+      <div id="settings-connection" class="section">
+        <div class="section-title">仓库连接</div>
         <div class="section-sub">Cairn 自身对外暴露的地址 · 留空时拉取任务回退到 Docker Hub</div>
 
         <div class="form-row">
           <div class="form-label">仓库地址<span class="hint">host:port 形式</span></div>
           <div>
             <input class="form-input" value="registry.example.com:8787">
-            <div class="form-help">示例：<code>registry.example.com:8787</code>（不带 http:// 前缀）</div>
+            <div class="form-help">示例：<code>registry.example.com:8787</code>(不带 http:// 前缀)</div>
           </div>
         </div>
 
         <div class="form-row">
           <div class="form-label">展示名称<span class="hint">顶部右上角显示</span></div>
           <div>
-            <input class="form-input" value="Carin Dev 环境" style="font-family:inherit">
+            <input class="form-input" value="测试环境" style="font-family:inherit">
           </div>
         </div>
 
         <div class="form-row">
           <div class="form-label">监听端口<span class="hint">只读 — 容器内 cairn 进程</span></div>
           <div>
-            <div class="form-mono">8787</div>
-            <div class="form-help">容器内 cairn 进程监听 8787；宿主机→容器映射在 <code>docker-compose.yml</code> 的 <code>HOST_PORT</code>，改完需要 <code>docker compose up -d</code> 重建容器。</div>
+            <span class="form-mono readonly">8787</span>
+            <div class="form-help">容器内 cairn 进程监听 8787;宿主机→容器映射在 <code>docker-compose.yml</code> 的 <code>HOST_PORT</code>,改完需要 <code>docker compose up -d</code> 重建容器。</div>
           </div>
         </div>
-      </div>
-
-      <div class="section">
-        <div class="section-title">Registry 认证</div>
-        <div class="section-sub">管理 <code>/v2/*</code> 端点的 Basic 认证 · 留空 = 允许匿名访问</div>
 
         <div class="form-row">
-          <div class="form-label">用户名</div>
-          <div><input class="form-input" value="admin"></div>
-        </div>
-        <div class="form-row">
-          <div class="form-label">密码<span class="hint">输入即覆盖；留空 = 不动；清空 = 关闭认证</span></div>
+          <div class="form-label">Registry 认证<span class="hint">管理 /v2/* 端点的 Basic 认证</span></div>
           <div>
-            <input class="form-input" type="password" value="••••••••••">
-            <div class="form-help">密码以密文形式存于 SQLite settings 表的 <code>registry.password</code> 键 · AES-256-GCM 加密</div>
+            <div class="form-row" style="grid-template-columns:120px 1fr;padding:6px 0;border:none">
+              <div class="form-label" style="padding-top:0">用户名</div>
+              <input class="form-input" value="admin">
+            </div>
+            <div class="form-row" style="grid-template-columns:120px 1fr;padding:6px 0;border:none">
+              <div class="form-label" style="padding-top:0">密码</div>
+              <input class="form-input" type="password" value="••••••••••">
+              <div class="form-help" style="margin-left:0">输入即覆盖;留空 = 不动;清空 = 关闭认证。密码以密文存于 SQLite <code>settings</code> 表的 <code>registry.password</code> · AES-256-GCM 加密。</div>
+            </div>
           </div>
         </div>
       </div>
 
-      <div class="section">
-        <div class="section-title">运行时行为</div>
-        <div class="section-sub">控制 destructive ops 与 ingress 端点</div>
+      <!-- ═══ 2. 功能开关 ═══ -->
+      <div id="settings-switches" class="section">
+        <div class="section-title">功能开关</div>
+        <div class="section-sub">控制 destructive ops 与 ingress 端点 · 改完即时生效</div>
 
         <div class="toggle-row">
           <div class="toggle-text">
             <div class="label">允许删除操作</div>
-            <div class="hint">关掉后 tag 删除 / 仓库删除 / GC 全部 403(v0.5.36)</div>
+            <div class="hint">关掉后 tag 删除 / 仓库删除 / GC 全部 403(v0.7.37 行为不变)</div>
           </div>
           <label class="toggle"><input type="checkbox" checked><div class="toggle-track"></div></label>
         </div>
@@ -218,70 +463,147 @@ html, body { background: var(--bg); color: var(--ink); font-family: -apple-syste
           </div>
           <label class="toggle"><input type="checkbox" checked><div class="toggle-track"></div></label>
         </div>
+        <div class="toggle-row">
+          <div class="toggle-text">
+            <div class="label">允许同步任务</div>
+            <div class="hint">关掉后 <code>POST /api/sync/tasks</code> 返回 403(v0.5.40+)</div>
+          </div>
+          <label class="toggle"><input type="checkbox" checked><div class="toggle-track"></div></label>
+        </div>
       </div>
 
-      <div class="section danger-card">
-        <div class="section-title">高级 / 危险区</div>
-        <div class="section-sub">清空热度数据 · 不可逆 · 测试阶段授权</div>
+      <!-- ═══ 3. 拉取镜像的架构 ═══ -->
+      <div id="settings-platforms" class="section">
+        <div class="section-title">拉取镜像的架构</div>
+        <div class="section-sub">cairn 拉取镜像时只保留这些架构 / 不在列表里的平台会被裁掉 · 多选 chip</div>
 
-        <div class="toggle-row">
-          <div class="toggle-text">
-            <div class="label">清理热度历史</div>
-            <div class="hint">删除 <code>activity_daily</code> 表全部数据 · 下次通知</div>
-          </div>
-          <button class="btn danger">清空热度</button>
-        </div>
-        <div class="toggle-row">
-          <div class="toggle-text">
-            <div class="label">删除测试事件</div>
-            <div class="hint">按 User-Agent 删除最近 24h 内的事件 · 用于调试验证</div>
-          </div>
-          <button class="btn danger">删除测试事件</button>
-        </div>
-        <div class="toggle-row">
-          <div class="toggle-text">
-            <div class="label">忽略的 User-Agent</div>
-            <div class="hint">这些源匹配不计入热度 · 可加通配 <code>*</code></div>
-          </div>
-          <button class="btn">+ 添加规则</button>
+        <div class="platform-tags">
+          <span class="platform-tag on">linux/amd64</span>
+          <span class="platform-tag on">linux/arm64</span>
+          <span class="platform-tag">linux/arm/v7</span>
+          <span class="platform-tag">linux/386</span>
+          <span class="platform-tag">linux/ppc64le</span>
+          <span class="platform-tag">linux/s390x</span>
+          <span class="platform-tag">windows/amd64</span>
+          <span class="platform-tag">darwin/amd64</span>
+          <span class="platform-tag">darwin/arm64</span>
         </div>
 
-        <div class="ua-list">
-          <div class="ua-row">
-            <div>
-              <div class="ua-pattern">ci-*</div>
-              <div class="ua-note">本地 CI runner · 4 条子模式</div>
-            </div>
-            <button class="btn">×</button>
-          </div>
-          <div class="ua-row">
-            <div>
-              <div class="ua-pattern">docker-compose-*</div>
-              <div class="ua-note">容器内自检 · 防止回环污染热度</div>
-            </div>
-            <button class="btn">×</button>
-          </div>
-          <div class="ua-row">
-            <div>
-              <div class="ua-pattern">kubernetes-probe*</div>
-              <div class="ua-note">K8s liveness/readiness 探针</div>
-            </div>
-            <button class="btn">×</button>
-          </div>
+        <div class="form-help" style="margin-top:14px">
+          新建拉取任务时,「目标平台」字段默认沿用这里勾选的列表 ·
+          任务级显式选择会覆盖默认值。
         </div>
       </div>
+
+      <!-- ═══ 4. 热度记录 ═══ -->
+      <div id="settings-heat" class="section">
+        <div class="section-title">热度记录</div>
+        <div class="section-sub">控制热度事件的保留周期 · 不在数据库里清理旧事件,影响 stats 页查询范围</div>
+
+        <div class="form-row">
+          <div class="form-label">事件保留天数<span class="hint">超过此天数的事件将被丢弃</span></div>
+          <div class="retention-row">
+            <span class="form-mono readonly">365</span>
+            <span style="color:var(--ink-soft);font-size:13px">天</span>
+            <span class="form-help" style="margin-left:8px">数据库主键分区按天滚动 · 老事件不影响拉取速度</span>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-label">每日聚合保留天数<span class="hint">聚合后明细可丢弃,只保留汇总</span></div>
+          <div class="retention-row">
+            <span class="form-mono readonly">730</span>
+            <span style="color:var(--ink-soft);font-size:13px">天</span>
+          </div>
+        </div>
+
+        <div class="form-row" style="border-bottom:none">
+          <div class="form-label">同步客户端 UA<span class="hint">cairn 自身同步发出的请求用这个 UA</span></div>
+          <div>
+            <span class="form-mono">cairn-sync/0.7.37</span>
+            <div class="form-help">上游 registry 可据此 allowlist · 版本号随 Version 自动同步,无需手工维护</div>
+          </div>
+        </div>
+
+        <div class="form-help" style="margin-top:8px;color:var(--ink-soft)">
+          // 忽略规则的 UI 入口在<a href="demo-A-stats.html" style="color:var(--primary);text-decoration:none;border-bottom:1px dotted currentColor">镜像热度</a>页(v0.5.18 后从本设置页迁出)
+        </div>
+      </div>
+
     </main>
   </div>
 </div>
-<div class="theme-switcher" id="ts">
-  <button class="active" data-t="light">浅色</button><button data-t="dark">深色</button>
-</div>
+
 <script>
-document.querySelectorAll('#ts button').forEach(b => b.onclick = () => {
-  document.querySelectorAll('#ts button').forEach(x => x.classList.remove('active'));
-  b.classList.add('active');
-  if (b.dataset.t === 'dark') document.documentElement.dataset.theme = 'dark';
-  else delete document.documentElement.dataset.theme;
+/* ──── theme toggle ──── */
+document.getElementById('theme-btn').onclick = function () {
+  var html = document.documentElement;
+  var isDark = html.dataset.theme === 'dark';
+  if (isDark) { delete html.dataset.theme; this.textContent = '🌙'; }
+  else { html.dataset.theme = 'dark'; this.textContent = '☀️'; }
+};
+
+/* ──── anchor scroll-spy (v0.5.37.4 mode:'anchor' 复刻) ────
+ *
+ * 与 page-sidebar.tsx 的实现一致：
+ *   - 点击侧栏 item → 平滑滚动到对应区块
+ *   - IntersectionObserver 高亮当前命中的锚点
+ *   - 观察带压在视口 20%~40% 之间那条横带
+ *   - 重试机制：首帧区块可能还没进 DOM（页面自己在等接口），最多重试 6 次
+ */
+(function () {
+  var items = document.querySelectorAll('.side-item[data-anchor]');
+  var anchors = Array.prototype.map.call(items, function (it) {
+    return it.getAttribute('data-anchor');
+  });
+  var visible = {};
+
+  function setActive(id) {
+    Array.prototype.forEach.call(items, function (it) {
+      if (it.getAttribute('data-anchor') === id) {
+        it.classList.add('active');
+      } else {
+        it.classList.remove('active');
+      }
+    });
+  }
+
+  /* 点击：手动置高 + 平滑滚动 */
+  Array.prototype.forEach.call(items, function (it) {
+    it.addEventListener('click', function () {
+      var id = it.getAttribute('data-anchor');
+      setActive(id);
+      var node = document.getElementById(id);
+      if (node) node.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  });
+
+  /* scroll-spy：观察带压到视口 20%~40% */
+  function attach() {
+    var nodes = anchors
+      .map(function (id) { return document.getElementById(id); })
+      .filter(function (n) { return n !== null; });
+    if (nodes.length === 0) return;
+
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) { visible[e.target.id] = e.isIntersecting; });
+      var hit = anchors.find(function (id) { return visible[id]; });
+      if (hit) setActive(hit);
+    }, { rootMargin: '-20% 0px -60% 0px', threshold: 0 });
+    nodes.forEach(function (n) { io.observe(n); });
+  }
+
+  /* 锚点区块由本页渲染，首帧就已就位；如页面异步内容进来再扩 retry */
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', attach);
+  } else {
+    attach();
+  }
+})();
+
+/* ──── platform tag toggle ──── */
+Array.prototype.forEach.call(document.querySelectorAll('.platform-tag'), function (t) {
+  t.addEventListener('click', function () { t.classList.toggle('on'); });
 });
 </script>
 </body>

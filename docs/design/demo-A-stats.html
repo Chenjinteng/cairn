@@ -2,233 +2,478 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>Cairn · 镜像热度 (teal)</title>
+<title>Cairn · 镜像热度 (teal) · v0.7.37</title>
 <style>
+/*
+ * v0.7.37 demo · 镜像热度
+ *
+ * 与 v0.5.36 时期 demo 的差异：
+ *   - 侧栏只剩「时间窗」（7d / 30d / 90d），原 demo 的 "维度 / 过滤器" 两组废止
+ *     —— v0.5.37.4 后侧栏只放视图状态；维度（repository / tag / client IP）已改在
+ *     stats-panel-head 的 Segmented 控件里，与"同一状态只出现一次"原则一致
+ *   - 热力图改为 GitHub contribution calendar 风格（12 个月），原 demo 是 7×24（每日）
+ *   - "忽略的 User-Agent" 入口从 settings 迁到本页面（v0.5.18 后，见 stats_page.tsx）
+ *   - 字体走 system stack（v0.5.38 起离线部署零外部依赖）
+ */
 :root {
-  --primary:#0d9488; --primary-fg:#fff; --primary-bg-active:#ccfbf1;
-  --secondary:#f2f4f7; --bg:#fff; --bg-hover:#f2f4f7; --bg-1:#fff; --bg-soft:#f4f5f8;
-  --ink:#1f2937; --ink-soft:#6b7280; --line:#e5e7eb;
-  --warning:#faad14; --info:#0d9488; --fail:#f43b2c; --success:#16a34a;
-  --heat-1:rgba(13,148,136,0.12); --heat-2:rgba(13,148,136,0.32);
-  --heat-3:rgba(13,148,136,0.58); --heat-4:#0d9488;
+  --primary:           #0d9488;
+  --primary-fg:        #ffffff;
+  --primary-bg-active: #ccfbf1;
+  --secondary:         #f2f4f7;
+  --bg:                #ffffff;
+  --bg-hover:          #f2f4f7;
+  --bg-1:              #ffffff;
+  --bg-soft:           #f4f5f8;
+  --bg-page:           #f7f5f0;
+  --ink:               #1e252e;
+  --ink-mid:           #475468;
+  --ink-soft:          #7588a3;
+  --line:              #eaecf0;
+  --line-soft:         #e9e3d6;
+  --warning:           #faad14;
+  --info:              #0d9488;
+  --fail:              #f43b2c;
+  --success:           #27c274;
+  --pending:           #94a3b8;
 }
 :root[data-theme="dark"] {
-  --primary:#2dd4bf; --primary-fg:#042f2e; --primary-bg-active:#2dd4bf26;
-  --secondary:#1f2430; --bg:#171b24; --bg-hover:#1f2530; --bg-1:#171b24; --bg-soft:#1b202a;
-  --ink:#e5e7eb; --ink-soft:#9ca3af; --line:#2d3340;
-  --warning:#ffc53d; --info:#2dd4bf; --fail:#ff6b5e; --success:#4ade80;
-  --heat-1:rgba(45,212,191,0.12); --heat-2:rgba(45,212,191,0.32);
-  --heat-3:rgba(45,212,191,0.58); --heat-4:#2dd4bf;
+  --primary:           #2dd4bf;
+  --primary-fg:        #042f2e;
+  --primary-bg-active: #2dd4bf26;
+  --secondary:         #1f2430;
+  --bg:                #171b24;
+  --bg-hover:          #1f2530;
+  --bg-1:              #171b24;
+  --bg-soft:           #1b202a;
+  --bg-page:           #0f131a;
+  --ink:               #e6eaf2;
+  --ink-mid:           #aab6c8;
+  --ink-soft:          #7d8ba1;
+  --line:              #2a313d;
+  --line-soft:         #2a313d;
+  --warning:           #ffc53d;
+  --info:              #2dd4bf;
+  --fail:              #ff6b5e;
+  --success:           #3ddc84;
+  --pending:           #5b6678;
 }
-* { margin:0; padding:0; box-sizing:border-box; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
 html, body {
-  background: var(--bg); color: var(--ink);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif;
-  font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased;
+  background: var(--bg-page); color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  font-size: 14px; line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
 }
-.app { display: grid; grid-template-rows: 56px 1fr; height: 100vh; }
-.header { display: grid; grid-template-columns: 220px 1fr auto; align-items: center; padding: 0 24px; border-bottom: 1px solid var(--line); background: var(--bg-1); }
-.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 16px; }
-.brand-mark { width: 26px; height: 26px; background: var(--primary); border-radius: 6px; display: grid; place-items: center; color: var(--primary-fg); font-weight: 800; font-size: 14px; }
-.brand-version { font-size: 11px; color: var(--ink-soft); margin-left: 6px; }
-.nav { display: flex; gap: 4px; background: var(--bg-soft); padding: 3px; border-radius: 8px; }
-.nav-item { padding: 6px 14px; font-size: 13px; color: var(--ink-soft); border-radius: 6px; cursor: pointer; }
-.nav-item:hover { background: var(--bg-hover); }
-.nav-item.active { background: var(--bg-1); color: var(--ink); font-weight: 500; box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
-.user { font-size: 12px; color: var(--ink-soft); }
+.app { display: grid; grid-template-rows: 58px 1fr; height: 100vh; }
 
+/* ──── Header ──── */
+.header {
+  display: grid; grid-template-columns: 220px 1fr auto;
+  align-items: center;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-1);
+}
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 15px; }
+.brand-mark svg { width: 26px; height: 26px; display: block; }
+.brand-version {
+  font-size: 11px; color: var(--ink-soft);
+  padding: 1px 7px; background: var(--bg-soft);
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.nav { display: flex; gap: 4px; background: var(--bg-soft); padding: 3px; border-radius: 8px; }
+.nav-item {
+  padding: 5px 8px; font-size: 13px; color: var(--ink-soft);
+  border-radius: 6px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.nav-item:hover { background: var(--bg-hover); }
+.nav-item.active {
+  background: var(--bg-1); color: var(--ink); font-weight: 500;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+}
+.user {
+  font-size: 12px; color: var(--ink-soft);
+  display: inline-flex; align-items: center; gap: 10px;
+}
+.user .theme-toggle {
+  width: 28px; height: 28px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--bg-1);
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+/* ──── Body ──── */
 .body { display: grid; grid-template-columns: 220px 1fr; overflow: hidden; }
-.sidebar { border-right: 1px solid var(--line); padding: 16px 12px; background: var(--bg-1); overflow-y: auto; }
-.side-group { font-size: 11px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.06em; padding: 12px 12px 6px; font-weight: 600; }
-.side-item { padding: 7px 12px; font-size: 13px; color: var(--ink-soft); border-radius: 6px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+.sidebar {
+  border-right: 1px solid var(--line);
+  padding: 16px 12px;
+  background: var(--bg-1);
+  overflow-y: auto;
+  font-size: 13px;
+}
+.side-group {
+  font-size: 11px; color: var(--ink-soft);
+  text-transform: uppercase; letter-spacing: 0.06em;
+  padding: 12px 12px 6px;
+  font-weight: 600;
+}
+.side-item {
+  padding: 7px 12px; font-size: 13px; color: var(--ink-soft);
+  border-radius: 6px; cursor: pointer;
+  display: flex; justify-content: space-between; align-items: center;
+}
 .side-item:hover { background: var(--bg-hover); color: var(--ink); }
-.side-item.active { background: var(--primary-bg-active); color: var(--primary); font-weight: 500; }
-.side-item .badge { font-size: 11px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
-.side-item.active .badge { color: var(--primary); }
+.side-item.active {
+  background: var(--primary-bg-active); color: var(--primary); font-weight: 500;
+}
+.sidebar-footer {
+  margin-top: 16px; padding-top: 12px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 11px; color: var(--ink-soft); text-align: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.sidebar-footer a { color: inherit; text-decoration: none; border-bottom: 1px dotted currentColor; }
 
 .content { padding: 24px 28px; overflow-y: auto; }
-.page-head { margin-bottom: 20px; display: flex; justify-content: space-between; align-items: flex-end; }
-.page-title { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; }
-.page-sub { font-size: 12px; color: var(--ink-soft); margin-top: 2px; }
+.page-head {
+  margin-bottom: 20px;
+  display: flex; justify-content: space-between; align-items: flex-end;
+  gap: 16px;
+}
+.page-title { font-size: 16px; font-weight: 500; color: var(--ink); margin: 0; }
+.page-sub { font-size: 14px; color: var(--ink-soft); margin-top: 4px; max-width: 880px; }
 .actions { display: flex; gap: 8px; }
-.btn { font-size: 13px; padding: 7px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg-1); color: var(--ink); cursor: pointer; font-family: inherit; }
+
+.btn {
+  font-size: 13px; padding: 7px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--bg-1); color: var(--ink);
+  cursor: pointer; font-family: inherit;
+}
 .btn:hover { border-color: var(--ink-soft); }
 
-.seg { display: flex; gap: 4px; background: var(--bg-soft); padding: 3px; border-radius: 8px; }
-.seg-item { padding: 6px 14px; font-size: 13px; color: var(--ink-soft); border-radius: 6px; cursor: pointer; }
-.seg-item:hover { background: var(--bg-hover); }
-.seg-item.active { background: var(--bg-1); color: var(--ink); font-weight: 500; box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
-
-.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 20px; }
-.kpi { background: var(--bg-1); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
-.kpi-label { font-size: 12px; color: var(--ink-soft); margin-bottom: 6px; }
-.kpi-value { font-size: 24px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; color: var(--ink); }
-.kpi-trend { font-size: 11px; color: var(--ink-soft); margin-top: 6px; font-variant-numeric: tabular-nums; }
+/* ──── KPI ──── */
+.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
+.kpi {
+  background: var(--bg-1); border: 1px solid var(--line);
+  border-radius: 10px; padding: 16px 18px;
+}
+.kpi-label { font-size: 13px; color: var(--ink-mid); margin-bottom: 6px; }
+.kpi-value {
+  font-size: 22px; font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink); line-height: 1.3;
+}
+.kpi-trend {
+  font-size: 11px; color: var(--ink-soft); margin-top: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.kpi-value.is-text { font-size: 15px; font-weight: 600; }
 .kpi-trend.up { color: var(--success); }
 .kpi-trend.warn { color: var(--warning); }
 
-.panel { background: var(--bg-1); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; margin-bottom: 20px; }
-.panel-head { padding: 14px 18px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; font-size: 14px; font-weight: 600; }
-.panel-head .sub { font-size: 11px; color: var(--ink-soft); font-weight: 400; }
+/* ──── Panel ──── */
+.panel {
+  background: var(--bg-1); border: 1px solid var(--line);
+  border-radius: 12px; overflow: hidden;
+  margin-bottom: 20px;
+}
+.panel-head {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 14px; font-weight: 500;
+  gap: 12px;
+}
+.panel-head .sub {
+  font-size: 12px; color: var(--ink-soft); font-weight: 400;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
 
-/* Heatmap */
+/* ──── Stats Panel head controls (segmented) ──── */
+.stats-panel-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+}
+.stats-panel-title { margin: 0; font-size: 14px; font-weight: 500; color: var(--ink); }
+.seg {
+  display: inline-flex; gap: 2px;
+  background: var(--bg-soft);
+  padding: 2px; border-radius: 6px;
+}
+.seg-item {
+  padding: 4px 10px; font-size: 12px;
+  color: var(--ink-soft); border-radius: 4px;
+  cursor: pointer;
+}
+.seg-item.active {
+  background: var(--bg-1); color: var(--ink);
+  font-weight: 500;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+}
+
+/* ──── Heatmap (12 月 × 7 行的 GitHub-style 日历) ──── */
 .heatmap-wrap { padding: 18px 22px; }
-.heatmap-meta { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; font-size: 11px; color: var(--ink-soft); font-family: 'JetBrains Mono', monospace; }
-.heatmap-grid { display: grid; grid-template-columns: 60px repeat(24, 1fr); gap: 3px; }
-.heatmap-grid .label { font-size: 10px; color: var(--ink-soft); text-align: right; padding-right: 6px; align-self: center; font-family: 'JetBrains Mono', monospace; }
-.heatmap-cell { aspect-ratio: 1; border-radius: 3px; background: var(--bg-soft); }
-.heatmap-cell.l1 { background: var(--heat-1); }
-.heatmap-cell.l2 { background: var(--heat-2); }
-.heatmap-cell.l3 { background: var(--heat-3); }
-.heatmap-cell.l4 { background: var(--heat-4); }
-.heat-legend { display: flex; align-items: center; gap: 10px; margin-top: 12px; font-size: 11px; color: var(--ink-soft); font-family: 'JetBrains Mono', monospace; }
-.heat-legend-scale { display: flex; gap: 3px; }
-.heat-legend-scale span { width: 14px; height: 14px; border-radius: 2px; background: var(--bg-soft); }
+.heatmap-meta {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 12px;
+  font-size: 12px; color: var(--ink-soft);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+/*
+ * 列数由日期跨度算出来、格宽由列数决定（见 contribution-heatmap.tsx）。
+ * 这里只展示几何形态，颜色 + 档位与 .heatmap-cell--l1..--l4 严格一致。
+ */
+.heatmap-grid {
+  display: grid;
+  grid-template-columns: 30px repeat(53, 1fr);
+  gap: 3px;
+  font-size: 11px;
+  color: var(--ink-soft);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.heatmap-axis-row {
+  display: grid;
+  grid-template-columns: 30px repeat(53, 1fr);
+  gap: 3px;
+  font-size: 10px;
+  color: var(--ink-soft);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  margin-bottom: 4px;
+}
+.heatmap-axis-row span { text-align: center; }
+.heatmap-cell {
+  aspect-ratio: 1; border-radius: 3px;
+  background: var(--bg-soft);
+}
+.heatmap-cell--l1 { background: var(--primary); opacity: 0.30; }
+.heatmap-cell--l2 { background: var(--primary); opacity: 0.52; }
+.heatmap-cell--l3 { background: var(--primary); opacity: 0.76; }
+.heatmap-cell--l4 { background: var(--primary); opacity: 1.00; }
+.heat-legend {
+  display: flex; align-items: center; gap: 6px;
+  margin-top: 12px; font-size: 11px; color: var(--ink-soft);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.heat-legend-scale { display: inline-flex; gap: 3px; }
+.heat-legend-scale .sw {
+  width: 12px; height: 12px; border-radius: 2px;
+  background: var(--bg-soft);
+}
 
-/* Trend chart (sparkline) */
+/* ──── Trend chart ──── */
 .trend-chart { padding: 16px 22px; }
-.trend-grid { display: grid; grid-template-columns: 1fr; gap: 14px; }
-.trend-row { display: grid; grid-template-columns: 180px 1fr 90px; align-items: center; gap: 14px; padding: 10px 0; border-bottom: 1px dashed var(--line); }
+.trend-row {
+  display: grid;
+  grid-template-columns: 200px 1fr 90px;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 0;
+  border-bottom: 1px dashed var(--line);
+}
 .trend-row:last-child { border-bottom: none; }
-.trend-name { font-size: 13px; font-weight: 500; }
-.trend-name .repo-tag { font-size: 10px; font-family: 'JetBrains Mono', monospace; color: var(--ink-soft); margin-left: 6px; }
+.trend-name {
+  font-size: 13px; font-weight: 500; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.trend-name .repo-tag {
+  font-size: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--ink-soft); margin-left: 6px;
+}
 .trend-bars { display: flex; align-items: end; gap: 2px; height: 28px; }
-.trend-bars .bar { width: 6px; border-radius: 1.5px; background: var(--primary); opacity: 0.5; transition: opacity .15s; }
+.trend-bars .bar {
+  width: 6px; border-radius: 1.5px;
+  background: var(--primary); opacity: 0.55;
+  transition: opacity .15s;
+}
 .trend-bars .bar:hover { opacity: 1; }
-.trend-totals { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--ink); text-align: right; font-variant-numeric: tabular-nums; }
-.trend-totals .sub { color: var(--ink-soft); font-size: 10px; display: block; }
+.trend-totals {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px; color: var(--ink);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.trend-totals .sub {
+  color: var(--ink-soft); font-size: 10px; display: block;
+}
 
-/* Top clients list */
+/* ──── Top clients list ──── */
 .top-list { padding: 4px 0; }
-.top-row { display: grid; grid-template-columns: 24px 1fr auto auto; gap: 14px; align-items: center; padding: 10px 18px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.top-row {
+  display: grid;
+  grid-template-columns: 24px 1fr auto auto;
+  gap: 14px; align-items: center;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
 .top-row:last-child { border-bottom: none; }
-.top-rank { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-soft); }
-.top-ua { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--ink); }
-.top-bar-wrap { width: 100px; height: 6px; background: var(--bg-soft); border-radius: 3px; }
+.top-rank {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px; color: var(--ink-soft);
+}
+.top-ua {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.top-bar-wrap {
+  width: 100px; height: 6px;
+  background: var(--bg-soft);
+  border-radius: 3px;
+}
 .top-bar { height: 100%; background: var(--primary); border-radius: 3px; }
-.top-num { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--ink); font-variant-numeric: tabular-nums; }
-
-.theme-switcher { position: fixed; bottom: 16px; right: 16px; background: var(--bg-1); border: 1px solid var(--line); border-radius: 999px; padding: 4px; font-size: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
-.theme-switcher button { border: none; background: transparent; padding: 6px 12px; border-radius: 999px; cursor: pointer; color: var(--ink-soft); }
-.theme-switcher button.active { background: var(--primary); color: var(--primary-fg); }
+.top-num {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px; color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
 </style>
 </head>
 <body>
 <div class="app">
+
   <header class="header">
-    <div class="brand"><div class="brand-mark">C</div><span>Cairn</span><span class="brand-version">v0.5.36</span></div>
+    <div class="brand">
+      <span class="brand-mark">
+        <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-label="Cairn">
+          <rect x="6" y="46" width="52" height="12" rx="3" fill="#0d9488"/>
+          <rect x="14" y="32" width="36" height="10" rx="2.5" fill="#0d9488"/>
+          <rect x="22" y="20" width="20" height="9" rx="2" fill="#0d9488"/>
+          <circle cx="32" cy="10" r="3.5" fill="#f59e0b"/>
+        </svg>
+      </span>
+      <span>Cairn</span>
+      <span class="brand-version">v0.7.37</span>
+    </div>
     <div class="nav">
       <div class="nav-item">镜像列表</div>
       <div class="nav-item">镜像拉取</div>
       <div class="nav-item active">镜像热度</div>
+      <div class="nav-item">镜像同步</div>
       <div class="nav-item">凭据管理</div>
       <div class="nav-item">代理管理</div>
       <div class="nav-item">设置</div>
     </div>
-    <div class="user">admin · registry.example.com</div>
+    <div class="user">
+      <span style="font-family:ui-monospace,monospace">测试环境 (http://192.0.2.10:8787)</span>
+      <span class="theme-toggle" id="theme-btn" aria-label="切换主题">🌙</span>
+    </div>
   </header>
 
   <div class="body">
+    <!--
+        v0.7.37 侧栏分组（v0.5.37.4 上浮）：
+          - 时间窗：7d / 30d / 90d（默认 30d，与 App 初值 pageFilter.stats.window 一致）
+        原 demo 的 "维度 / 过滤器" 两组已废止：
+          - 维度（repository / tag / client IP）改在 stats-panel-head 的 Segmented 控件里
+          - "排除本地回环 / 排除 CI 用户代理" 改为 ignore-rule 弹框（v0.5.18 后从 settings 迁来）
+      -->
     <aside class="sidebar">
-      <div class="side-group">时间窗口</div>
-      <div class="side-item">最近 24 小时</div>
-      <div class="side-item active"><span>最近 7 天</span></div>
-      <div class="side-item">最近 30 天</div>
-      <div class="side-item">最近 90 天</div>
-      <div class="side-item">自定义</div>
-      <div class="side-group">维度</div>
-      <div class="side-item active">镜像仓库</div>
-      <div class="side-item">tag</div>
-      <div class="side-item">客户端 IP</div>
-      <div class="side-group">过滤器</div>
-      <div class="side-item">排除本地回环</div>
-      <div class="side-item">排除 CI 用户代理</div>
+      <div class="side-group">时间窗</div>
+      <div class="side-item"><span>最近 7 天</span></div>
+      <div class="side-item active"><span>最近 30 天</span></div>
+      <div class="side-item"><span>最近 90 天</span></div>
+
+      <div class="sidebar-footer">
+        v0.7.37 ·
+        <a href="cairn-intro.html">产品介绍</a> ·
+        <a href="/api/docs">API 文档</a> ·
+        © Cairn
+      </div>
     </aside>
 
     <main class="content">
       <div class="page-head">
         <div>
-          <div class="page-title">镜像热度</div>
-          <div class="page-sub">2026-09-22 → 2026-09-29 (7 天) · 共 247 次请求</div>
+          <h1 class="page-title">镜像热度</h1>
+          <p class="page-sub">2026-09-04 → 2026-10-04 (30 天) · 共 2,341 次请求 · 镜像热度观测</p>
         </div>
         <div class="actions">
-          <button class="btn">导出 CSV</button>
+          <!-- v0.5.18 后从 settings 页迁到本页面 -->
+          <button class="btn">忽略规则</button>
           <button class="btn">↻ 刷新</button>
         </div>
       </div>
 
       <div class="kpis">
-        <div class="kpi"><div class="kpi-label">总拉取次数</div><div class="kpi-value">247</div><div class="kpi-trend up">+34% vs 上周</div></div>
-        <div class="kpi"><div class="kpi-label">独立客户端</div><div class="kpi-value">12</div><div class="kpi-trend up">+3</div></div>
-        <div class="kpi"><div class="kpi-label">最热镜像</div><div class="kpi-value">alpine</div><div class="kpi-trend">89 次 / 7d</div></div>
-        <div class="kpi"><div class="kpi-label">回环占比</div><div class="kpi-value">14%</div><div class="kpi-trend warn">本地 CI 多 · 排除后可降至 4%</div></div>
+        <div class="kpi"><div class="kpi-label">总拉取次数</div><div class="kpi-value">2,341</div><div class="kpi-trend up">+18% vs 上周</div></div>
+        <div class="kpi"><div class="kpi-label">独立客户端</div><div class="kpi-value">17</div><div class="kpi-trend up">+3</div></div>
+        <div class="kpi"><div class="kpi-label">最热镜像</div><div class="kpi-value is-text">alpine</div><div class="kpi-trend">312 次 / 30d</div></div>
+        <div class="kpi"><div class="kpi-label">回环占比</div><div class="kpi-value">9%</div><div class="kpi-trend warn">已配 ignore-rule 4 条</div></div>
       </div>
 
       <div class="panel">
         <div class="panel-head">
-          <span>时间热力图</span>
-          <div class="seg">
-            <div class="seg-item active">按天</div>
-            <div class="seg-item">按小时</div>
+          <div class="stats-panel-head">
+            <span class="stats-panel-title">时间热力图</span>
+            <div class="seg">
+              <div class="seg-item active">按天</div>
+              <div class="seg-item">按仓库</div>
+              <div class="seg-item">按客户端 IP</div>
+            </div>
           </div>
         </div>
         <div class="heatmap-wrap">
           <div class="heatmap-meta">
-            <span>最近 7 天 · 按 UTC+8 · 每格 1 小时</span>
-            <span>峰值 09-29 14:00 (23 req)</span>
+            <span>最近 12 个月 · 每格 1 天 · UTC+8</span>
+            <span>峰值 09-29 (87 req)</span>
+          </div>
+          <!--
+            列：30 标签 + 53 周 × 7 天（GitHub contribution calendar 风格）
+            53 周 × 7 行，列宽 1fr，格 aspect-ratio:1 保证正方形
+            这里填入 v0.7.37 的几何示意，cell 颜色走 .heatmap-cell--lN
+          -->
+          <div class="heatmap-axis-row">
+            <span></span>
+            <span></span><span></span><span></span><span></span><span></span><span></span>
+            <span>Sep</span><span></span><span></span><span></span><span></span><span></span>
+            <span></span><span></span><span></span><span></span><span></span><span></span>
+            <span></span><span></span><span></span><span></span><span></span><span></span>
+            <span></span><span></span><span></span><span></span><span></span><span></span>
+            <span></span><span></span><span></span><span></span><span></span><span></span>
+            <span></span><span></span><span></span><span></span><span></span><span></span>
+            <span></span><span></span><span></span><span></span><span></span><span></span>
+            <span></span><span></span><span></span><span></span><span></span><span></span>
+            <span>Oct</span>
           </div>
           <div class="heatmap-grid">
-            <div class="label">00</div>
-            <div class="heatmap-cell l1"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div>
-            <div class="heatmap-cell l1"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell l1"></div>
-            <div class="heatmap-cell l1"></div><div class="heatmap-cell l2"></div><div class="heatmap-cell l1"></div><div class="heatmap-cell l2"></div>
-            <div class="heatmap-cell l2"></div><div class="heatmap-cell l3"></div><div class="heatmap-cell l2"></div><div class="heatmap-cell l3"></div>
-            <div class="heatmap-cell l3"></div><div class="heatmap-cell l2"></div><div class="heatmap-cell l3"></div><div class="heatmap-cell l2"></div>
-            <div class="heatmap-cell l1"></div><div class="heatmap-cell l2"></div><div class="heatmap-cell l1"></div><div class="heatmap-cell l1"></div>
-
-            <div class="label">04</div>
-            <div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div>
-            <div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell l1"></div><div class="heatmap-cell l1"></div>
-            <div class="heatmap-cell l1"></div><div class="heatmap-cell l2"></div><div class="heatmap-cell l2"></div><div class="heatmap-cell l2"></div>
-            <div class="heatmap-cell l3"></div><div class="heatmap-cell l2"></div><div class="heatmap-cell l3"></div><div class="heatmap-cell l2"></div>
-            <div class="heatmap-cell l2"></div><div class="heatmap-cell l1"></div><div class="heatmap-cell l1"></div><div class="heatmap-cell"></div>
-
-            <div class="label">08</div>
-            <div class="heatmap-cell"></div><div class="heatmap-cell l1"></div><div class="heatmap-cell l2"></div><div class="heatmap-cell l3"></div>
-            <div class="heatmap-cell l4"></div><div class="heatmap-cell l4"></div><div class="heatmap-cell l3"></div><div class="heatmap-cell l2"></div>
-            <div class="heatmap-cell l2"></div><div class="heatmap-cell l3"></div><div class="heatmap-cell l3"></div><div class="heatmap-cell l4"></div>
-            <div class="heatmap-cell l3"></div><div class="heatmap-cell l2"></div><div class="heatmap-cell l2"></div><div class="heatmap-cell l1"></div>
-            <div class="heatmap-cell l1"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div>
-
-            <div class="label">12</div>
-            <div class="heatmap-cell"></div><div class="heatmap-cell l1"></div><div class="heatmap-cell l2"></div><div class="heatmap-cell l3"></div>
-            <div class="heatmap-cell l4"></div><div class="heatmap-cell l4"></div><div class="heatmap-cell l4"></div><div class="heatmap-cell l3"></div>
-            <div class="heatmap-cell l2"></div><div class="heatmap-cell l3"></div><div class="heatmap-cell l4"></div><div class="heatmap-cell l3"></div>
-            <div class="heatmap-cell l2"></div><div class="heatmap-cell l2"></div><div class="heatmap-cell l1"></div><div class="heatmap-cell l1"></div>
-            <div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div>
-
-            <div class="label">16</div>
-            <div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell l1"></div><div class="heatmap-cell l2"></div>
-            <div class="heatmap-cell l2"></div><div class="heatmap-cell l3"></div><div class="heatmap-cell l2"></div><div class="heatmap-cell l2"></div>
-            <div class="heatmap-cell l1"></div><div class="heatmap-cell l2"></div><div class="heatmap-cell l1"></div><div class="heatmap-cell l1"></div>
-            <div class="heatmap-cell"></div><div class="heatmap-cell l1"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div>
-            <div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div>
-
-            <div class="label">20</div>
-            <div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell l1"></div>
-            <div class="heatmap-cell l1"></div><div class="heatmap-cell l2"></div><div class="heatmap-cell l1"></div><div class="heatmap-cell l1"></div>
-            <div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div>
-            <div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div>
-            <div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div>
+            <!-- 7 行 × 53 列（实际是 53 周，这里给视觉示意，每行填若干 cell） -->
+            <!-- Row 1 (Sun) -->
+            <span style="align-self:center;text-align:right;padding-right:6px;font-size:10px">日</span>
+            <div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div>
+            <!-- Row 2 (Mon) -->
+            <span style="align-self:center;text-align:right;padding-right:6px;font-size:10px">一</span>
+            <div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div>
+            <!-- Row 3 (Wed) -->
+            <span style="align-self:center;text-align:right;padding-right:6px;font-size:10px">三</span>
+            <div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div>
+            <!-- Row 4 (Fri) -->
+            <span style="align-self:center;text-align:right;padding-right:6px;font-size:10px">五</span>
+            <div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div>
+            <!-- Row 5 (Sat) -->
+            <span style="align-self:center;text-align:right;padding-right:6px;font-size:10px">六</span>
+            <div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div><div class="heatmap-cell"></div>
           </div>
           <div class="heat-legend">
             <span>少</span>
             <div class="heat-legend-scale">
-              <span></span><span style="background:var(--heat-1)"></span><span style="background:var(--heat-2)"></span>
-              <span style="background:var(--heat-3)"></span><span style="background:var(--heat-4)"></span>
+              <div class="sw"></div>
+              <div class="sw" style="background:var(--primary);opacity:0.30"></div>
+              <div class="sw" style="background:var(--primary);opacity:0.52"></div>
+              <div class="sw" style="background:var(--primary);opacity:0.76"></div>
+              <div class="sw" style="background:var(--primary);opacity:1.00"></div>
             </div>
             <span>多</span>
-            <span style="margin-left:auto">本窗口 247 次 · 峰值 23/h</span>
+            <span style="margin-left:auto">本窗口 2,341 次 · 峰值 87/d</span>
           </div>
         </div>
       </div>
@@ -246,7 +491,7 @@ html, body {
               <div class="bar" style="height:80%"></div><div class="bar" style="height:100%"></div><div class="bar" style="height:85%"></div>
               <div class="bar" style="height:95%"></div>
             </div>
-            <div class="trend-totals">89<span class="sub">次 / 7d</span></div>
+            <div class="trend-totals">312<span class="sub">次 / 30d</span></div>
           </div>
           <div class="trend-row">
             <div class="trend-name">library/nginx<span class="repo-tag">:1.27-alpine</span></div>
@@ -255,7 +500,7 @@ html, body {
               <div class="bar" style="height:65%"></div><div class="bar" style="height:75%"></div><div class="bar" style="height:90%"></div>
               <div class="bar" style="height:100%"></div>
             </div>
-            <div class="trend-totals">67<span class="sub">次 / 7d</span></div>
+            <div class="trend-totals">267<span class="sub">次 / 30d</span></div>
           </div>
           <div class="trend-row">
             <div class="trend-name">library/postgres<span class="repo-tag">:16-alpine</span></div>
@@ -264,25 +509,25 @@ html, body {
               <div class="bar" style="height:35%"></div><div class="bar" style="height:42%"></div><div class="bar" style="height:38%"></div>
               <div class="bar" style="height:40%"></div>
             </div>
-            <div class="trend-totals">34<span class="sub">次 / 7d</span></div>
+            <div class="trend-totals">142<span class="sub">次 / 30d</span></div>
           </div>
           <div class="trend-row">
             <div class="trend-name">library/redis<span class="repo-tag">:7-alpine</span></div>
             <div class="trend-bars">
-              <div class="bar" style="height:18%"></div><div class="bar" style="height:22%"></div><div class class="bar" style="height:28%"></div>
+              <div class="bar" style="height:18%"></div><div class="bar" style="height:22%"></div><div class="bar" style="height:28%"></div>
               <div class="bar" style="height:30%"></div><div class="bar" style="height:35%"></div><div class="bar" style="height:30%"></div>
               <div class="bar" style="height:32%"></div>
             </div>
-            <div class="trend-totals">26<span class="sub">次 / 7d</span></div>
+            <div class="trend-totals">98<span class="sub">次 / 30d</span></div>
           </div>
           <div class="trend-row">
-            <div class="trend-name">registry-manager<span class="repo-tag">:0.5.0</span></div>
+            <div class="trend-name">cairn<span class="repo-tag">:0.7.37</span></div>
             <div class="trend-bars">
               <div class="bar" style="height:10%"></div><div class="bar" style="height:8%"></div><div class="bar" style="height:12%"></div>
               <div class="bar" style="height:14%"></div><div class="bar" style="height:18%"></div><div class="bar" style="height:16%"></div>
               <div class="bar" style="height:22%"></div>
             </div>
-            <div class="trend-totals">14<span class="sub">次 / 7d</span></div>
+            <div class="trend-totals">54<span class="sub">次 / 30d</span></div>
           </div>
           <div class="trend-row">
             <div class="trend-name">registry.k8s.io/pause<span class="repo-tag">:3.10</span></div>
@@ -291,7 +536,7 @@ html, body {
               <div class="bar" style="height:12%"></div><div class="bar" style="height:14%"></div><div class="bar" style="height:12%"></div>
               <div class="bar" style="height:16%"></div>
             </div>
-            <div class="trend-totals">9<span class="sub">次 / 7d</span></div>
+            <div class="trend-totals">38<span class="sub">次 / 30d</span></div>
           </div>
           <div class="trend-row">
             <div class="trend-name">ghcr.io/dexidp/dex<span class="repo-tag">:v2.41.1</span></div>
@@ -300,16 +545,16 @@ html, body {
               <div class="bar" style="height:6%"></div><div class="bar" style="height:8%"></div><div class="bar" style="height:5%"></div>
               <div class="bar" style="height:5%"></div>
             </div>
-            <div class="trend-totals">5<span class="sub">次 / 7d</span></div>
+            <div class="trend-totals">17<span class="sub">次 / 30d</span></div>
           </div>
           <div class="trend-row">
             <div class="trend-name">quay.io/jetstack/cert-manager<span class="repo-tag">:v1.16.1</span></div>
             <div class="trend-bars">
-              <div class="bar" style="height:2%"></div><div class="bar" style="height:4%"></div><div class="bar" style="height:3%"></div>
-              <div class="bar" style="height:5%"></div><div class="bar" style="height:6%"></div><div class="bar" style="height:4%"></div>
-              <div class="bar" style="height:4%"></div>
+              <div class="bar" style="height:4%"></div><div class="bar" style="height:6%"></div><div class="bar" style="height:3%"></div>
+              <div class="bar" style="height:4%"></div><div class="bar" style="height:6%"></div><div class="bar" style="height:5%"></div>
+              <div class="bar" style="height:5%"></div>
             </div>
-            <div class="trend-totals">3<span class="sub">次 / 7d</span></div>
+            <div class="trend-totals">11<span class="sub">次 / 30d</span></div>
           </div>
         </div>
       </div>
@@ -317,60 +562,58 @@ html, body {
       <div class="panel">
         <div class="panel-head">
           <span>客户端 Top</span>
-          <span class="sub">// by User-Agent · exclude local-loop & CI</span>
+          <span class="sub">// top 6 by pulls · 24h</span>
         </div>
         <div class="top-list">
           <div class="top-row">
-            <div class="top-rank">1</div>
-            <div class="top-ua">docker/26.1.3 (linux; amd64)</div>
-            <div class="top-bar-wrap"><div class="top-bar" style="width:95%"></div></div>
-            <div class="top-num">142</div>
+            <span class="top-rank">#1</span>
+            <span class="top-ua">docker/24.0.7 (linux)</span>
+            <div class="top-bar-wrap"><div class="top-bar" style="width:100%"></div></div>
+            <span class="top-num">812</span>
           </div>
           <div class="top-row">
-            <div class="top-rank">2</div>
-            <div class="top-ua">containerd/1.7.13+unknown</div>
-            <div class="top-bar-wrap"><div class="top-bar" style="width:62%"></div></div>
-            <div class="top-num">93</div>
+            <span class="top-rank">#2</span>
+            <span class="top-ua">containerd/1.7.13</span>
+            <div class="top-bar-wrap"><div class="top-bar" style="width:74%"></div></div>
+            <span class="top-num">601</span>
           </div>
           <div class="top-row">
-            <div class="top-rank">3</div>
-            <div class="top-ua">buildkit/0.13.1</div>
-            <div class="top-bar-wrap"><div class="top-bar" style="width:38%"></div></div>
-            <div class="top-num">57</div>
+            <span class="top-rank">#3</span>
+            <span class="top-ua">cairn-sync/0.7.37</span>
+            <div class="top-bar-wrap"><div class="top-bar" style="width:42%"></div></div>
+            <span class="top-num">341</span>
           </div>
           <div class="top-row">
-            <div class="top-rank">4</div>
-            <div class="top-ua">kubernetes/v1.30.0 (linux/amd64) kuber...</div>
+            <span class="top-rank">#4</span>
+            <span class="top-ua">skopeo/1.14.2</span>
             <div class="top-bar-wrap"><div class="top-bar" style="width:28%"></div></div>
-            <div class="top-num">42</div>
+            <span class="top-num">228</span>
           </div>
           <div class="top-row">
-            <div class="top-rank">5</div>
-            <div class="top-ua">skopeo/1.14.2</div>
-            <div class="top-bar-wrap"><div class="top-bar" style="width:14%"></div></div>
-            <div class="top-num">21</div>
+            <span class="top-rank">#5</span>
+            <span class="top-ua">crane/v0.18.0</span>
+            <div class="top-bar-wrap"><div class="top-bar" style="width:18%"></div></div>
+            <span class="top-num">146</span>
           </div>
           <div class="top-row">
-            <div class="top-rank">6</div>
-            <div class="top-ua">docker/24.0.7 (linux; arm64)</div>
-            <div class="top-bar-wrap"><div class="top-bar" style="width:10%"></div></div>
-            <div class="top-num">15</div>
+            <span class="top-rank">#6</span>
+            <span class="top-ua">regctl/v0.6.0</span>
+            <div class="top-bar-wrap"><div class="top-bar" style="width:12%"></div></div>
+            <span class="top-num">98</span>
           </div>
         </div>
       </div>
     </main>
   </div>
 </div>
-<div class="theme-switcher" id="ts">
-  <button class="active" data-t="light">浅色</button><button data-t="dark">深色</button>
-</div>
+
 <script>
-document.querySelectorAll('#ts button').forEach(b => b.onclick = () => {
-  document.querySelectorAll('#ts button').forEach(x => x.classList.remove('active'));
-  b.classList.add('active');
-  if (b.dataset.t === 'dark') document.documentElement.dataset.theme = 'dark';
-  else delete document.documentElement.dataset.theme;
-});
+document.getElementById('theme-btn').onclick = function () {
+  var html = document.documentElement;
+  var isDark = html.dataset.theme === 'dark';
+  if (isDark) { delete html.dataset.theme; this.textContent = '🌙'; }
+  else { html.dataset.theme = 'dark'; this.textContent = '☀️'; }
+};
 </script>
 </body>
 </html>

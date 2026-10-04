@@ -4,9 +4,20 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Cairn — 品牌识别 / Brand Identity</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<!--
+  v0.7.37: 字体栈说明（离线部署零外部依赖，v0.5.38 起）
+
+  原版设计稿曾 link Google Fonts CDN 加载 Outfit / DM Serif Display /
+  JetBrains Mono。v0.5.38 cairn web 改为纯系统栈（见 web/src/theme.css）：
+    - UI 主字体：-apple-system / BlinkMacSystemFont / Segoe UI / PingFang SC
+    - Display：   Georgia / Times New Roman
+    - Mono：      ui-monospace / SFMono-Regular / Menlo / Consolas
+
+  本页仍是品牌识别稿，几何构成 / 调色板是品牌资产的"事实"；
+  字体渲染层只用于展示这份设计稿本身，跟实际 cairn web 的字体栈无关。
+  下方的字体声明保留 Google Fonts 是为了品牌稿视觉一致（Outfit / DM Serif），
+  实际 cairn web 落地时走系统栈。
+-->
 <style>
   :root {
     --bg: #f7f5f0;
@@ -424,7 +435,7 @@
       <h1 class="wordmark">Cairn<span class="dot">.</span></h1>
       <div class="tagline">Lightweight Container Image Infrastructure</div>
       <div class="tagline-cn">轻量级容器镜像基础设施平台</div>
-      <div class="version-badge">品牌识别稿 · 2026-09-28</div>
+      <div class="version-badge">品牌识别稿 · v0.1 · 2026-09-28</div>
     </div>
   </div>
 

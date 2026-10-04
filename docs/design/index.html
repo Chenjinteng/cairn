@@ -3,9 +3,18 @@
 <head>
 <meta charset="UTF-8">
 <title>Cairn · Design Index</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<!--
+  v0.7.37: 字体栈说明（离线部署零外部依赖，v0.5.38 起）
+
+  原版设计稿 link Google Fonts CDN 加载 Outfit / DM Serif Display /
+  JetBrains Mono。v0.5.38 cairn web 改为纯系统栈（见 web/src/theme.css）：
+    - UI 主字体：-apple-system / BlinkMacSystemFont / Segoe UI / PingFang SC
+    - Display：   Georgia / Times New Roman
+    - Mono：      ui-monospace / SFMono-Regular / Menlo / Consolas
+
+  本页是 design 目录的索引，仍使用同样的字体策略（system stack），
+  与 cairn web 字体栈对齐。
+-->
 <style>
 :root {
   --bg: #f7f5f0;
@@ -22,7 +31,8 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body {
   background: var(--bg); color: var(--ink);
-  font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
   font-size: 15px; line-height: 1.6; -webkit-font-smoothing: antialiased;
   background-image:
     radial-gradient(at 8% 0%, rgba(13, 148, 136, 0.04) 0px, transparent 50%),
@@ -36,7 +46,7 @@ html, body {
 .hero-text { flex: 1; }
 .eyebrow { font-size: 11px; font-weight: 600; letter-spacing: 0.18em; color: var(--primary-deep); text-transform: uppercase; margin-bottom: 12px; }
 h1.wordmark {
-  font-family: 'Outfit', sans-serif; font-weight: 600;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif; font-weight: 600;
   font-size: 64px; line-height: 1; letter-spacing: -0.03em;
   color: var(--ink); margin-bottom: 14px;
 }
@@ -50,12 +60,12 @@ h1.wordmark .dot { color: var(--accent); }
 .section { padding: 56px 0; border-bottom: 1px solid var(--line); }
 .section:last-of-type { border-bottom: none; }
 h2 {
-  font-family: 'DM Serif Display', serif;
+  font-family: Georgia, 'Times New Roman', serif;
   font-size: 32px; font-weight: 400; line-height: 1.1;
   letter-spacing: -0.02em; color: var(--ink); margin-bottom: 6px;
 }
 .h-sub {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px; color: var(--ink-soft); margin-bottom: 28px;
 }
 .card-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
@@ -66,16 +76,16 @@ h2 {
   transition: transform .15s, box-shadow .15s;
 }
 .card:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,0,0,0.06); }
-.card .kind { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--primary-deep); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 4px; }
+.card .kind { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 10px; color: var(--primary-deep); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 4px; }
 .card .title { font-size: 17px; font-weight: 600; margin-bottom: 6px; color: var(--ink); }
 .card .desc { font-size: 13px; color: var(--ink-mid); line-height: 1.5; margin-bottom: 10px; }
-.card .meta { display: flex; gap: 12px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-soft); padding-top: 10px; border-top: 1px dashed var(--line); }
+.card .meta { display: flex; gap: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; color: var(--ink-soft); padding-top: 10px; border-top: 1px dashed var(--line); }
 .card .meta span { display: inline-flex; align-items: center; gap: 4px; }
 .card .meta b { color: var(--ink); font-weight: 600; }
 .card.overview-link { background: var(--primary-tint); border-color: transparent; }
 footer {
   margin-top: 60px; padding-top: 28px; border-top: 1px solid var(--line);
-  font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-soft);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; color: var(--ink-soft);
   display: flex; justify-content: space-between; align-items: center;
 }
 </style>
@@ -92,7 +102,7 @@ footer {
       </svg>
     </div>
     <div class="hero-text">
-      <div class="eyebrow">Cairn · Design · 2026-09-29</div>
+      <div class="eyebrow">Cairn · Design · 2026-10-04 · v0.7.37</div>
       <h1 class="wordmark">Cairn<span class="dot">.</span> Design</h1>
       <div class="tagline">Lightweight Container Image Infrastructure</div>
       <div class="tagline-cn">轻量级容器镜像基础设施平台 · 设计资产索引</div>
@@ -102,7 +112,7 @@ footer {
   <div class="lede">
     本目录是 Cairn 的品牌与界面设计资产 — 全部为静态 HTML,无构建依赖,可直接用浏览器打开。
     两个核心文档对仗:品牌稿说明 logo / 色彩 / 字体是什么,UI 设计稿说明 token / 组件 / 页面 / 状态怎么用。
-    6 个 demo-A 静态原型是当前 cairn web(0.5.36)的实际样子,token 与源码完全一致。
+    7 个 demo-A 静态原型是当前 cairn web(0.7.37)的实际样子,token 与源码完全一致。
   </div>
 
   <div class="section">
@@ -137,57 +147,63 @@ footer {
     <h2>页面原型</h2>
     <div class="h-sub">// teal · 当前 cairn web 主题</div>
     <p class="lede" style="margin-top:-12px;margin-bottom:24px;font-size:13px">
-      <code>demo-A-*.html</code> — 6 个 Tab 的实际样子 + 1 个缩略索引。
-      每个 demo 都有<strong style="color:var(--ink)">浅色 / 深色</strong>切换按钮(右下角),配色与 cairn 当前 web(0.5.36)生产色完全一致。
+      <code>demo-A-*.html</code> — 7 个 Tab 的实际样子 + 1 个缩略索引。
+      每个 demo 都有<strong style="color:var(--ink)">浅色 / 深色</strong>切换按钮(右下角),配色与 cairn 当前 web(0.7.37)生产色完全一致。
     </p>
     <div class="card-grid">
       <a class="card overview-link" href="demo-A-overview.html">
         <div class="kind">index</div>
-        <div class="title">6 页缩略索引 →</div>
-        <div class="desc">6 个页面的缩略预览 + 跳转大图 · 推荐从这里开始。</div>
+        <div class="title">7 页缩略索引 →</div>
+        <div class="desc">7 个页面的缩略预览 + 跳转大图 · 推荐从这里开始。</div>
         <div class="meta">
           <span>demo-A-overview.html</span>
-          <span><b>12 KB</b></span>
+          <span><b>22 KB</b></span>
         </div>
       </a>
       <div></div>
     </div>
     <div class="card-grid" style="margin-top:16px">
       <a class="card" href="demo-A-images.html">
-        <div class="kind">page 1 / 6 · images</div>
+        <div class="kind">page 1 / 7 · images</div>
         <div class="title">镜像列表</div>
         <div class="desc">4 仓库 · 5 tag · KPI 4 + 列表 panel · 镜像仓库与 tag 的查看页。</div>
-        <div class="meta"><span>demo-A-images.html</span><span><b>11 KB</b></span></div>
+        <div class="meta"><span>demo-A-images.html</span><span><b>13 KB</b></span></div>
       </a>
       <a class="card" href="demo-A-pull.html">
-        <div class="kind">page 2 / 6 · pull</div>
+        <div class="kind">page 2 / 7 · pull</div>
         <div class="title">镜像拉取</div>
         <div class="desc">7 字段表单 + 3 toggle · 拉取队列 8 行带 progress bar · 从远端拉镜像落本地。</div>
-        <div class="meta"><span>demo-A-pull.html</span><span><b>18 KB</b></span></div>
+        <div class="meta"><span>demo-A-pull.html</span><span><b>21 KB</b></span></div>
       </a>
       <a class="card" href="demo-A-stats.html">
-        <div class="kind">page 3 / 6 · stats</div>
+        <div class="kind">page 3 / 7 · stats</div>
         <div class="title">镜像热度</div>
-        <div class="desc">24×6 热力图 + top 8 镜像 sparkline + 客户端 top 6 · 镜像热度观测。</div>
-        <div class="meta"><span>demo-A-stats.html</span><span><b>24 KB</b></span></div>
+        <div class="desc">12 个月 GitHub-style 热力图 + top 8 镜像 sparkline + 客户端 top 6 · 镜像热度观测。</div>
+        <div class="meta"><span>demo-A-stats.html</span><span><b>35 KB</b></span></div>
+      </a>
+      <a class="card" href="demo-A-sync.html">
+        <div class="kind">page 4 / 7 · sync · new</div>
+        <div class="title">镜像同步</div>
+        <div class="desc">仓库级别周期同步任务 · v0.5.40+ 引入 · pull / push 方向 · cron 表达式定时。</div>
+        <div class="meta"><span>demo-A-sync.html</span><span><b>18 KB</b></span></div>
       </a>
       <a class="card" href="demo-A-credentials.html">
-        <div class="kind">page 4 / 6 · credentials</div>
+        <div class="kind">page 5 / 7 · credentials</div>
         <div class="title">凭据管理</div>
         <div class="desc">5 条凭据 · 连通 / 失败 / 从未测试 三态 · 私有 registry 认证。</div>
-        <div class="meta"><span>demo-A-credentials.html</span><span><b>12 KB</b></span></div>
+        <div class="meta"><span>demo-A-credentials.html</span><span><b>16 KB</b></span></div>
       </a>
       <a class="card" href="demo-A-proxies.html">
-        <div class="kind">page 5 / 6 · proxies</div>
+        <div class="kind">page 6 / 7 · proxies</div>
         <div class="title">代理管理</div>
         <div class="desc">4 条代理 · http/https/socks5 三协议 · 4 状态 · 出网代理配置。</div>
-        <div class="meta"><span>demo-A-proxies.html</span><span><b>12 KB</b></span></div>
+        <div class="meta"><span>demo-A-proxies.html</span><span><b>15 KB</b></span></div>
       </a>
       <a class="card" href="demo-A-settings.html">
-        <div class="kind">page 6 / 6 · settings</div>
+        <div class="kind">page 7 / 7 · settings</div>
         <div class="title">设置</div>
-        <div class="desc">仓库地址 / 认证 / 监听端口只读（v0.5.34） / 运行时（v0.5.36 三个 toggle） / UA 忽略。</div>
-        <div class="meta"><span>demo-A-settings.html</span><span><b>15 KB</b></span></div>
+        <div class="desc">仓库连接 / 功能开关 / 拉取架构 / 热度记录 · 4 个 anchor scroll-spy 区块。</div>
+        <div class="meta"><span>demo-A-settings.html</span><span><b>23 KB</b></span></div>
       </a>
     </div>
   </div>
@@ -200,7 +216,7 @@ footer {
     </p>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px;font-size:13px">
       <div style="background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:18px 22px">
-        <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--primary-deep);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px">// design → code</div>
+        <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;color:var(--primary-deep);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px">// design → code</div>
         <div style="color:var(--ink)">改 demo → 同步</div>
         <ul style="margin:0;padding-left:18px;color:var(--ink-mid);line-height:1.8">
           <li><code>theme.css</code> 的颜色 token</li>
@@ -209,19 +225,21 @@ footer {
         </ul>
       </div>
       <div style="background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:18px 22px">
-        <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--primary-deep);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px">// code → design</div>
+        <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;color:var(--primary-deep);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px">// code → design</div>
         <div style="color:var(--ink)">改源码 → 同步</div>
         <ul style="margin:0;padding-left:18px;color:var(--ink-mid);line-height:1.8">
           <li>任何 token 改名 / 新增</li>
           <li>任何组件样式大调(圆角 / 阴影 / 字号)</li>
-          <li>任何新页面 / 新区块</li>
+          <li>任何新页面 / 新区块（v0.5.40+ sync 页就是这条触发）</li>
+          <li>侧栏分组重做（v0.5.37.4 onPublishGroups 上浮协议）</li>
+          <li>字体栈变更（v0.5.38 去 CDN,改 system stack）</li>
         </ul>
       </div>
     </div>
   </div>
 
   <footer>
-    <span>Cairn Design · 2026-09-29 · 与 cairn 0.5.36 web 同步</span>
+    <span>Cairn Design · 2026-10-04 · 与 cairn 0.7.37 web 同步</span>
     <span>Internal reference · not for redistribution</span>
   </footer>
 </div>
