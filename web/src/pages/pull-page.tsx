@@ -773,7 +773,12 @@ export default function PullPage({ config, sidebarFilter, onPublishGroups }: Pro
         <Form<FormValues>
           form={form}
           layout="vertical"
-          initialValues={{ image: 'library/alpine:3.19', destImage: 'library/alpine:3.19' }}
+          /*
+           * 不再预设 initialValues —— 源 / 目标镜像输入框以 placeholder
+           * 作为示例提示（`alpine:3.19` / `与源镜像同名`），留给用户
+           * 自己填。预填常见 image 会让人误以为是「默认值」/「已有任务」，
+           * 实际每次都新开任务，不该给错觉。
+           */
           onFinish={handleSubmit}
           onValuesChange={handleValuesChange}
           disabled={Boolean(config && !config.allowPull)}
