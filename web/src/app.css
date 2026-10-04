@@ -538,13 +538,20 @@
   text-decoration: underline;
 }
 
-/* 镜像拉取页：源 / 目标 / 高级选项 3 列布局。
- * 源 + 目标各 1fr,高级选项窄卡片(<略小一点,放源代理 + 源认证的 Radio.Group)。
- * 窄屏(md 以下)塌成单列,3 个块各自一行。*/
+/* 镜像拉取页：左侧源 + 目标纵向堆叠,右侧高级选项窄卡片并排。
+ * 视觉重心是左侧主输入,右侧是「常见但次要」的源代理 / 认证选择,
+ * 源 / 目标上下比左右看起来更接近传统的「主输入区」语义。
+ * 窄屏(md 以下)塌成单列:左列两个 Form.Item 各占一行,高选项卡片整宽。*/
 .pull-form-row {
   display: grid;
-  grid-template-columns: 1fr 1fr minmax(260px, 0.85fr);
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.85fr);
   gap: 12px 16px;
+  align-items: stretch;
+}
+.pull-form-left {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 @media (max-width: 900px) {
   .pull-form-row {

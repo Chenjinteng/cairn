@@ -779,82 +779,86 @@ export default function PullPage({ config, sidebarFilter, onPublishGroups }: Pro
           disabled={Boolean(config && !config.allowPull)}
         >
           {/*
-            v0.7.37 布局调整：3 列 grid — 源镜像 / 目标镜像 / 高级选项窄卡片并排。
-            高级选项不再折叠 —— 「源端代理」「源认证」这两个选择是高频操作，
-            每次新建任务都可能要切，折叠一次点一次太烦；放右侧窄卡片里
-            既不挤占源/目标的主输入空间，又保持可见。
+            v0.7.37 布局调整：左侧源 / 目标镜像纵向堆叠,右侧高级选项窄卡片并排。
+            高级选项不再折叠 —— 「源端代理」「源认证」这两个选择是高频操作,
+            每次新建任务都可能要切,折叠一次点一次太烦;放右侧窄卡片里
+            既不挤占源 / 目标的主输入空间,又保持可见。
+            源 / 目标上下布局(而不是左右)是为了视觉重心偏向「主输入区」,
+            高级选项作为辅助选项在右侧更协调。
           */}
           <div className="pull-form-row">
-            <Form.Item
-              label="源镜像名"
-              name="image"
-              extra="支持任意 docker pull 引用：alpine:3.19、library/alpine:3.19、ghcr.io/owner/img:1.0、192.0.2.20:10001/library/alpine:3.9 等。"
-              rules={[
-                { required: true, message: '请填写镜像名' },
-                {
-                  // v0.5.49: 空值由上面的 required 独占负责,这条 validator 只在
-                  // 有值时跑「缺 tag」检查。旧版本这里也判 !ref,空值时两条规则
-                  // 同时触发「请填写镜像名」→ 截图里两条红字叠在一起。
-                  validator: (_, value: string) => {
-                    if (!value || !value.trim()) {
+            <div className="pull-form-left">
+              <Form.Item
+                label="源镜像名"
+                name="image"
+                extra="支持任意 docker pull 引用：alpine:3.19、library/alpine:3.19、ghcr.io/owner/img:1.0、192.0.2.20:10001/library/alpine:3.9 等。"
+                rules={[
+                  { required: true, message: '请填写镜像名' },
+                  {
+                    // v0.5.49: 空值由上面的 required 独占负责,这条 validator 只在
+                    // 有值时跑「缺 tag」检查。旧版本这里也判 !ref,空值时两条规则
+                    // 同时触发「请填写镜像名」→ 截图里两条红字叠在一起。
+                    validator: (_, value: string) => {
+                      if (!value || !value.trim()) {
+                        return Promise.resolve();
+                      }
+                      // 不能用 `value.includes(':')` 判断：主机前缀里也有冒号
+                      // （`192.0.2.20:10001/library/alpine` 会被误判为"已有 tag"），
+                      // 于是提交后才被后端拒，报错还跟输入对不上。
+                      // 正解是先剥掉主机段，再看剩下部分有没有 tag。
+                      const parsed = parseImageReference(value, userHosts);
+                      const ref = parsed.sourceRef;
+                      const colon = ref.lastIndexOf(':');
+                      const tag = colon >= 0 ? ref.slice(colon + 1) : '';
+                      if (!tag || tag.includes('/')) {
+                        return Promise.reject(
+                          new Error('缺少 tag，请写成 <repo>:<tag>，例如 alpine:3.19')
+                        );
+                      }
                       return Promise.resolve();
-                    }
-                    // 不能用 `value.includes(':')` 判断：主机前缀里也有冒号
-                    // （`192.0.2.20:10001/library/alpine` 会被误判为"已有 tag"），
-                    // 于是提交后才被后端拒，报错还跟输入对不上。
-                    // 正解是先剥掉主机段，再看剩下部分有没有 tag。
-                    const parsed = parseImageReference(value, userHosts);
-                    const ref = parsed.sourceRef;
-                    const colon = ref.lastIndexOf(':');
-                    const tag = colon >= 0 ? ref.slice(colon + 1) : '';
-                    if (!tag || tag.includes('/')) {
-                      return Promise.reject(
-                        new Error('缺少 tag，请写成 <repo>:<tag>，例如 alpine:3.19')
-                      );
-                    }
-                    return Promise.resolve();
+                    },
                   },
-                },
-              ]}
-            >
-              <Input placeholder="alpine:3.19" allowClear autoFocus />
-            </Form.Item>
+                ]}
+              >
+                <Input placeholder="alpine:3.19" allowClear autoFocus />
+              </Form.Item>
 
-            <Form.Item
-              label="目标镜像名"
-              name="destImage"
-              extra={
-                host
-                  ? `本仓库地址 ${host}/ 固定不可改；留空表示与源镜像同名。改这里可以把镜像落到别的路径（例如去掉 library/ 前缀）。`
-                  : '本仓库地址固定不可改；留空表示与源镜像同名。'
-              }
-              rules={[
-                {
-                  validator: (_, value: string | undefined) => {
-                    if (!value || !value.trim()) {
-                      return Promise.resolve(); // 留空 = 沿用源镜像
-                    }
-                    const { repo, tag } = splitRepoTag(value);
-                    if (!DEST_REPO_PATTERN.test(repo)) {
-                      return Promise.reject(
-                        new Error('仓库路径只能是小写字母 / 数字 / ._- 分段，且不能带主机')
-                      );
-                    }
-                    if (tag && !DEST_TAG_PATTERN.test(tag)) {
-                      return Promise.reject(new Error('tag 只能包含字母数字与 ._-'));
-                    }
-                    return Promise.resolve();
+              <Form.Item
+                label="目标镜像名"
+                name="destImage"
+                extra={
+                  host
+                    ? `本仓库地址 ${host}/ 固定不可改；留空表示与源镜像同名。改这里可以把镜像落到别的路径（例如去掉 library/ 前缀）。`
+                    : '本仓库地址固定不可改；留空表示与源镜像同名。'
+                }
+                rules={[
+                  {
+                    validator: (_, value: string | undefined) => {
+                      if (!value || !value.trim()) {
+                        return Promise.resolve(); // 留空 = 沿用源镜像
+                      }
+                      const { repo, tag } = splitRepoTag(value);
+                      if (!DEST_REPO_PATTERN.test(repo)) {
+                        return Promise.reject(
+                          new Error('仓库路径只能是小写字母 / 数字 / ._- 分段，且不能带主机')
+                        );
+                      }
+                      if (tag && !DEST_TAG_PATTERN.test(tag)) {
+                        return Promise.reject(new Error('tag 只能包含字母数字与 ._-'));
+                      }
+                      return Promise.resolve();
+                    },
                   },
-                },
-              ]}
-            >
-              {/* 固定前缀用 addonBefore 呈现：视觉上就是"不可编辑的一段"。 */}
-              <Input
-                addonBefore={host ? <span className="mono">{host}/</span> : undefined}
-                placeholder="与源镜像同名"
-                allowClear
-              />
-            </Form.Item>
+                ]}
+              >
+                {/* 固定前缀用 addonBefore 呈现：视觉上就是"不可编辑的一段"。 */}
+                <Input
+                  addonBefore={host ? <span className="mono">{host}/</span> : undefined}
+                  placeholder="与源镜像同名"
+                  allowClear
+                />
+              </Form.Item>
+            </div>
 
             <div className="pull-advanced-card">
               <div className="pull-advanced-card-title">高级选项</div>
