@@ -38,6 +38,7 @@ import {
   Pagination,
   Popconfirm,
   Radio,
+  Segmented,
   Select,
   Space,
   Switch,
@@ -137,6 +138,13 @@ interface FormValues {
   include: string;
   /** v0.7.21：换行分隔的 `repo:tag` 精确清单；非空时引擎跳过 catalog,直接按 spec fetch manifest。 */
   tagsFilter?: string;
+  /**
+   * v0.7.37: UI 互斥切换 ——「Include 模式（glob）」vs「Tags 过滤（精确清单）」。
+   * 之前两条 Form.Item 各自占一屏,modal 太长;现在上面一个 Segmented,
+   * 下面共用同一个 TextArea,name 随 mode 切。后端字段没变(include / tagsFilter
+   * 仍是两条独立字段),提交时按 mode 把另一边留空即可。
+   */
+  filterMode: 'include' | 'tags';
   enabled: boolean;
 }
 
@@ -589,6 +597,7 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
       direction: 'pull',
       include: '',
       tagsFilter: '',
+      filterMode: 'include',
       enabled: true,
     });
     setCredMode('anonymous');  // v0.6.11（SYNC-3）：新建默认匿名,要认证就选「引用凭据」
@@ -618,6 +627,12 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
       remotePassword: '',
       include: task.include,
       tagsFilter: task.tagsFilter ?? '',
+      /*
+       * v0.7.37: 编辑时根据「实际配置了哪个字段」自动切到对应模式。
+       * tagsFilter 非空时切到 tags,否则 include。这样打开 modal 就看到
+       * 跟任务实际匹配的内容,不用用户再手动点 Segmented 切。
+       */
+      filterMode: task.tagsFilter?.trim() ? 'tags' : 'include',
       enabled: task.enabled,
     });
     setModalOpen(true);
@@ -2038,57 +2053,90 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
             </>
           )}
 
-          <Form.Item
-            name="include"
-            label="Include 模式"
-            extra={
-              <span style={{ fontSize: 12, color: '#999' }}>
-                一行一个 glob（`*` 通配）；空 = 同步所有仓库。例：<code>library/*</code>。
-              </span>
-            }
-          >
-            <Input.TextArea rows={3} placeholder={'library/nginx\nlibrary/redis'} />
-          </Form.Item>
-
           {/*
-            v0.7.21: 精确 (repo, tag) 清单 —— 远端 registry 对匿名账号返 401 insufficient_scope
-            拒列 /v2/_catalog 时(典型: TCR / Harbor),docker pull 能直读 manifest,但
-            cairn 的 sync engine 必须 list catalog 才能按 include glob 过滤。把想同步的
-            精确 ref 写这里,引擎直接 fetch manifest 跳过 catalog。留空 = 走上面的
-            Include 模式(原行为)。
+            v0.7.37: 把原来的「Include 模式」「Tags 过滤」两条独立 Form.Item
+            合并成 Segmented + 共用 TextArea。
 
-            文案里点出「互斥风格」但实现不强制 —— 用户同时填两个字段时,当前会优先走
-            tags_filter(因为 runPull 入口先看它),include 被忽略。这个判定在 runPull
-            的注释里有写明,文档 CHANGELOG v0.7.21 会再说明一次。
+            设计理由:两条 Form.Item 各占一个 label / extra / rows=3,modal 拉
+            长且视觉上「重复」(都是 textarea,只是 placeholder 不一样)。互斥
+            的两个字段共享一个输入控件,Segmented 切换 + 动态 name 是最
+            干净的 antd 表达 —— 切换 mode 时只换 Form.Item 的 name,form
+            store 保留两边内容,用户来回切不会丢已写的文本。
 
-            v0.7.22: TextArea 下方实时显示解析结果 —— 「✓ N 条有效」+ 跳过的
-            行(具体原因 + 行号 + 原文)。直接调 parseTagsFilter(同款 Go 端
-            实现,见 ../lib/parse-tags-filter.ts),无后端往返,用户输入时 0
-            卡顿。allBlank 区分"用户没填"vs"用户填了但全无效"两种情况,
-            给不同提示文案。
+            后端字段没改:`runPull` 入口看 tagsFilter 非空优先走精确清单,
+            include 被忽略。两个字段同时存,切换 Segmented 不会影响保存,
+            只决定 modal 当前展示哪个。
+
+            布局:把 Segmented 放进 TextArea 的 label 槽位(label prop 支持 JSX),
+            不会出现「过滤模式」+「Include 模式（glob）」双 label 这种重复。
           */}
-          <Form.Item
-            name="tagsFilter"
-            label="Tags 过滤（精确清单）"
-            extra={
-              <span style={{ fontSize: 12, color: '#999' }}>
-                一行一条 <code>repo:tag</code>（可写 <code>#</code> 开头的注释行）。留空 = 走 Include 模式。
-                典型场景：远端不允许列 catalog，但仍想拉固定的几个镜像。例：<code>bklite/alpine/openssl:3.5.4</code>。
-              </span>
-            }
-          >
-            <Input.TextArea
-              rows={3}
-              placeholder={'bklite/alpine/openssl:3.5.4\n# 注释行会被跳过'}
-            />
+          <Form.Item shouldUpdate noStyle>
+            {() => {
+              const mode = (form.getFieldValue('filterMode') as 'include' | 'tags' | undefined) ?? 'include';
+              const isInclude = mode === 'include';
+              const labelNode = (
+                <span
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 8,
+                  }}
+                >
+                  <Form.Item name="filterMode" noStyle>
+                    <Segmented
+                      size="small"
+                      options={[
+                        { label: 'Include 模式', value: 'include' },
+                        { label: 'Tags 过滤', value: 'tags' },
+                      ]}
+                    />
+                  </Form.Item>
+                </span>
+              );
+              return (
+                <Form.Item
+                  name={isInclude ? 'include' : 'tagsFilter'}
+                  label={labelNode}
+                  extra={
+                    <span style={{ fontSize: 12, color: '#999' }}>
+                      {isInclude ? (
+                        <>
+                          一行一个 glob（`*` 通配）；空 = 同步所有仓库。例：<code>library/*</code>。
+                        </>
+                      ) : (
+                        <>
+                          一行一条 <code>repo:tag</code>（可写 <code>#</code> 开头的注释行）。留空 = 走 Include 模式。
+                          典型场景：远端不允许列 catalog，但仍想拉固定的几个镜像。例：<code>bklite/alpine/openssl:3.5.4</code>。
+                        </>
+                      )}
+                    </span>
+                  }
+                >
+                  <Input.TextArea
+                    rows={3}
+                    placeholder={
+                      isInclude
+                        ? 'library/nginx\nlibrary/redis'
+                        : 'bklite/alpine/openssl:3.5.4\n# 注释行会被跳过'
+                    }
+                  />
+                </Form.Item>
+              );
+            }}
           </Form.Item>
+
           {/*
             v0.7.22: 实时解析预览 —— Form.useWatch 拿到 tagsFilter 字段当前值,
             喂给 parseTagsFilter,渲染 valid 数量 + skipped 行(可点击定位)。
             没值 / 没填 → 不渲染这个区域,避免在刚打开 modal 时多一个空 alert。
+            v0.7.37: 只在 filterMode === 'tags' 时渲染 —— include 模式下
+            parseTagsFilter 不适用,显示预览会让用户误以为这两个字段都是
+            「tags 标签」语义。
           */}
           <Form.Item shouldUpdate noStyle>
             {() => {
+              const mode = (form.getFieldValue('filterMode') as 'include' | 'tags' | undefined) ?? 'include';
+              if (mode !== 'tags') return null;
               const raw = (form.getFieldValue('tagsFilter') as string | undefined) ?? '';
               if (raw.trim() === '') return null;
               const parsed = parseTagsFilter(raw);
