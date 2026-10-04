@@ -77,6 +77,24 @@ registry-manager 明确"一次管理一个 registry"，cairn 沿用。**单进�
 
 `CHANGELOG.md` 按 [Keep a Changelog](https://keepachangelog.com/) 的分组写（新增 / 变更 / 修复 / 文档），**新版本写在最上面**，条目要写"改了什么、为什么、表现是什么"，不要只写"修复 bug"。
 
+### commit / push 也要双 remote
+
+仓库配了两个 remote：
+
+```
+origin    https://github.com/Chenjinteng/cairn.git                # 公网，对外
+internal  http://101.34.128.140:11300/jintengchen/go-hub.git      # 内网 gitea，团队
+```
+
+每次 commit 后**两边都要 push**：
+
+```bash
+git push origin main
+git push internal main
+```
+
+漏 internal → 内网 build / 团队成员拿不到。漏 origin → 公网镜像 / 开源展示落后。只推一个不算完成。
+
 ### Go 工具链版本
 
 `Dockerfile` 里的 `GO_IMAGE` 和 `go.mod` 的 `go` 指令必须对齐（构建镜像和最终依赖的 Go 标准库版本要一致）。**`go mod tidy` 升级 `go` 指令时同时更新 Dockerfile 的 `ARG GO_IMAGE`**。
