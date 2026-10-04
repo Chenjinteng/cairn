@@ -38,7 +38,6 @@ import {
   Pagination,
   Popconfirm,
   Radio,
-  Segmented,
   Select,
   Space,
   Switch,
@@ -2055,48 +2054,47 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
 
           {/*
             v0.7.37: 把原来的「Include 模式」「Tags 过滤」两条独立 Form.Item
-            合并成 Segmented + 共用 TextArea。
+            合并成 Radio.Group + 共用 TextArea。
 
             设计理由:两条 Form.Item 各占一个 label / extra / rows=3,modal 拉
             长且视觉上「重复」(都是 textarea,只是 placeholder 不一样)。互斥
-            的两个字段共享一个输入控件,Segmented 切换 + 动态 name 是最
+            的两个字段共享一个输入控件,Radio.Group 切换 + 动态 name 是最
             干净的 antd 表达 —— 切换 mode 时只换 Form.Item 的 name,form
             store 保留两边内容,用户来回切不会丢已写的文本。
 
-            后端字段没改:`runPull` 入口看 tagsFilter 非空优先走精确清单,
-            include 被忽略。两个字段同时存,切换 Segmented 不会影响保存,
-            只决定 modal 当前展示哪个。
+            控件选型:跟本页「方向」「远端凭据」统一用 Radio.Group + Radio.Button
+            —— 这页的 modal 顶部 Segmented 风格切到这里会跟下面那两处
+            Radio.Button 视觉冲突,改回 Radio.Group 后整页控件语言一致。
 
-            布局:把 Segmented 放进 TextArea 的 label 槽位(label prop 支持 JSX),
-            不会出现「过滤模式」+「Include 模式（glob）」双 label 这种重复。
+            后端字段没改:`runPull` 入口看 tagsFilter 非空优先走精确清单,
+            include 被忽略。两个字段同时存,切换 Radio.Group 不会影响保存,
+            只决定 modal 当前展示哪个。
           */}
-          <Form.Item shouldUpdate noStyle>
+          <Form.Item label="过滤模式">
+            <Form.Item name="filterMode" noStyle>
+              <Radio.Group>
+                <Radio.Button value="include">Include 模式</Radio.Button>
+                <Radio.Button value="tags">Tags 过滤</Radio.Button>
+              </Radio.Group>
+            </Form.Item>
+          </Form.Item>
+
+          <Form.Item
+            shouldUpdate={(prev, curr) => prev.filterMode !== curr.filterMode}
+            noStyle
+          >
             {() => {
-              const mode = (form.getFieldValue('filterMode') as 'include' | 'tags' | undefined) ?? 'include';
+              const mode =
+                (form.getFieldValue('filterMode') as 'include' | 'tags' | undefined) ?? 'include';
               const isInclude = mode === 'include';
-              const labelNode = (
-                <span
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 8,
-                  }}
-                >
-                  <Form.Item name="filterMode" noStyle>
-                    <Segmented
-                      size="small"
-                      options={[
-                        { label: 'Include 模式', value: 'include' },
-                        { label: 'Tags 过滤', value: 'tags' },
-                      ]}
-                    />
-                  </Form.Item>
-                </span>
-              );
               return (
                 <Form.Item
                   name={isInclude ? 'include' : 'tagsFilter'}
-                  label={labelNode}
+                  /*
+                   * label 用空串 ——「过滤模式」已经在上面 Radio.Group 那块
+                   * 显式打过,这里再起一个 label 会重复。
+                   */
+                  label=" "
                   extra={
                     <span style={{ fontSize: 12, color: '#999' }}>
                       {isInclude ? (
