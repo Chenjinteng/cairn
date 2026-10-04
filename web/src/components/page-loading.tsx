@@ -38,8 +38,9 @@
  * 仍可在调用方显式 `delay={0}` 退回旧行为。
  */
 
-import { Spin } from 'antd';
 import { useEffect, useRef, useState } from 'react';
+
+import CairnMark from './cairn-mark';
 
 export interface PageLoadingProps {
   /** 调用方告知 spinner 是否需要展示。 */
@@ -202,7 +203,12 @@ export default function PageLoading({
          */
         background: 'var(--color-bg)',
         color: 'var(--color-text-tertiary, #999)',
-        fontSize: 13,
+        /*
+         * v0.7.47: 字号 13 → 12 —— 跟 cairn-mark size=64 的视觉重量平衡;
+         * 原 13 跟 antd Spin size="large" 配套,现在 cairn-mark 视觉占位更
+         * 收敛(纯色块 vs Spin 有圆环动效),字号一并收一下。
+         */
+        fontSize: 12,
         opacity: hiding ? 0 : 1,
         transition: hiding ? `opacity ${fadeDuration}ms ease` : 'none',
         pointerEvents: hiding ? 'none' : 'auto',
@@ -213,7 +219,9 @@ export default function PageLoading({
         zIndex: 100,
       }}
     >
-      <Spin size="large" />
+      {/* v0.7.47: antd Spin → cairn-mark 石塔建造动画。详见 cairn-mark.tsx
+          顶部注释和 web/src/app.css 的 .cairn-mark-anim-build。*/}
+      <CairnMark size={64} animation="build" />
       <span>{tip}</span>
     </div>
   );

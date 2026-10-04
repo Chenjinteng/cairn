@@ -325,6 +325,69 @@
 }
 
 /*
+ * v0.7.47：Cairn Logo 石塔建造动画 —— 给 cairn-mark.tsx 的 `animation` prop 提供
+ * 样式支持。两种动画：
+ *
+ *   - `build`       一次性石塔建造,无持续效果。适合 PageLoading 蒙板场景:
+ *                    蒙板 fade 掉 cairn 跟着消失,没必要持续呼吸抢戏。
+ *   - `pulse-build` 建造 + 琥珀点持续呼吸。适合 splash / 长期停留的页头
+ *                    (比如 cairn-intro.html hero),让 cairn 有"活"的感觉。
+ *
+ * 入场总时长 ~800ms(PageLoading 蒙板场景:用户没耐心等 1s+);
+ * 较 demo A (v0.7.46 设计稿里 1.2s) 缩了 33%,保留故事感但更克制。
+ *
+ * `prefers-reduced-motion: reduce` 下整个动画降级 —— cairn-mark 直接静态显示。
+ */
+@keyframes cairn-mark-build-stone {
+  0%   { opacity: 0; transform: translateY(14px) scale(0.85); }
+  60%  { opacity: 1; }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes cairn-mark-build-dot {
+  0%   { opacity: 0; transform: translateY(-10px) scale(0); }
+  70%  { opacity: 1; transform: translateY(0) scale(1.2); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes cairn-mark-dot-pulse {
+  0%, 100% { transform: scale(1); filter: drop-shadow(0 0 0 rgba(245, 158, 11, 0)); }
+  50%      { transform: scale(1.18); filter: drop-shadow(0 0 4px rgba(245, 158, 11, 0.45)); }
+}
+.cairn-mark-anim-build .stone,
+.cairn-mark-anim-pulse-build .stone {
+  transform-origin: center bottom;
+  opacity: 0;
+  animation: cairn-mark-build-stone 460ms cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+.cairn-mark-anim-build .stone-1,
+.cairn-mark-anim-pulse-build .stone-1 { animation-delay: 0ms; }
+.cairn-mark-anim-build .stone-2,
+.cairn-mark-anim-pulse-build .stone-2 { animation-delay: 180ms; }
+.cairn-mark-anim-build .stone-3,
+.cairn-mark-anim-pulse-build .stone-3 { animation-delay: 360ms; }
+.cairn-mark-anim-build .dot {
+  transform-origin: center;
+  opacity: 0;
+  animation: cairn-mark-build-dot 500ms cubic-bezier(0.34, 1.56, 0.64, 1) 560ms forwards;
+}
+.cairn-mark-anim-pulse-build .dot {
+  transform-origin: center;
+  opacity: 0;
+  animation:
+    cairn-mark-build-dot 500ms cubic-bezier(0.34, 1.56, 0.64, 1) 560ms forwards,
+    cairn-mark-dot-pulse 2200ms ease-in-out 1300ms infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cairn-mark-anim-build .stone,
+  .cairn-mark-anim-build .dot,
+  .cairn-mark-anim-pulse-build .stone,
+  .cairn-mark-anim-pulse-build .dot {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/*
  * v0.6.22: 全局放慢 PageLoading 的 spinner 旋转 —— 默认 1s/圈看着太急,
  * 用户反馈像「一闪一闪」。改 2s/圈,跟"加载中"这种「等接口」的语义更合。
  *
