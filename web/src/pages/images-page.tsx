@@ -562,6 +562,16 @@ export default function ImagesPage({
             tip="正在读取镜像列表…"
             delay={0}
             minDuration={700}
+            /*
+             * v0.7.51: cover='viewport' 让蒙板用 position: fixed 覆盖整个
+             * viewport,而不是只盖 .table-scroll。否则 .page--fill 顶部 4 张
+             * MetricCard(仓库数 / Tag 数 / 镜像层合计 / 清单刷新时间)
+             * 在 loading 期间露出来,用户可能扫到「仓库数 = 0」的瞬态值,
+             * 造成「看起来没数据」的错觉。其它页面(同步 / 拉取 / 热度 /
+             * 凭据 / 代理 / 设置)继续用 'parent' 默认 —— 它们只有表格
+             * 一个 section 需要遮盖,不需要 fixed。
+             */
+            cover="viewport"
           />
         </div>
       </div>

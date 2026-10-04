@@ -71,6 +71,19 @@ export interface PageLoadingProps {
   minDuration?: number;
   /** 淡出动画时长(毫秒);默认 350ms。 */
   fadeDuration?: number;
+  /**
+   * v0.7.51: 蒙板覆盖范围。
+   *   - `'parent'`（默认）：`position: absolute + inset: 0`，覆盖 nearest
+   *     positioned ancestor 的 padding box。这是 v0.6.22 的行为,适用于
+   *     「蒙板只盖住表格区域」的页面(sync / pull / stats / credentials /
+   *     proxies / settings 等)。
+   *   - `'viewport'`：`position: fixed + inset: 0`，覆盖整个 viewport,
+   *     不跟随任何 scroll container。适用于「页面有多个 section 在 loading
+   *     期间都不应该露出来」的页面(images-page:加载时 .metric-grid 顶部
+   *     4 张 MetricCard 不该露出来给用户,否则用户能扫到「仓库数 = 0」之类
+   *     的瞬态值,造成「看起来没数据」的错觉)。
+   */
+  cover?: 'parent' | 'viewport';
 }
 
 export default function PageLoading({
@@ -79,6 +92,7 @@ export default function PageLoading({
   delay = 200,
   minDuration = 250,
   fadeDuration = 350,
+  cover = 'parent',
 }: PageLoadingProps) {
   /**
    * 状态机:
@@ -187,9 +201,12 @@ export default function PageLoading({
        * background 用主背景色,挡住下层 Table —— 否则 spinner 浮在数据
        * 上方,看着像「数据正在加载」,跟实际语义(数据还没回来)冲突。
        * 淡出到 opacity 0 期间会自然露出来,过渡顺。
+       *
+       * v0.7.51: cover='viewport' 时改用 position: fixed + inset: 0,
+       * 覆盖整个 viewport 而不是父容器 box。详见 cover prop 注释。
        */
       style={{
-        position: 'absolute',
+        position: cover === 'viewport' ? 'fixed' : 'absolute',
         /*
          * inset: 0 + 显式 left/top/width/height 兜底 —— 0.6.23 实测在
          * antd Table 的 fixed-column(操作列 fixed:'right')场景下蒙板
