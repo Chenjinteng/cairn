@@ -67,7 +67,7 @@ export default function ContributionHeatmap({
   const width = HEATMAP_ROW_LABEL_WIDTH + totalCols * pitch;
   const height = HEATMAP_TOP_LABEL_HEIGHT + 7 * pitch;
   const axisY = (row: number) => HEATMAP_TOP_LABEL_HEIGHT + row * pitch + cell / 2 + 4;
-  const period = safeDays >= 360 ? '近 12 个月' : `近 ${safeDays} 天`;
+  const period = safeDays >= 180 ? '近 6 个月' : `近 ${safeDays} 天`;
   /*
    * 灰格子有两个原因（已过期 / 还没开始统计），判定放在 heatmap.ts 里 ——
    * 这类"长得不对但不抛异常"的逻辑必须能单独断言，见 scripts/verify-heatmap.mjs。

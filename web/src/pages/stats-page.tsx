@@ -92,17 +92,21 @@ const WINDOW_VALUES: Record<string, StatsWindow> = {
 const DEFAULT_WINDOW: StatsWindow = 30;
 
 /**
- * 日历的跨度：**固定 12 个月，不随时间窗变化**。
+ * 日历的跨度：**固定 6 个月，不随时间窗变化**。
  *
  * 为什么不跟 Segmented 走：日历的宽度由**列数**决定（一周一列）。30 天只有 5 列，
  * 不论格子多大都只在面板左侧占一小块，右侧一大片空白 —— 实测被反馈"太不好看"。
- * 要像 GitHub 那样铺满，只能靠足够长的跨度：12 个月 ≈ 53 列。
+ * 要像 GitHub 那样铺满，靠足够长的跨度：6 个月 ≈ 27 列,12 个月 ≈ 53 列。
  *
- * 代价：热度数据的保留期默认 90 天，更早的日期会显示成灰色空格。
- * 这不是"没有活动"，而是"数据已被保留期清掉"，所以 caption 里必须写明，
+ * v0.7.37 从 12 个月改到 6 个月:用户反馈 12 个月太长,跟并排的 Top 10 榜单
+ * 「卡片宽度差很大,显得不协调」;6 个月缩短到 ~27 列,热力图本身的视觉密度
+ * 仍然足够(铺开+月标尺节奏),跟右 panel 的视觉重量更平衡。
+ *
+ * 代价：热度数据的保留期默认 90 天,180 天跨度里有 ~90 天会变成灰色空格。
+ * 这不是"没有活动",而是"数据已被保留期清掉",所以 caption 里必须写明,
  * 否则会被读成"那段时间没人用"。
  */
-const HEATMAP_DAYS = 365;
+const HEATMAP_DAYS = 180;
 
 /**
  * v0.6.15 (UI-5): Top 榜单硬上限 10 条。
@@ -266,7 +270,7 @@ export default function StatsPage({
         await Promise.all([
           fetchStatsSummary(days),
           fetchStatsTop(days, topBy),
-          // 日历固定看 12 个月，与上面的时间窗无关（原因见 HEATMAP_DAYS 的注释）。
+          // 日历固定看 6 个月，与上面的时间窗无关（原因见 HEATMAP_DAYS 的注释）。
           fetchStatsSeries(HEATMAP_DAYS),
           fetchStatsEvents(50),
           fetchStatsClients(clientsDays),
@@ -685,7 +689,7 @@ export default function StatsPage({
 
       <div className="stats-chart-row">
         <div className="panel" style={{ padding: 16 }}>
-          <h3 className="stats-panel-title">按天趋势（近 12 个月）</h3>
+          <h3 className="stats-panel-title">按天趋势（近 6 个月）</h3>
           <ContributionHeatmap
             points={points}
             days={HEATMAP_DAYS}
