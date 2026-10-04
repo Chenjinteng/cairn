@@ -159,6 +159,28 @@ function formatRelative(iso: string | undefined): string {
   return `${Math.floor(diff / 86_400_000)} 天前`;
 }
 
+/**
+ * 面向未来时间的短相对时间：「11 分钟后」「2 小时后」「3 天后」。
+ *
+ * v0.7.38 修复 bug —— 之前「下次触发」列直接用 formatRelative,
+ * 未来时间戳算 diff 是负数,撞进 `< 60_000` 那条分支,永远返回「刚刚」。
+ * 频率 15 分钟的 schedule,上次 4 分钟前,实际「11 分钟后」,
+ * UI 错报「刚刚」会让运维以为 cron 没生效 / 调度卡死。
+ *
+ * 容忍 30 秒以内的过去偏差(网络 / DB / 浏览器时钟导致 skip 后):不报「X 分钟前」
+ * 直接说「即将触发」,跟未来表达对称。
+ */
+function formatFutureRelative(iso: string | undefined): string {
+  if (!iso) return '—';
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return '—';
+  const diff = then - Date.now();
+  if (diff < 30_000) return '即将触发';
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟后`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时后`;
+  return `${Math.floor(diff / 86_400_000)} 天后`;
+}
+
 /** 一次运行的时长（毫秒 → 「1.2s」「45ms」）。 */
 function formatDurationMs(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
@@ -2398,7 +2420,20 @@ function ScheduleTab({ schedules, loading, onCreate, onUpdate, onDelete }: Sched
       dataIndex: 'nextRunAt',
       key: 'nextRunAt',
       width: 140,
-      render: (iso: string) => <span style={{ fontSize: 12 }}>{formatRelative(iso)}</span>,
+      /*
+       * v0.7.38: 改用 formatFutureRelative —— 之前用 formatRelative 把未来
+       * 时间当过去算(diff < 0 撞「刚刚」分支),15 分钟周期 + 上次 4 分钟前
+       * 显示「刚刚」是错的。停用时不显示「X 分钟后」(cron 不生效,运维会困惑
+       * 「明明停了为什么还有下次」),直接显示「—」。
+       */
+      render: (_, s) =>
+        s.enabled ? (
+          <Tooltip title={s.nextRunAt}>
+            <span style={{ fontSize: 12 }}>{formatFutureRelative(s.nextRunAt)}</span>
+          </Tooltip>
+        ) : (
+          <span style={{ color: '#999' }}>—</span>
+        ),
     },
     {
       title: '上次',
