@@ -6,6 +6,8 @@
 
 **[English](README.md)** · [中文](./README_ZH.md)
 
+[![Docker Hub](https://img.shields.io/badge/Docker%20Hub-chenjinteng%2Fcairn-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/chenjinteng/cairn) · `docker pull chenjinteng/cairn`
+
 Cairn is a **self-contained container image registry**: it implements the full Docker Registry V2 protocol and ships with a built-in management console. It is **one process, one binary, one registry** — start it where your images should live, and the same port serves the admin UI in a browser.
 
 > 📘 **Want the full product tour?** See the [“What Is This?”](#what-is-this) section below — it covers “What it is / Design goals / Capability map / Single-binary architecture / Quick start / Configuration / Boundaries / Where to start next” in 8 sections. A running instance also ships with [`/cairn-intro.html`](./web/public/cairn-intro.html), reachable from the UI footer’s “Product Intro” link.

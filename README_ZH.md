@@ -6,6 +6,8 @@
 
 **[中文](./README_ZH.md)** · [English](./README.md)
 
+[![Docker Hub](https://img.shields.io/badge/Docker%20Hub-chenjinteng%2Fcairn-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/chenjinteng/cairn) · `docker pull chenjinteng/cairn`
+
 Cairn 是一个**可独立部署的容器镜像仓库**:完整实现 Docker Registry V2 协议,自带管理控制台。它只有**一个进程、一个二进制、一个 registry** —— 起在哪儿,镜像就存在哪儿;浏览器打开同一个端口,就是管理界面。
 
 > 📘 **想看完整产品介绍?** [README 下方「这是什么」段](#这是什么)给出"这是什么 / 设计目标 / 能力地图 / 单二进制架构 / 快速开始 / 配置 / 边界 / 从这里开始"8 节;运行实例上还自带一份[`/cairn-intro.html`](./web/public/cairn-intro.html)(随二进制分发,UI 上点 footer「产品介绍」可访问)。
