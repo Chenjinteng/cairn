@@ -229,7 +229,7 @@ volumes:
 4. `README.md` 里所有 `docker build/tag/push` 示例
 5. `CHANGELOG.md` 新增一节
 
-当前版本:`0.7.52`(来自 `internal/version.Version`,运行时日志和 `/api/config` 都暴露)。
+当前版本:`0.7.53`(来自 `internal/version.Version`,运行时日志和 `/api/config` 都暴露)。
 
 ## 文档索引
 

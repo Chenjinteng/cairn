@@ -10,6 +10,12 @@
   原 preload + onload 兜底方案在受限网络里 Chromium 仍会同步等 woff2 超时(30s+),
   对离线部署是负优化,直接走 `font-family` 顶部声明的系统栈即可。
 
+  v0.7.53: 三字体 woff2 自托管落地(web/public/fonts/),同源。
+  本页 Outfit / JetBrains Mono 走 /fonts/*.woff2(由 cairn 二进制同源 serve),
+  不再依赖 Google CDN。受限网络下首屏不再卡 30s+;字体加载时按 font-display: swap
+  即时 fallback 到本栈其他字体,无白屏。下方 <style> 块新增 @font-face,跟 web/
+  下的 theme.css 头部保持一致,font-family 也都加 'Outfit' / 'JetBrains Mono' 优先。
+
   v0.6.13: 同步版本号到 0.6.13 + 「能力地图」加 sync 卡 + 「单二进制架构」
   加 internal/sync(镜像同步与定时调度, 0.6.0 加 sync tasks, 0.6.11 加 cron
   调度, 0.6.13 协议修复不影响 UI); 控制台 6 页面 → 7 页面。
@@ -160,6 +166,60 @@
   没必要持续)。
 -->
 <style>
+  /*
+   * v0.7.53: 自托管字体 @font-face(同源 /fonts/*.woff2,vite build → webui/dist)。
+   * 跟 web/src/theme.css 头部块一字不差,保持本 splash 页跟主 app 字体一致。
+   * 完整 subset / weight 范围 / unicode-range 见 web/src/theme.css。
+   */
+  @font-face {
+    font-family: 'Outfit';
+    font-style: normal;
+    font-weight: 300 700;
+    font-display: swap;
+    src: url('/fonts/outfit-latin-ext.woff2') format('woff2');
+    unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+  }
+  @font-face {
+    font-family: 'Outfit';
+    font-style: normal;
+    font-weight: 300 700;
+    font-display: swap;
+    src: url('/fonts/outfit-latin.woff2') format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+  }
+  @font-face {
+    font-family: 'JetBrains Mono';
+    font-style: normal;
+    font-weight: 400 500;
+    font-display: swap;
+    src: url('/fonts/jetbrains-mono-latin-ext.woff2') format('woff2');
+    unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+  }
+  @font-face {
+    font-family: 'JetBrains Mono';
+    font-style: normal;
+    font-weight: 400 500;
+    font-display: swap;
+    src: url('/fonts/jetbrains-mono-latin.woff2') format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+  }
+  @font-face {
+    font-family: 'DM Serif Display';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('/fonts/dm-serif-display-latin-ext.woff2') format('woff2');
+    unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+  }
+  @font-face {
+    font-family: 'DM Serif Display';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('/fonts/dm-serif-display-latin.woff2') format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+  }
+
   :root {
     --bg: #f7f5f0;
     --surface: #ffffff;
@@ -178,7 +238,8 @@
   html, body {
     background: var(--bg);
     color: var(--ink);
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+    /* v0.7.53: Outfit 走 /fonts/outfit-latin.woff2(自托管同源),失败降级到系统栈 */
+    font-family: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
     font-size: 15px;
     line-height: 1.6;
     -webkit-font-smoothing: antialiased;
@@ -215,7 +276,7 @@
     margin-bottom: 14px;
   }
   h1.wordmark {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+    font-family: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
     font-weight: 600;
     font-size: 76px;
     line-height: 1;
@@ -277,7 +338,7 @@
     border-radius: 999px;
     font-size: 12px;
     color: var(--ink-soft);
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
   .version-badge::before {
     content: "";
@@ -313,7 +374,7 @@
   section { padding: 56px 0; border-bottom: 1px solid var(--line); }
   section:last-of-type { border-bottom: none; }
   h2 {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+    font-family: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
     font-weight: 500;
     font-size: 26px;
     letter-spacing: -0.015em;
@@ -324,7 +385,7 @@
     font-size: 13px;
     color: var(--ink-soft);
     margin-bottom: 28px;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     letter-spacing: 0.02em;
   }
   p.body {
@@ -334,7 +395,7 @@
   }
   p.body strong { color: var(--ink); font-weight: 500; }
   code {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 0.9em;
     background: var(--line-soft);
     border: 1px solid var(--line);
@@ -356,7 +417,7 @@
   }
   .const-list li:last-child { border-bottom: none; }
   .rel-mark {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 13px;
     font-weight: 500;
     text-align: center;
@@ -383,7 +444,7 @@
   }
   .op-grid .card { padding: 20px 22px; }
   .card-num {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 12px;
     font-weight: 500;
     color: var(--primary-deep);
@@ -391,7 +452,7 @@
   }
   .card-tag {
     display: inline-block;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 11px;
     color: var(--primary-deep);
     background: var(--primary-tint);
@@ -420,7 +481,7 @@
   }
   .arch-row:last-child { border-bottom: none; }
   .arch-key {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 13px;
     font-weight: 500;
     color: var(--primary-deep);
@@ -448,13 +509,13 @@
   .code-bar .d.g { background: #34d399; }
   .code-title {
     margin-left: 8px;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 12px;
     color: rgba(255, 255, 255, 0.45);
   }
   .code-card pre {
     padding: 20px 22px;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 13px;
     line-height: 1.95;
     color: #e5e7eb;
@@ -474,7 +535,7 @@
     color: var(--ink-mid);
   }
   .no-mark {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 12px;
     color: var(--ink-soft);
   }
@@ -519,11 +580,11 @@
   }
   .link-title::after {
     content: "→";
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     color: var(--primary-deep);
   }
   .link-path {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 11.5px;
     color: var(--ink-soft);
     margin-bottom: 6px;

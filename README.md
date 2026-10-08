@@ -229,7 +229,7 @@ The version must be updated in 5 places (missing any one causes drift):
 4. Every `docker build/tag/push` example in `README.md`
 5. A new section at the top of `CHANGELOG.md`
 
-Current version: `0.7.52` (from `internal/version.Version`; exposed in runtime logs and `/api/config`).
+Current version: `0.7.53` (from `internal/version.Version`; exposed in runtime logs and `/api/config`).
 
 ## Documentation Index
 

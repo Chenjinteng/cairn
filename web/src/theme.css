@@ -13,7 +13,92 @@
  *   - 新增 `--font-display`（DM Serif Display）/ `--font-mono`（JetBrains Mono）
  *   - 新增 `--radius-lg: 12px`，KPI 卡 / 面板统一上提到 12px（与 § 4 Surfaces 对齐）
  *   - 字段 key / hash / digest 默认改用 mono（与 § 2 Typography 对齐）
+ *
+ * v0.7.53:三字体（Outfit / DM Serif Display / JetBrains Mono）自托管 woff2 落地。
+ * 见下方 @font-face 块。文件在 web/public/fonts/,由 vite build → internal/webui/dist
+ * 同源打包,运行时通过 cairn 的 webui.Handler 走 /fonts/*.woff2 提供,不再访问
+ * fonts.googleapis.com / fonts.gstatic.com。这是 v0.5.38 短暂回滚到纯 system stack
+ * 之后的再次回炉,这次做彻底 —— 既保留品牌字体(设计稿跟代码一致),又消除受限网络
+ * 下首屏卡 30s+ 的老问题(cairn 设计原则「单进程单二进制 / 离线可跑」一致)。
  */
+
+/*
+ * v0.7.53: 自托管 Google Fonts woff2,消除外部 CDN 依赖。
+ *
+ * Outfit / JetBrains Mono / DM Serif Display 三个字体家族(各 weights × unicode-range subset)
+ * 都搬到 web/public/fonts/ 同源托管,首屏不再卡 fonts.googleapis.com / gstatic.com。
+ *
+ * 文件来源:Google Fonts v15(Outfit) / v24(JetBrains Mono) / v17(DM Serif Display),
+ * 通过 https://fonts.googleapis.com/css2?...&display=swap 端点拿到 woff2 subset。
+ *
+ * - Outfit 300-700 共享同一份 woff2(variable font,Google 把所有 weights 指向同一文件);
+ * - JetBrains Mono 400/500 共享同一份 woff2(也是 variable font);
+ * - DM Serif Display 只有 weight 400,1 个文件。
+ * 浏览器自动选对应字重。
+ *
+ * unicode-range 沿用 Google 原本的 subset 分块,保留 dynamic subsetting 优势
+ * —— 浏览器只下当前页面字符实际命中的子集,不会全量加载。CJK 字符走下面的
+ * system stack(Noto Sans SC / PingFang SC),由浏览器按平台自动选,不在本块声明。
+ *
+ * v0.5.38 历史教训:Chromium 在受限网络(53 跳板机、企业 proxy、纯内网)下同步请求
+ * woff2 直到超时,首屏慢 30s+。本次把 fonts.googleapis.com / gstatic.com 全部外链
+ * 删掉,降级为 system stack 兜底。cairn 设计原则「单进程单二进制 / 离线可跑」一致。
+ */
+
+@font-face {
+  font-family: 'Outfit';
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url('/fonts/outfit-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: 'Outfit';
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url('/fonts/outfit-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400 500;
+  font-display: swap;
+  src: url('/fonts/jetbrains-mono-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400 500;
+  font-display: swap;
+  src: url('/fonts/jetbrains-mono-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'DM Serif Display';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/dm-serif-display-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: 'DM Serif Display';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/dm-serif-display-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
 :root {
   /* 让原生滚动条、表单控件跟随主题，否则深色页面上会插着一根亮滚动条。 */
   color-scheme: light;
@@ -79,10 +164,11 @@
    *   --font-display → hero / 页面大数字（44px 用）;1 个 weight
    *   --font-mono    → hash / digest / 时间戳 / id;3 个 weight (400/500/600)
    *
-   * 浏览器默认 font-display: swap,CDN 不通时立刻 fallback 到 system stack,
-   * 不会阻塞页面（公网:渲染 Outfit;内网/离线:渲染 SF Pro / Segoe UI / PingFang SC）;
-   * 这是 v0.5.37 之前的实际状态,v0.5.38 短暂改为纯 system stack 后,
-   * 现统一回 Outfit + system fallback,跟设计稿一致。
+   * v0.7.53:Outfit / DM Serif Display / JetBrains Mono 都搬到 web/public/fonts/ 同源托管
+   * （见文件头部 @font-face 块）;浏览器解析本文件时会自动去拉 /fonts/*.woff2,
+   * font-display: swap 不阻塞首屏 —— system stack 立即顶上,字体到了一键 swap。
+   * 跟设计稿一致,跟 v0.5.38 的「纯 system stack 回滚」不一样,这次既保留品牌字体
+   * 又消除外部 CDN 依赖。
    *
    * v0.7.43:CJK fallback 补全。旧链只覆盖 macOS / Windows,Linux 容器内
    * + 跨平台浏览器的中文走默认 sans-serif,Linux 默认不是 Noto 的话

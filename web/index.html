@@ -16,15 +16,17 @@
       该期间 theme.css 三个 token 改纯系统栈,渲染效果与 CDN 成功时差异小
       (西文走 SF Pro / Segoe UI,中文走 PingFang SC),换来「离线部署零外部依赖」。
 
-      v0.7.37 改回 Google Fonts + system fallback(本行 <link> 即对应实现)。
-      浏览器默认 font-display: swap,CDN 不通时立刻 fallback 到 system stack
-      (字体声明里 Outfit / DM Serif / JetBrains Mono 后面都跟系统栈);
-      不通≠阻塞,最坏情况是显示几秒 system stack 再到字体,与 v0.5.37 同款行为。
-      设计稿 (docs/design/) 跟代码统一走 Google Fonts,不再「刻意不同」。
+      v0.7.37 改回 Google Fonts + system fallback。
+
+      v0.7.53:三个字体(Outfit / DM Serif Display / JetBrains Mono)的 latin + latin-ext
+      subset woff2 自托管到 web/public/fonts/(同源,vite build → internal/webui/dist
+      打进二进制),theme.css 顶部 @font-face 块声明。本文件不再需要外链
+      fonts.googleapis.com / gstatic.com —— 把 preconnect 和 stylesheet <link> 全删。
+      改用 `<link rel="preload" as="font" type="font/woff2" crossorigin>` 把最常用的
+      Outfit latin(覆盖 ~95% 字符)前置拉取,跟 v0.5.38 的 preload 走不通不一样,这次是
+      同源路径,浏览器走主连接同一栈,不会撞公司 proxy 的解析路径。
     -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="preload" as="font" type="font/woff2" crossorigin href="/fonts/outfit-latin.woff2">
     <script>
       /*
        * 在 React 挂载之前就把主题定下来。

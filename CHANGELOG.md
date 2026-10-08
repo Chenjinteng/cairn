@@ -6,6 +6,44 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.53] - 2026-10-08
+
+三字体（Outfit / DM Serif Display / JetBrains Mono）从 Google Fonts CDN 搬到同源自托管。**消除了首屏对 `fonts.googleapis.com` / `fonts.gstatic.com` 的外部依赖** —— 受限网络（53 跳板机、企业 proxy、纯内网部署）下首屏不再卡 30s+，cairn 设计原则「单进程单二进制 / 离线可跑」一致。
+
+### 新增
+
+- **`web/public/fonts/` 6 个 woff2 文件**
+  - `outfit-latin.woff2`（32KB）/ `outfit-latin-ext.woff2`（16KB）—— UI 主字体，5 weights 共享同一份（variable font，Google 把 300/400/500/600/700 指向同一文件）
+  - `jetbrains-mono-latin.woff2`（32KB）/ `jetbrains-mono-latin-ext.woff2`（12KB）—— hash / digest / 时间戳 / id，2 weights 共享同一份（也是 variable font）
+  - `dm-serif-display-latin.woff2`（20KB）/ `dm-serif-display-latin-ext.woff2`（8KB）—— hero 44px 大数字，1 weight
+  - 总 ~120KB（远小于 1 张 favicon PNG），不引 Noto CJK（cairn 离线友好，多一条 CDN 反向劣化）
+  - unicode-range 沿用 Google 原本的 dynamic subsetting，浏览器只下当前页面字符实际命中的子集
+
+### 变更
+
+- **[`web/src/theme.css`](./web/src/theme.css) — 文件顶部新增 6 个 `@font-face` 块**
+  - 路径统一 `/fonts/*.woff2`（绝对路径，cairn webui.Handler 同源 serve）
+  - 全部 `font-display: swap`，CDN-style 失败时立刻 fallback 到本栈
+  - `--font-sans` / `--font-display` / `--font-mono` 三个 token 的注释更新到 v0.7.53 段落（说明 woff2 同源托管）
+
+- **[`web/index.html`](./web/index.html) — 删 Google Fonts 全部外链**
+  - 删除 `<link rel="preconnect" href="https://fonts.googleapis.com">`
+  - 删除 `<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>`
+  - 删除 `<link rel="stylesheet" href="https://fonts.googleapis.com/css2?...">`（v0.7.37 改回的那行，6 个 fonts 总线 + 5 个 Outfit weight + 2 个 JBM weight + 1 个 DM Serif Display = 一发 5 段 CSS + 后续 N 个 woff2）
+  - 改用 `<link rel="preload" as="font" type="font/woff2" crossorigin href="/fonts/outfit-latin.woff2">` —— 把最常用字体（同源绝对路径）前置拉取，跟 v0.5.38 注释里说的"即便用了 preload 也帮不了受限网络"不一样，这次是同源，主连接同一栈，不会撞公司 proxy 解析路径
+
+- **[`web/public/cairn-intro.html`](./web/public/cairn-intro.html) — splash 页也走本地字体**
+  - 顶部新增 6 个 `@font-face` 块（跟 theme.css 头部块一字不差，保持 splash 跟主 app 字体一致）
+  - 所有 `font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', ...` 改为 `'Outfit', -apple-system, ...`（Outfit 优先，本地 woff2 不到时降级系统栈）
+  - 所有 `font-family: ui-monospace, SFMono-Regular, ...` 改为 `'JetBrains Mono', ui-monospace, ...`
+  - 页面顶部注释从 v0.5.38 的「对离线部署是负优化，直接走 system stack」更新到 v0.7.53 段落
+
+### 修复
+
+- **首屏字体加载问题** —— 受限网络下浏览器会卡在 `fonts.gstatic.com` 同步请求 30s+ 才超时，期间页面被阻塞。本改动把外部依赖从 2 个域名（`fonts.googleapis.com` / `fonts.gstatic.com`）减到 0，跟 cairn「单进程单二进制 / 离线可跑」一致。回炉 v0.5.38 短暂回滚过的「纯 system stack」方案 —— 这次做彻底，既保留品牌字体（设计稿跟代码一致），又消除外部 CDN 依赖。
+
+---
+
 ## [0.7.52] - 2026-10-04
 
 撤回 v0.7.51 的 `PageLoading` `cover` prop 改动 —— `cover='viewport'` 用 `position: fixed + inset: 0` 覆盖整个 viewport,**会盖住顶栏 nav bar**（`.app-header { z-index: 20 }` vs PageLoading `z-index: 100`）,UAT 反馈加载体验不对。代码状态等同 v0.7.50,但版本号不能往回退（v0.7.51 已发布）,用 v0.7.52 标识。无 API / 后端变更。
