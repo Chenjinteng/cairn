@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -54,13 +55,33 @@ type Writer struct {
 // username + password are sent on every request's Authorization header
 // as `Basic base64(user:pass)`. Pass "" for both to talk to an
 // anonymous registry (the receiving middleware must allow it).
-func NewWriter(remoteURL, username, password string) (*Writer, error) {
+//
+// proxyURL (v0.7.54) is the outbound HTTP proxy for every request this
+// Writer makes. Pass "" for a direct connection. The URL is expected to
+// already carry the proxy's credentials as userinfo (the engine bakes
+// them in via proxies.EffectiveURL) — net/http's http.ProxyURL only
+// reads credentials that are embedded IN the URL.
+func NewWriter(remoteURL, username, password, proxyURL string) (*Writer, error) {
 	u, err := url.Parse(remoteURL)
 	if err != nil {
 		return nil, err
 	}
 	if u.Scheme == "" || u.Host == "" {
 		return nil, ErrInvalidURL
+	}
+	transport := &http.Transport{
+		Proxy:               http.ProxyFromEnvironment,
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     90 * time.Second,
+		TLSHandshakeTimeout: 10 * time.Second,
+	}
+	if p := strings.TrimSpace(proxyURL); p != "" {
+		pu, perr := url.Parse(p)
+		if perr != nil {
+			return nil, fmt.Errorf("sync: parse proxy %q: %w", p, perr)
+		}
+		transport.Proxy = http.ProxyURL(pu)
 	}
 	return &Writer{
 		baseURL:  u,
@@ -70,7 +91,8 @@ func NewWriter(remoteURL, username, password string) (*Writer, error) {
 			// Blob uploads can move a lot of bytes for big images; 10 min
 			// covers a 1 GB blob on a 20 Mbps link. Manifests are small
 			// so the per-request context timeout dominates there.
-			Timeout: 10 * time.Minute,
+			Timeout:   10 * time.Minute,
+			Transport: transport,
 		},
 	}, nil
 }

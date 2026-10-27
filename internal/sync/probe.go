@@ -53,7 +53,7 @@ type ProbeResult struct {
 //     (when username OR password is non-empty; mixed-pair is allowed
 //     here unlike Validate, since the operator is mid-typing).
 //   - Categorizes the response into AuthStatus + Message for the UI.
-func ProbeConnection(ctx context.Context, baseURL, username, password string) ProbeResult {
+func ProbeConnection(ctx context.Context, baseURL, username, password, proxyURL string) ProbeResult {
 	u, err := url.Parse(baseURL)
 	if err != nil {
 		return ProbeResult{Message: fmt.Sprintf("URL 解析失败: %v", err)}
@@ -82,7 +82,25 @@ func ProbeConnection(ctx context.Context, baseURL, username, password string) Pr
 	// 漂了 14 个版本才被发现。bump Version 时这里自动跟上,不再漂。
 	req.Header.Set("User-Agent", version.ProbeUserAgent)
 
-	hc := &http.Client{Timeout: 5 * time.Second}
+	// v0.7.54: 出站代理。旧实现用裸 http.Client(默认 transport),
+	// 只认环境变量 HTTP_PROXY / HTTPS_PROXY,完全无视 cairn 代理库里
+	// 配的代理 —— 于是「测试连接」的结果跟真实同步任务走的路径不是
+	// 同一条,测通了实际同步照样失败。现在跟引擎走同一套代理。
+	transport := &http.Transport{
+		Proxy:               http.ProxyFromEnvironment,
+		MaxIdleConns:        10,
+		MaxIdleConnsPerHost: 2,
+		IdleConnTimeout:     30 * time.Second,
+		TLSHandshakeTimeout: 10 * time.Second,
+	}
+	if p := strings.TrimSpace(proxyURL); p != "" {
+		pu, perr := url.Parse(p)
+		if perr != nil {
+			return ProbeResult{Message: fmt.Sprintf("代理地址无效：%v", perr)}
+		}
+		transport.Proxy = http.ProxyURL(pu)
+	}
+	hc := &http.Client{Timeout: 5 * time.Second, Transport: transport}
 	resp, err := hc.Do(req)
 	if err != nil {
 		return ProbeResult{Message: fmt.Sprintf("连接失败: %v", err)}

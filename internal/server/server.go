@@ -206,12 +206,13 @@ func Build(cfg *config.Config) (*Runtime, error) {
 		} else if n > 0 {
 			slog.Info("sync: marked stale running runs as failed", "count", n)
 		}
-		syncEngine := sync.NewEngine(syncStore, store, vault, slog.Default())
+		syncEngine := sync.NewEngine(syncStore, store, vault, proxyStore, slog.Default())
 		syncHandlers = &api.SyncHandlers{
-			Store:  syncStore,
-			Engine: syncEngine,
-			Vault:  vault,
-			Log:    slog.Default(),
+			Store:   syncStore,
+			Engine:  syncEngine,
+			Vault:   vault,
+			Proxies: proxyStore,
+			Log:     slog.Default(),
 		}
 		syncScheduler = sync.NewScheduler(syncStore, syncEngine, slog.Default())
 	}

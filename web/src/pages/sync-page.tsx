@@ -72,6 +72,7 @@ import {
   deleteSyncSchedule,
   deleteSyncTask,
   listCredentials,
+  listProxies,
   listSyncRunItems,
   listSyncRuns,
   listSyncSchedules,
@@ -93,6 +94,7 @@ import type {
   SyncRunStatus,
   SyncSchedule,
   SyncScheduleInput,
+  ProxyEntry,
   SyncTask,
   SyncTaskInput,
 } from '../types';
@@ -125,6 +127,14 @@ interface Props {
  */
 type CredMode = 'anonymous' | 'credential' | 'inline';
 
+/**
+ * v0.7.54：出站代理三档 —— 跟拉取任务页（pull-page.tsx）同一套口径。
+ *   none    — 直连（v0.7.54 之前同步任务的唯一行为,新建默认）
+ *   library — 引用「代理管理」库里的一条
+ *   temp    — 内联填一个临时地址
+ */
+type ProxyMode = 'none' | 'library' | 'temp';
+
 interface FormValues {
   name: string;
   direction: SyncDirection;
@@ -145,6 +155,10 @@ interface FormValues {
    * 仍是两条独立字段),提交时按 mode 把另一边留空即可。
    */
   filterMode: 'include' | 'tags';
+  /** v0.7.54：proxyMode === 'library' 时选中的代理库 id。 */
+  remoteProxyId?: string;
+  /** v0.7.54：proxyMode === 'temp' 时填的临时代理地址。 */
+  remoteProxyUrl?: string;
   enabled: boolean;
 }
 
@@ -529,6 +543,15 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
   /** v0.6.11（SYNC-3）：凭据库列表（Modal 打开时拉一次;凭据是低频数据,不轮询）。 */
   const [credentials, setCredentials] = useState<Credential[]>([]);
   const [credLoading, setCredLoading] = useState(false);
+  /**
+   * v0.7.54：出站代理档位 + 代理库列表。
+   * 放本地 state 而不是 Form 字段 —— 条件渲染要读它,而 `Form.useWatch` 在
+   * destroyOnClose 的 Modal 上有挂载时序坑;本地 state 是稳定的真值来源
+   * (submit / 测试连接都直接读,不再从 validateFields 里拿)。
+   */
+  const [proxyMode, setProxyMode] = useState<ProxyMode>('none');
+  const [proxies, setProxies] = useState<ProxyEntry[]>([]);
+  const [proxyLoading, setProxyLoading] = useState(false);
 
   const refresh = useCallback(async () => {
     const result = await listSyncTasks();
@@ -579,6 +602,24 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
       }
     } finally {
       setCredLoading(false);
+    }
+  };
+
+  /**
+   * v0.7.54：拉代理库列表。失败只提示不阻断 —— 用户仍可切「临时地址」档
+   * 手动填一个,不该因为代理库读不到就把整条新建流程卡死。
+   */
+  const loadProxies = async () => {
+    setProxyLoading(true);
+    try {
+      const result = await listProxies();
+      if (result.success && result.data) {
+        setProxies(result.data);
+      } else {
+        message.error(`加载代理列表失败：${result.message}`);
+      }
+    } finally {
+      setProxyLoading(false);
     }
   };
 
@@ -653,8 +694,10 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
       enabled: true,
     });
     setCredMode('anonymous');  // v0.6.11（SYNC-3）：新建默认匿名,要认证就选「引用凭据」
+    setProxyMode('none');     // v0.7.54：新建默认直连,要走代理就显式选
     setModalOpen(true);
     void loadCredentials();  // 让「引用凭据」档的选择框一开就有数据
+    void loadProxies();      // v0.7.54：让「代理库」档的选择框一开就有数据
   };
 
   const openEdit = (task: SyncTask) => {
@@ -667,6 +710,13 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
      */
     setCredMode(
       task.remoteCredentialId ? 'credential' : task.remoteUsername ? 'inline' : 'anonymous',
+    );
+    /**
+     * v0.7.54：按任务现状推断代理档位 —— 内联地址优先于代理库引用
+     * (跟后端 resolveProxy 的优先级一致:remoteProxyUrl > remoteProxyId)。
+     */
+    setProxyMode(
+      task.remoteProxyUrl?.trim() ? 'temp' : task.remoteProxyId ? 'library' : 'none',
     );
     form.setFieldsValue({
       name: task.name,
@@ -685,10 +735,13 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
        * 跟任务实际匹配的内容,不用用户再手动点 Segmented 切。
        */
       filterMode: task.tagsFilter?.trim() ? 'tags' : 'include',
+      remoteProxyId: task.remoteProxyId ?? undefined,
+      remoteProxyUrl: task.remoteProxyUrl ?? undefined,
       enabled: task.enabled,
     });
     setModalOpen(true);
     void loadCredentials();
+    void loadProxies();  // v0.7.54
   };
 
   const closeModal = () => {
@@ -729,6 +782,9 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
         remoteUsername: credMode === 'inline' ? (values.remoteUsername ?? '').trim() : '',
         remotePassword: credMode === 'inline' ? (values.remotePassword ?? '') : '',
         remoteCredentialId: credMode === 'credential' ? (values.remoteCredentialId ?? '') : '',
+        // v0.7.54: 出站代理。内联地址优先于代理库引用(后端 resolveProxy 同款优先级)。
+        remoteProxyId: proxyMode === 'library' ? (values.remoteProxyId ?? '') : '',
+        remoteProxyUrl: proxyMode === 'temp' ? (values.remoteProxyUrl ?? '').trim() : '',
         include: values.include ?? '',
         // v0.7.21: tags_filter 与 include 正交——前者跳过 catalog 走精确 spec,
         // 后者在 catalog 返的 repos 里 glob。两字段都空也能工作,但用户同时配两个
@@ -1948,6 +2004,11 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
                   message.warning('先选一条凭据再测（或切到「匿名」）');
                   return;
                 }
+                // v0.7.54: 代理库档没选代理 → 先让选（后端只会回 400）
+                if (proxyMode === 'library' && !cur.remoteProxyId) {
+                  message.warning('先选一个代理再测（或切到「直连」/「临时地址」）');
+                  return;
+                }
                 if (credMode === 'inline' && !(cur.remotePassword ?? '')) {
                   message.warning('内联凭据模式下,测连接需要重填一次「远端密码」');
                   return;
@@ -1960,6 +2021,10 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
                       credMode === 'credential' ? (cur.remoteCredentialId ?? '') : '',
                     remoteUsername: credMode === 'inline' ? (cur.remoteUsername ?? '') : '',
                     remotePassword: credMode === 'inline' ? (cur.remotePassword ?? '') : '',
+                    // v0.7.54: 探测必须走跟真实 run 同一条代理路径,否则
+                    // 「测试连接」测的是直连,而受限网络里直连恰恰是不通的那条。
+                    remoteProxyId: proxyMode === 'library' ? (cur.remoteProxyId ?? '') : '',
+                    remoteProxyUrl: proxyMode === 'temp' ? (cur.remoteProxyUrl ?? '').trim() : '',
                   });
                   // v0.6.13 (UI): 结果改用 toast 而不是 modal 顶部内嵌 Alert。
                   // 内嵌 Alert 会撑高 modal、覆盖 form 多出一列内容,在小屏
@@ -2113,6 +2178,99 @@ export default function SyncPage({ sidebarFilter, onPublishGroups, initialTasks,
                   label: `${c.name}（${c.username}@${c.registryUrl}）`,
                 }))}
               />
+            </Form.Item>
+          )}
+
+          {/*
+            v0.7.54：出站代理 —— 跟拉取任务页同一套三档（直连 / 代理库 / 临时地址）。
+
+            为什么同步任务需要它：v0.7.54 之前同步引擎**完全不走代理**
+            （newRemoteClient 建的 registry.Client 没有 Proxy 字段），所以
+            registry 端点和 auth.docker.io 的 token 端点都是直连 —— 在受限
+            网络里 token 那一跳通常被挡掉，于是「能连上 registry 但拉不下来」，
+            而用户明明在代理库里配了代理。
+
+            控件形态照抄 pull-page.tsx 的「源端代理」,连措辞都对齐,免得两个
+            页面对同一件事给出两套说法。
+          */}
+          <Form.Item label="出站代理">
+            <Radio.Group
+              value={proxyMode}
+              onChange={(e) => setProxyMode(e.target.value as ProxyMode)}
+              optionType="button"
+              buttonStyle="solid"
+            >
+              <Radio.Button value="none">直连</Radio.Button>
+              <Radio.Button value="library">代理库</Radio.Button>
+              <Radio.Button value="temp">临时地址</Radio.Button>
+            </Radio.Group>
+            <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>
+              {proxyMode === 'none'
+                ? '直连出网（v0.7.54 之前同步任务的唯一行为）。'
+                : proxyMode === 'library'
+                  ? '从「代理管理」里选一条；改代理只改库里的那条,任务不用动。'
+                  : '临时填一个代理地址,不进代理库。'}
+            </div>
+          </Form.Item>
+
+          {proxyMode === 'library' && (
+            <Form.Item
+              name="remoteProxyId"
+              label="选择代理"
+              rules={[{ required: true, message: '请选择一个代理（或切到「直连」）' }]}
+              extra={
+                <span style={{ fontSize: 12, color: '#999' }}>
+                  列表来自「代理管理」；代理自己的账号密码由后端在运行时带上,不用在这里填。
+                </span>
+              }
+            >
+              <Select
+                showSearch
+                optionFilterProp="label"
+                loading={proxyLoading}
+                placeholder={
+                  proxies.length === 0
+                    ? '代理库还是空的，请先到「代理管理」新增'
+                    : '从代理库中选择'
+                }
+                disabled={proxies.length === 0}
+                notFoundContent={proxyLoading ? '加载中…' : '代理库为空'}
+                options={proxies.map((p) => {
+                  const status = p.lastProbeStatus || '';
+                  const tag =
+                    status === 'ok'
+                      ? ' [可用]'
+                      : status === 'failed'
+                        ? ' [探测失败]'
+                        : '';
+                  return {
+                    value: p.id,
+                    label: `${p.name}（${p.url}）${tag}`,
+                  };
+                })}
+              />
+            </Form.Item>
+          )}
+
+          {proxyMode === 'temp' && (
+            <Form.Item
+              name="remoteProxyUrl"
+              label="临时代理地址"
+              rules={[
+                { required: true, message: '请填写代理地址' },
+                {
+                  pattern: /^https?:\/\/[^\s]+$/i,
+                  message: '需要以 http:// 或 https:// 开头，例如 http://proxy.example.com:8080',
+                },
+              ]}
+              extra={
+                <span style={{ fontSize: 12, color: '#999' }}>
+                  只对这条任务生效，不进代理库。需要账号密码的话把凭据写进地址里
+                  （http://user:pass@host:port）。
+                </span>
+              }
+            >
+              <Input placeholder="http://proxy.example.com:8080" autoComplete="off" />
             </Form.Item>
           )}
 

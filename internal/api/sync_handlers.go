@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/Chenjinteng/cairn/internal/credentials"
+	"github.com/Chenjinteng/cairn/internal/proxies"
 	"github.com/Chenjinteng/cairn/internal/sync"
 )
 
@@ -30,7 +31,12 @@ type SyncHandlers struct {
 	Store  *sync.Store
 	Engine *sync.Engine
 	Vault  *credentials.Vault
-	Log    *slog.Logger
+	// Proxies (v0.7.54) is the outbound-proxy library. Used by the
+	// "测试连接" endpoint to resolve a task's proxy reference the same
+	// way the engine does at run time — otherwise the test would probe a
+	// different path than the run actually takes.
+	Proxies *proxies.Store
+	Log     *slog.Logger
 }
 
 // RegisterRoutes mounts the /sync endpoints on the supplied router.
@@ -219,6 +225,12 @@ func (s *SyncHandlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	existing.Include = in.Include
 	existing.TagsFilter = in.TagsFilter // v0.7.21: bypass /v2/_catalog when set
 	existing.LongTimeoutRepos = in.LongTimeoutRepos // v0.7.22: per-spec 30min timeout for big repos
+	// v0.7.54: outbound proxy. Straight assignment (no three-state merge):
+	// the proxy carries no secret the UI can't re-send, so "whatever the
+	// form says" is the whole contract — same as the pull flow's
+	// sourceProxy / sourceProxyId.
+	existing.RemoteProxyID = strings.TrimSpace(in.RemoteProxyID)
+	existing.RemoteProxyURL = strings.TrimSpace(in.RemoteProxyURL)
 	existing.Enabled = in.Enabled
 
 	if err := existing.Validate(); err != nil {
@@ -436,6 +448,10 @@ type SyncTestInput struct {
 	RemoteCredentialID string `json:"remoteCredentialId"`
 	RemoteUsername     string `json:"remoteUsername"`
 	RemotePassword     string `json:"remotePassword"`
+	// v0.7.54: outbound proxy for the probe. RemoteProxyURL wins over
+	// RemoteProxyID, same precedence as the engine's resolveProxy.
+	RemoteProxyID  string `json:"remoteProxyId"`
+	RemoteProxyURL string `json:"remoteProxyUrl"`
 }
 
 // TestConnection — POST /api/sync/test
@@ -490,8 +506,52 @@ func (s *SyncHandlers) TestConnection(w http.ResponseWriter, r *http.Request) {
 		username, password = cred.Username, cred.Password
 	}
 
-	result := sync.ProbeConnection(r.Context(), in.RemoteURL, username, password)
+	// v0.7.54: 出站代理。测试必须走跟真实 run 同一条路径,否则「测试通过」
+	// 只说明直连能通 —— 而受限网络里直连恰恰是不通的那条。
+	proxyURL, err := s.resolveTestProxy(in)
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, err)
+		return
+	}
+
+	result := sync.ProbeConnection(r.Context(), in.RemoteURL, username, password, proxyURL)
 	writeJSON(w, http.StatusOK, result)
+}
+
+// resolveTestProxy resolves the proxy for a "测试连接" probe: the inline
+// URL wins over the library entry, and the library entry's credentials are
+// baked into the URL as userinfo (net/http's http.ProxyURL only reads
+// credentials that are embedded IN the URL).
+//
+// v0.7.54: mirrors sync.Engine.resolveProxy so the probe and the run use
+// the same effective proxy.
+func (s *SyncHandlers) resolveTestProxy(in SyncTestInput) (string, error) {
+	if inline := strings.TrimSpace(in.RemoteProxyURL); inline != "" {
+		u, err := proxies.EffectiveURL(inline, "", "")
+		if err != nil {
+			return "", err
+		}
+		return u.String(), nil
+	}
+	ref := strings.TrimSpace(in.RemoteProxyID)
+	if ref == "" {
+		return "", nil
+	}
+	if s.Proxies == nil {
+		return "", fmt.Errorf("%w (id=%s)", sync.ErrProxyNotFound, ref)
+	}
+	p, err := s.Proxies.Get(ref)
+	if err != nil {
+		if errors.Is(err, proxies.ErrNotFound) {
+			return "", fmt.Errorf("%w (id=%s)", sync.ErrProxyNotFound, ref)
+		}
+		return "", fmt.Errorf("read proxy %q: %w", ref, err)
+	}
+	u, err := proxies.EffectiveURLFor(p)
+	if err != nil {
+		return "", fmt.Errorf("proxy %q: %w", ref, err)
+	}
+	return u.String(), nil
 }
 
 // SyncScheduleInput is the JSON shape POST/PATCH /api/sync/{id}/schedules

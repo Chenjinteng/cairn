@@ -411,7 +411,16 @@ func (o *Orchestrator) resolveSource(v JobView) (srcURL, user, pass, proxyURL st
 			return "", "", "", "", fmt.Errorf("proxy %q: %w", v.Proxy, gerr)
 		}
 		if proxyURL == "" {
-			proxyURL = p.URL
+			// v0.7.54: 走 EffectiveURL 而不是直接用 p.URL —— 代理库里单独存的
+			// Username / Password 必须以 userinfo 形式拼进 URL,net/http 的
+			// http.ProxyURL 只认 URL 里的凭据。以前这里只取 p.URL,凭据被丢掉:
+			// 「测试连接」按钮(走 api.proxyURLFrom,会拼凭据)是绿的,真正拉取
+			// 却因为代理要认证直接 407。两边现在用同一个转换函数。
+			u, uerr := proxies.EffectiveURLFor(p)
+			if uerr != nil {
+				return "", "", "", "", fmt.Errorf("proxy %q: %w", v.Proxy, uerr)
+			}
+			proxyURL = u.String()
 		}
 	}
 	// v0.5.9: the global registry.proxy setting was removed. Per-job

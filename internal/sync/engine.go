@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Chenjinteng/cairn/internal/credentials"
+	"github.com/Chenjinteng/cairn/internal/proxies"
 	"github.com/Chenjinteng/cairn/internal/registry"
 	"github.com/Chenjinteng/cairn/internal/storage"
 )
@@ -69,7 +70,12 @@ type Engine struct {
 	store *Store
 	local storage.Storage
 	vault *credentials.Vault // nil when the vault failed to open (no REGISTRY_CREDENTIAL_KEY)
-	log   *slog.Logger
+	// proxies (v0.7.54) is the outbound-proxy library, used to resolve a
+	// task's RemoteProxyID into a concrete proxy URL at run time. nil when
+	// the proxy store failed to open — a task that references a proxy then
+	// fails its run with a clear error instead of silently going direct.
+	proxies *proxies.Store
+	log     *slog.Logger
 
 	perTaskMu sync.Mutex
 	perTask   map[int64]*sync.Mutex
@@ -85,9 +91,11 @@ type Engine struct {
 
 // NewEngine constructs an Engine. vault may be nil — tasks that
 // reference the credential library then fail their runs with a clear
-// error instead of panicking; inline/anon tasks are unaffected. log may
-// be nil (defaults to slog.Default()).
-func NewEngine(store *Store, local storage.Storage, vault *credentials.Vault, log *slog.Logger) *Engine {
+// error instead of panicking; inline/anon tasks are unaffected.
+// proxyStore may be nil for the same reason (v0.7.54): tasks that
+// reference a proxy-library entry fail loudly instead of silently going
+// direct. log may be nil (defaults to slog.Default()).
+func NewEngine(store *Store, local storage.Storage, vault *credentials.Vault, proxyStore *proxies.Store, log *slog.Logger) *Engine {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -95,6 +103,7 @@ func NewEngine(store *Store, local storage.Storage, vault *credentials.Vault, lo
 		store:   store,
 		local:   local,
 		vault:   vault,
+		proxies: proxyStore,
 		log:     log,
 		perTask: make(map[int64]*sync.Mutex),
 		cancels: make(map[int64]context.CancelFunc),
@@ -335,10 +344,64 @@ func (e *Engine) resolveCredentials(task SyncTask) (username, password string, e
 	return cred.Username, cred.Password, nil
 }
 
+// resolveProxy returns the effective outbound proxy URL for one run.
+//
+// Precedence (same shape as the pull flow's resolveSource):
+//
+//	inline task.RemoteProxyURL  >  task.RemoteProxyID (proxy library entry)
+//
+// Both empty = direct outbound (the pre-v0.7.54 behaviour).
+//
+// v0.7.54: the sync engine had NO proxy support at all — newRemoteClient
+// built a registry.Client with no Proxy field, so every sync job went out
+// direct. Operators who could only reach Docker Hub through the corporate
+// proxy had no way to mirror anything: the registry endpoint AND the
+// auth.docker.io token endpoint both went direct, and the token fetch is
+// the hop that usually gets blocked.
+//
+// The library entry's Username / Password are baked into the URL as
+// userinfo: net/http's http.ProxyURL only reads credentials that are
+// embedded IN the URL, so a credentialed proxy would otherwise be
+// answered with 407. See proxies.EffectiveURL.
+func (e *Engine) resolveProxy(task SyncTask) (string, error) {
+	if inline := strings.TrimSpace(task.RemoteProxyURL); inline != "" {
+		u, err := proxies.EffectiveURL(inline, "", "")
+		if err != nil {
+			return "", fmt.Errorf("proxy url: %w", err)
+		}
+		return u.String(), nil
+	}
+	ref := strings.TrimSpace(task.RemoteProxyID)
+	if ref == "" {
+		return "", nil
+	}
+	if e.proxies == nil {
+		return "", fmt.Errorf("%w (id=%s)", ErrProxyNotFound, ref)
+	}
+	p, err := e.proxies.Get(ref)
+	if err != nil {
+		if errors.Is(err, proxies.ErrNotFound) {
+			return "", fmt.Errorf("%w (id=%s)", ErrProxyNotFound, ref)
+		}
+		return "", fmt.Errorf("read proxy %q: %w", ref, err)
+	}
+	u, err := proxies.EffectiveURLFor(p)
+	if err != nil {
+		return "", fmt.Errorf("proxy %q: %w", ref, err)
+	}
+	return u.String(), nil
+}
+
 // --- pull: read remote, write local ---------------------------------------
 
 func (e *Engine) runPull(ctx context.Context, task SyncTask, run *SyncRun) error {
 	username, password, err := e.resolveCredentials(task)
+	if err != nil {
+		return err
+	}
+	// v0.7.54: 出站代理。解析一次,整个 run 复用 —— 代理库条目在 run 期间
+	// 被改也等下次 run 生效(跟凭据库同一套语义)。
+	proxyURL, err := e.resolveProxy(task)
 	if err != nil {
 		return err
 	}
@@ -351,7 +414,7 @@ func (e *Engine) runPull(ctx context.Context, task SyncTask, run *SyncRun) error
 	if specs := ParseTagsFilter(task.TagsFilter); len(specs) > 0 {
 		// v0.7.24: 撤掉 v0.7.22 的 LongTimeoutRepos 透传 —— timeout 现在
 		// 在 pullTag 内根据 manifest size 自动切,不需要 caller 介入。
-		return e.pullFromSpecs(ctx, task, username, password, run, specs)
+		return e.pullFromSpecs(ctx, task, username, password, proxyURL, run, specs)
 	}
 
 	// Catalog path: ListRepositories 用 default timeout(小请求);后续
@@ -359,7 +422,7 @@ func (e *Engine) runPull(ctx context.Context, task SyncTask, run *SyncRun) error
 	// 注意:catalog 路径只换 client once,然后 pullRepo 复用,但 pullRepo
 	// 内部 pullTag 每次仍走智能切 timeout 重新 newRemoteClient(rcFactory
 	// 在 pullTag 内),所以即使外层 rc 用 default 也不冲突。
-	rc, err := newRemoteClient(task.RemoteURL, username, password, DefaultSyncTimeout)
+	rc, err := newRemoteClient(task.RemoteURL, username, password, proxyURL, DefaultSyncTimeout)
 	if err != nil {
 		return fmt.Errorf("build remote client: %w", err)
 	}
@@ -373,7 +436,7 @@ func (e *Engine) runPull(ctx context.Context, task SyncTask, run *SyncRun) error
 
 	for _, repoName := range repos {
 		e.progress(ctx, run, repoName, "")
-		if err := e.pullRepo(ctx, task, username, password, rc, run, repoName); err != nil {
+		if err := e.pullRepo(ctx, task, username, password, proxyURL, rc, run, repoName); err != nil {
 			if errors.Is(err, context.Canceled) {
 				// The run is being torn down as a whole; one Info line
 				// instead of a WARN per remaining repo (SYNC-2).
@@ -414,7 +477,7 @@ func (e *Engine) runPull(ctx context.Context, task SyncTask, run *SyncRun) error
 // removed; we don't reuse pullRepo because its name and return type both
 // imply "operate on one repo", and feeding it a list of repos feels worse
 // than a sibling function with its own doc.
-func (e *Engine) pullFromSpecs(ctx context.Context, task SyncTask, username, password string, run *SyncRun, specs []TagSpec) error {
+func (e *Engine) pullFromSpecs(ctx context.Context, task SyncTask, username, password, proxyURL string, run *SyncRun, specs []TagSpec) error {
 	run.ReposTotal = len(specs)
 	e.flushCounters(ctx, run)
 	for _, s := range specs {
@@ -427,7 +490,7 @@ func (e *Engine) pullFromSpecs(ctx context.Context, task SyncTask, username, pas
 		// v0.7.25: pullTag also stamps the timeout decision
 		// ("default" / "long") on the returned tuple so we can
 		// surface it on the item row.
-		bytesTotal, timeoutUsed, tagErr := e.pullTag(ctx, task.RemoteURL, username, password, s.Repository, s.Tag)
+		bytesTotal, timeoutUsed, tagErr := e.pullTag(ctx, task.RemoteURL, username, password, proxyURL, s.Repository, s.Tag)
 		finishedAt := time.Now().UTC()
 		e.recordRunItem(ctx, run.ID, s.Repository, s.Tag, startedAt, finishedAt, bytesTotal, timeoutUsed, tagErr)
 		if errors.Is(tagErr, context.Canceled) {
@@ -462,7 +525,7 @@ func (e *Engine) pullFromSpecs(ctx context.Context, task SyncTask, username, pas
 // A non-nil error return signals a *non-per-tag* failure (list-tags
 // error, context cancellation) — these still abort the whole repo and
 // propagate up.
-func (e *Engine) pullRepo(ctx context.Context, task SyncTask, username, password string, rc *registry.Client, run *SyncRun, repoName string) error {
+func (e *Engine) pullRepo(ctx context.Context, task SyncTask, username, password, proxyURL string, rc *registry.Client, run *SyncRun, repoName string) error {
 	tags, err := rc.ListTags(ctx, repoName)
 	if err != nil {
 		return fmt.Errorf("list tags: %w", err)
@@ -473,7 +536,7 @@ func (e *Engine) pullRepo(ctx context.Context, task SyncTask, username, password
 		startedAt := time.Now().UTC()
 		// v0.7.25: pullTag returns the timeout decision; passed
 		// through to the item row.
-		bytesTotal, timeoutUsed, tagErr := e.pullTag(ctx, task.RemoteURL, username, password, repoName, tag)
+		bytesTotal, timeoutUsed, tagErr := e.pullTag(ctx, task.RemoteURL, username, password, proxyURL, repoName, tag)
 		finishedAt := time.Now().UTC()
 		e.recordRunItem(ctx, run.ID, repoName, tag, startedAt, finishedAt, bytesTotal, timeoutUsed, tagErr)
 		if errors.Is(tagErr, context.Canceled) {
@@ -517,13 +580,13 @@ func (e *Engine) pullRepo(ctx context.Context, task SyncTask, username, password
 // This makes pullTag the single source of truth for timeout dispatch —
 // both the catalog path (pullRepo) and the tags_filter path
 // (pullFromSpecs) get correct behavior with no caller bookkeeping.
-func (e *Engine) pullTag(ctx context.Context, remoteURL, username, password, repoName, tag string) (int64, string, error) {
+func (e *Engine) pullTag(ctx context.Context, remoteURL, username, password, proxyURL, repoName, tag string) (int64, string, error) {
 	// Probe with default timeout. We need a manifest fetch anyway to
 	// know mf.Size; if the manifest fetch itself fails (404 / 401 /
 	// network) we abort with that error and don't get a chance to time
 	// out a layer pull — which is correct (the upstream told us
 	// something's wrong before we burned a long timeout).
-	probeRC, err := newRemoteClient(remoteURL, username, password, DefaultSyncTimeout)
+	probeRC, err := newRemoteClient(remoteURL, username, password, proxyURL, DefaultSyncTimeout)
 	if err != nil {
 		return 0, "", fmt.Errorf("build probe client: %w", err)
 	}
@@ -561,7 +624,7 @@ func (e *Engine) pullTag(ctx context.Context, remoteURL, username, password, rep
 		timeout = LongSyncTimeout
 		timeoutUsed = "long"
 	}
-	specRC, err := newRemoteClient(remoteURL, username, password, timeout)
+	specRC, err := newRemoteClient(remoteURL, username, password, proxyURL, timeout)
 	if err != nil {
 		return mf.Size, timeoutUsed, fmt.Errorf("build pull client: %w", err)
 	}
@@ -640,7 +703,12 @@ func (e *Engine) runPush(ctx context.Context, task SyncTask, run *SyncRun) error
 	if err != nil {
 		return err
 	}
-	writer, err := NewWriter(task.RemoteURL, username, password)
+	// v0.7.54: 出站代理(push 方向同样支持)。
+	proxyURL, err := e.resolveProxy(task)
+	if err != nil {
+		return err
+	}
+	writer, err := NewWriter(task.RemoteURL, username, password, proxyURL)
 	if err != nil {
 		return fmt.Errorf("build remote writer: %w", err)
 	}
@@ -884,12 +952,17 @@ const (
 // > LargeManifestThreshold), or ExtraLongSyncTimeout (manifest
 // > ExtraLargeManifestThreshold, v0.7.27) — all auto-detected by
 // pullTag from manifest size.
-func newRemoteClient(remoteURL, username, password string, timeout time.Duration) (*registry.Client, error) {
+func newRemoteClient(remoteURL, username, password, proxyURL string, timeout time.Duration) (*registry.Client, error) {
 	return registry.NewClient(registry.Config{
 		BaseURL:  remoteURL,
 		Username: username,
 		Password: password,
-		Timeout:  timeout,
+		// v0.7.54: 出站代理。registry.Config.Proxy 会同时作用于 registry
+		// 请求和 Bearer token 请求(两者共享同一个 transport),所以
+		// auth.docker.io 那一跳也走代理 —— 这正是之前同步任务拉 Docker Hub
+		// 失败的原因(它俩都直连,token 那一跳通常被网络挡掉)。
+		Proxy:   proxyURL,
+		Timeout: timeout,
 	})
 }
 // recordRunItem persists one row to sync_run_items reflecting a single

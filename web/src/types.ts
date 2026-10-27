@@ -654,6 +654,16 @@ export interface SyncTask {
   tagsFilter?: string;
   /** @deprecated v0.7.24: 字段已 deprecated —— engine 按 manifest size 自动切 timeout，不需要 user 配置。后端保留兼容，UI 不再渲染。 */
   longTimeoutRepos?: string;
+  /**
+   * v0.7.54：出站代理。`remoteProxyId` 非空 = 引用代理库里的某条；
+   * `remoteProxyUrl` 非空 = 内联地址（临时填）。两者都空 = 直连。
+   * 优先级：内联 URL > 代理库引用（跟拉取任务页同一套口径）。
+   *
+   * 代理库条目自己的账号密码由后端在运行时以 userinfo 形式拼进 URL ——
+   * net/http 的 http.ProxyURL 只认 URL 里带的凭据。
+   */
+  remoteProxyId?: string;
+  remoteProxyUrl?: string;
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
@@ -672,6 +682,9 @@ export interface SyncTaskInput {
   remoteUrl: string;
   remoteUsername: string;
   remotePassword: string;
+  /** v0.7.54：出站代理。`remoteProxyUrl` 优先于 `remoteProxyId`；都空 = 直连。 */
+  remoteProxyId?: string;
+  remoteProxyUrl?: string;
   /** v0.6.11：非空 = 引用凭据库；与内联用户名密码互斥。 */
   remoteCredentialId: string;
   include: string;
@@ -791,6 +804,12 @@ export interface SyncTestInput {
   remoteCredentialId: string;
   remoteUsername: string;
   remotePassword: string;
+  /**
+   * v0.7.54：探测用的出站代理。跟真实 run 走同一条路径 —— 否则「测试连接」
+   * 测的是直连，而受限网络里直连恰恰是不通的那条，测通了实际同步照样失败。
+   */
+  remoteProxyId?: string;
+  remoteProxyUrl?: string;
 }
 
 /**

@@ -592,7 +592,13 @@ func (e *ExtraHandlers) ProbePullSource(w http.ResponseWriter, r *http.Request) 
 		cfg.Proxy = p
 	} else if req.ProxyID != "" && e.Proxies != nil {
 		if p, err := e.Proxies.Get(req.ProxyID); err == nil {
-			cfg.Proxy = strings.TrimSpace(p.URL)
+			// v0.7.54: 走 EffectiveURL 跟真实拉取路径保持一致 —— 代理库里
+			// 单独存的 Username / Password 必须拼进 URL,否则预检能过、实拉 407。
+			if u, uerr := proxies.EffectiveURLFor(p); uerr == nil {
+				cfg.Proxy = u.String()
+			} else {
+				cfg.Proxy = strings.TrimSpace(p.URL)
+			}
 		}
 	}
 	client, err := registry.NewClient(cfg)
@@ -1142,7 +1148,10 @@ func (e *ExtraHandlers) TestCredential(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusNotFound, err)
 		return
 	}
-	result := sync.ProbeConnection(r.Context(), c.URL, c.Username, c.Password)
+	// v0.7.54: 凭据本身不带代理字段,所以这里走直连(留空 = 沿用
+	// HTTP_PROXY / HTTPS_PROXY 环境变量,跟 v0.7.54 之前一致)。
+	// 同步任务的代理是另一条线(sync task 的 remoteProxyId / remoteProxyUrl)。
+	result := sync.ProbeConnection(r.Context(), c.URL, c.Username, c.Password, "")
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -1188,7 +1197,8 @@ func (e *ExtraHandlers) TestCredentialDraft(w http.ResponseWriter, r *http.Reque
 			password = stored.Password
 		}
 	}
-	result := sync.ProbeConnection(r.Context(), registryURL, username, password)
+	// v0.7.54: 同上 —— 凭据不带代理字段,留空 = 直连 / env proxy。
+	result := sync.ProbeConnection(r.Context(), registryURL, username, password, "")
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -1438,34 +1448,11 @@ func (e *ExtraHandlers) TestProxyDraft(w http.ResponseWriter, r *http.Request) {
 // proxyURLFrom parses a proxy address (typed in the form, or read back from the
 // store) and attaches credentials when a username is set.
 //
-// The scheme check is deliberate: the most common typo in the create form is a
-// bare "proxy.corp:8080", which url.Parse happily reads as scheme "proxy" and
-// which would otherwise only surface later as an opaque transport error.
+// v0.7.54: 实现搬到 proxies.EffectiveURL —— 原来这里有一份副本,只有「测试连接」
+// 按钮用;真实拉取路径(pull.resolveSource)取 Proxy.URL 原样,凭据被丢掉,于是
+// 需要认证的代理「测试连接」是绿的、真正拉取 407。两边现在共用同一个转换函数。
 func proxyURLFrom(raw, username, password string) (*url.URL, error) {
-	// Look for a scheme *before* url.Parse: a bare "proxy.corp:8080" is
-	// rejected by url.Parse itself ("first path segment in URL cannot contain
-	// colon"), and surfacing that raw Go error to the form helps nobody. The
-	// message below is the same one the form's own validator shows for this
-	// exact typo.
-	if !strings.Contains(raw, "://") {
-		return nil, errors.New("代理地址无效：需要以 http:// 或 https:// 开头，例如 http://proxy.example.com:8080")
-	}
-	u, err := url.Parse(raw)
-	if err != nil {
-		return nil, errors.New("代理地址无效：" + err.Error())
-	}
-	switch u.Scheme {
-	case "http", "https", "socks5":
-	default:
-		return nil, errors.New("代理地址无效：需要以 http:// 或 https:// 开头，例如 http://proxy.example.com:8080")
-	}
-	if u.Host == "" {
-		return nil, errors.New("代理地址无效：缺少主机名或端口")
-	}
-	if username != "" {
-		u.User = url.UserPassword(username, password)
-	}
-	return u, nil
+	return proxies.EffectiveURL(raw, username, password)
 }
 
 // proxyTestTarget resolves which URL a connectivity test fetches: the caller's

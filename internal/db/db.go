@@ -25,7 +25,7 @@ import (
 
 // SCHEMA_VERSION is bumped together with new migrations.
 // Bump rule: +1 per migration; never reuse a number; never delete a migration.
-const SCHEMA_VERSION = 14
+const SCHEMA_VERSION = 15
 
 // Db is the SQLite wrapper. All exported methods are safe for concurrent use.
 type Db struct {
@@ -511,6 +511,34 @@ var migrations = map[int]string{
 	-- pre-existing rows (timeout decision made but unrecorded); UI
 	-- treats empty == default (5min, no chip).
 	ALTER TABLE sync_run_items ADD COLUMN timeout_used TEXT NOT NULL DEFAULT '';
+	`,
+	15: `
+	-- v0.7.54: per-task outbound proxy for sync jobs.
+	--
+	-- Background: the pull flow (internal/pull) has supported a per-job proxy
+	-- since v0.5.x, but the sync engine (internal/sync) never had one —
+	-- newRemoteClient built a registry.Client with no Proxy field, so every
+	-- sync job went out DIRECT. Operators who could only reach Docker Hub
+	-- through the corporate proxy had no way to mirror anything: the
+	-- registry endpoint and the auth.docker.io token endpoint both went
+	-- direct, and the token fetch is the one that usually gets blocked.
+	--
+	-- Two columns, mirroring the pull flow's two-input shape:
+	--   remote_proxy_id  → proxies.Store entry id (see internal/proxies).
+	--                     The stored entry's Username / Password are baked
+	--                     into the URL as userinfo at run time — net/http's
+	--                     http.ProxyURL only reads credentials that are
+	--                     embedded in the URL.
+	--   remote_proxy_url → inline proxy URL, used when no library entry is
+	--                     referenced (ad-hoc / one-off task).
+	-- Precedence mirrors the pull flow: inline URL wins over the library id.
+	--
+	-- ADD COLUMN not DROP+CREATE — same discipline as v0.7.21/22. Empty
+	-- strings preserve the pre-0.7.54 contract for existing rows (direct
+	-- outbound), so upgrading never changes an existing task's behaviour
+	-- without the operator asking for it.
+	ALTER TABLE sync_tasks ADD COLUMN remote_proxy_id  TEXT NOT NULL DEFAULT '';
+	ALTER TABLE sync_tasks ADD COLUMN remote_proxy_url TEXT NOT NULL DEFAULT '';
 	`,
 }
 

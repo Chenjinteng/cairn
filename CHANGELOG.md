@@ -6,6 +6,41 @@ cairn 的所有显著变更记录于此。格式遵循 [Keep a Changelog](https:
 
 ---
 
+## [0.7.54] - 2026-10-27
+
+代理链路的两个真缺陷:**代理库里存的账号密码在真实拉取时被丢弃**,以及**同步任务完全不支持代理**。两处都表现为「registry 端点能连上、但 `auth.docker.io` 的匿名 token 那一跳挂掉」。
+
+### 修复
+
+- **代理的账号密码在真实拉取时被丢弃**（[`internal/pull/executor.go`](./internal/pull/executor.go)、[`internal/proxies/proxies.go`](./internal/proxies/proxies.go)、[`internal/api/handlers_extra.go`](./internal/api/handlers_extra.go)）
+  - 根因:代理库把凭据存在独立的 `Username` / `Password` 字段里,但 `net/http` 的 `http.ProxyURL` **只认 URL 里带的凭据**（userinfo）。「测试连接」按钮走 `api.proxyURLFrom`,会把凭据拼进 URL;而真实拉取走 `pull.resolveSource`,只取 `Proxy.URL` 原样 —— 凭据被丢掉。
+  - 症状:**「测试连接」显示绿勾,真正拉取直接 407 Proxy Authentication Required**。因为测试和实拉走的是两条不同的代码路径,同一个代理条目,两种行为。
+  - 修法:把 URL 转换逻辑收敛到 `proxies.EffectiveURL(rawURL, username, password)` / `proxies.EffectiveURLFor(p Proxy)` 单一入口,测试、预检、实拉三处共用。`resolveSource` 现在返回带 userinfo 的 URL。
+  - socks5 代理同样支持 —— Go 的 `net/http` 对 socks5 也会读 URL 里的凭据（`socksUsernamePassword` 认证）。
+
+### 新增
+
+- **同步任务（镜像同步）支持出站代理**（[`internal/sync/engine.go`](./internal/sync/engine.go)、[`internal/sync/writer.go`](./internal/sync/writer.go)、[`internal/sync/probe.go`](./internal/sync/probe.go)、[`internal/sync/types.go`](./internal/sync/types.go)、[`internal/sync/store.go`](./internal/sync/store.go)、[`internal/db/db.go`](./internal/db/db.go)、[`internal/api/sync_handlers.go`](./internal/api/sync_handlers.go)、[`web/src/pages/sync-page.tsx`](./web/src/pages/sync-page.tsx)）
+  - 背景:v0.7.54 之前同步引擎**根本不走代理** —— `newRemoteClient` 建的 `registry.Client` 没有 `Proxy` 字段,`grep -i proxy internal/sync` 零命中。同步任务的 registry 端点和 `auth.docker.io` token 端点**都是直连**,而 token 那一跳恰恰是受限网络里最常被挡的。所以「能连上 registry 却拉不下来」,而用户在代理库里配的代理对同步任务毫无作用。
+  - DB:schema v14 → **v15**,`sync_tasks` 加两列 `remote_proxy_id` / `remote_proxy_url`（`TEXT NOT NULL DEFAULT ''`,ADD COLUMN 不 DROP+CREATE）。空串 = 直连,**升级不改变任何存量任务的行为**。
+  - 引擎:`Engine.resolveProxy(task)` 解析优先级 = 内联 `remoteProxyUrl` > 代理库 `remoteProxyId`;代理库条目的账号密码在运行时以 userinfo 形式拼进 URL。
+  - 拉取方向:`registry.Config.Proxy` 对 registry 请求和 **Bearer token 请求同时生效**（两者共享同一个 transport）—— 这正是之前同步任务拉 Docker Hub 失败的那一跳。
+  - 推送方向:`sync.Writer` 的 HTTP client 加了带代理的 transport。
+  - 「测试连接」:`sync.ProbeConnection` 现在带 `proxyURL` 参数,走跟真实 run 同一条路径。以前它用裸 `http.Client`(默认 transport,只认 `HTTP_PROXY` / `HTTPS_PROXY` 环境变量),**无视 cairn 代理库** —— 测的是直连,跟实拉不是同一条路。
+  - UI:同步任务表单加「出站代理」三档（直连 / 代理库 / 临时地址）,控件形态跟拉取任务页的「源端代理」一致。代理库档的 Select 显示每条代理的探测状态（可用 / 探测失败）。
+  - 代理引用失效(代理被删)时**run 显式失败**,不静默降级成直连 —— 静默降级看起来像「网络不稳」,那是完全相反的结论。
+
+### 变更
+
+- **`internal/proxies` 新增 `EffectiveURL` / `EffectiveURLFor`** —— 代理 URL ↔ 凭据的唯一转换点。`api.proxyURLFrom` 保留但改成委托（避免两份实现漂移）。
+- **凭据测试（`TestCredential` / `TestCredentialDraft`）保持直连** —— 凭据结构体本身不带代理字段,这两条路径留空 = 沿用 `HTTP_PROXY` / `HTTPS_PROXY` 环境变量,跟 v0.7.54 之前一致。凭据配代理不在本轮范围内。
+
+### 已知限制
+
+- 代理凭据只存在于代理库里,拉取任务的「临时代理地址」不支持单独填账号密码 —— 需要认证的临时代理请把凭据写进 URL（`http://user:pass@host:port`）。
+
+---
+
 ## [0.7.53] - 2026-10-08
 
 三字体（Outfit / DM Serif Display / JetBrains Mono）从 Google Fonts CDN 搬到同源自托管。**消除了首屏对 `fonts.googleapis.com` / `fonts.gstatic.com` 的外部依赖** —— 受限网络（53 跳板机、企业 proxy、纯内网部署）下首屏不再卡 30s+，cairn 设计原则「单进程单二进制 / 离线可跑」一致。

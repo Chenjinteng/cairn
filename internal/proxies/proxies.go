@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -60,6 +61,64 @@ type Store struct {
 	mu    sync.RWMutex
 	items map[string]Proxy
 }
+
+// EffectiveURL parses a proxy address and attaches the credentials as URL
+// userinfo when a username is set, returning the URL to hand to net/http.
+//
+// **Why the credentials must be baked into the URL**: net/http's
+// http.ProxyURL only reads credentials from the URL's userinfo — it has no
+// other way to learn them. The proxy library stores them in dedicated
+// Username / Password fields, so every caller that actually dials through a
+// proxy has to convert through this helper first.
+//
+// v0.7.54: this used to live in api.proxyURLFrom, and **only** the
+// "测试连接" button used it. The real pull path took Proxy.URL verbatim and
+// silently dropped Username / Password — so a proxy that requires basic
+// auth passed its connectivity test and then failed every pull with
+// "407 Proxy Authentication Required". The divergence was invisible because
+// the test button and the pull used different code paths for the same
+// stored entry. Both now go through here.
+//
+// The scheme check is deliberate: the most common typo in the create form is
+// a bare "proxy.corp:8080", which url.Parse happily reads as scheme "proxy"
+// and which would otherwise only surface later as an opaque transport error.
+//
+// socks5 is accepted too — Go's net/http reads the userinfo for socks5
+// proxies as well (socksUsernamePassword auth), so credentialed socks5
+// proxies work the same as credentialed http ones.
+func EffectiveURL(rawURL, username, password string) (*url.URL, error) {
+	// Look for a scheme *before* url.Parse: a bare "proxy.corp:8080" is
+	// rejected by url.Parse itself ("first path segment in URL cannot contain
+	// colon"), and surfacing that raw Go error to the form helps nobody. The
+	// message below is the same one the form's own validator shows for this
+	// exact typo.
+	if !strings.Contains(rawURL, "://") {
+		return nil, errors.New("代理地址无效：需要以 http:// 或 https:// 开头，例如 http://proxy.example.com:8080")
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, errors.New("代理地址无效：" + err.Error())
+	}
+	switch u.Scheme {
+	case "http", "https", "socks5":
+	default:
+		return nil, errors.New("代理地址无效：需要以 http:// 或 https:// 开头，例如 http://proxy.example.com:8080")
+	}
+	if u.Host == "" {
+		return nil, errors.New("代理地址无效：缺少主机名或端口")
+	}
+	if username != "" {
+		u.User = url.UserPassword(username, password)
+	}
+	return u, nil
+}
+
+// EffectiveURLFor is EffectiveURL for a stored entry: it reads the URL and
+// the credentials off the Proxy record.
+func EffectiveURLFor(p Proxy) (*url.URL, error) {
+	return EffectiveURL(p.URL, p.Username, p.Password)
+}
+
 
 // Open loads (or creates) the proxy store at path.
 func Open(path string) (*Store, error) {

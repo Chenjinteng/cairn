@@ -103,6 +103,21 @@ type SyncTask struct {
 	// it. Pre-0.7.24 tasks with a non-empty value are silently ignored;
 	// they keep their old behavior (5 min everywhere).
 	LongTimeoutRepos   string    `json:"longTimeoutRepos,omitempty"` // DEPRECATED: see engine auto-timeout.
+	// RemoteProxyID / RemoteProxyURL (v0.7.54): per-task outbound proxy.
+	//
+	// RemoteProxyID references an entry in the proxy library
+	// (internal/proxies); RemoteProxyURL is an inline proxy URL for
+	// one-off tasks. Precedence: the inline URL wins over the library
+	// id — same shape as the pull flow (internal/pull.resolveSource).
+	//
+	// The library entry's Username / Password are baked into the URL as
+	// userinfo at run time: net/http's http.ProxyURL only reads
+	// credentials that are embedded IN the URL, so a stored proxy with
+	// credentials would otherwise be rejected with 407.
+	//
+	// Both empty = direct outbound (the pre-v0.7.54 behaviour).
+	RemoteProxyID  string    `json:"remoteProxyId,omitempty"`
+	RemoteProxyURL string    `json:"remoteProxyUrl,omitempty"`
 	Enabled            bool      `json:"enabled"`
 	CreatedAt          time.Time `json:"createdAt"`
 	UpdatedAt          time.Time `json:"updatedAt"`
@@ -150,6 +165,10 @@ type SyncTaskInput struct {
 	// field is preserved for wire / DB compatibility but the UI does
 	// not render it. Engine never reads it.
 	LongTimeoutRepos   string    `json:"longTimeoutRepos"` // DEPRECATED
+	// v0.7.54: per-task outbound proxy (see SyncTask). RemoteProxyURL wins
+	// over RemoteProxyID; both empty = direct.
+	RemoteProxyID  string `json:"remoteProxyId"`
+	RemoteProxyURL string `json:"remoteProxyUrl"`
 	Enabled            bool      `json:"enabled"`
 }
 
@@ -166,6 +185,8 @@ func (in SyncTaskInput) ToTask() SyncTask {
 		Include:            in.Include,
 		TagsFilter:         in.TagsFilter,
 		LongTimeoutRepos:   in.LongTimeoutRepos,
+		RemoteProxyID:      in.RemoteProxyID,
+		RemoteProxyURL:     in.RemoteProxyURL,
 		Enabled:            in.Enabled,
 	}
 }
@@ -304,6 +325,12 @@ var (
 	ErrCredentialIncomplete = errors.New("sync: remote username and password must both be set, or both empty (anonymous)")
 	ErrCredentialConflict   = errors.New("sync: a task cannot reference a credential and carry inline credentials at the same time")
 	ErrCredentialNotFound   = errors.New("sync: referenced credential not found")
+	// v0.7.54: the task references a proxy-library entry that no longer
+	// exists (deleted in the proxies page while the task still points at
+	// it). The run fails loudly instead of silently downgrading to a
+	// direct connection — a silent downgrade looks like "the network is
+	// flaky", which is exactly the wrong conclusion.
+	ErrProxyNotFound = errors.New("sync: referenced proxy not found")
 	ErrTaskNotFound         = errors.New("sync: task not found")
 	ErrRunNotFound          = errors.New("sync: run not found")
 	ErrTaskNameConflict     = errors.New("sync: task name already exists")

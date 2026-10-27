@@ -28,7 +28,7 @@ func TestEngineCancelShortCircuitsBeforeRemoteCall(t *testing.T) {
 	// NewEngine's contract; we only exercise Start + Cancel, not the
 	// actual pull path.
 	store := NewStore(d)
-	eng := NewEngine(store, nil, nil, nil)
+	eng := NewEngine(store, nil, nil, nil, nil)
 
 	task := SyncTask{
 		ID:        1,
@@ -149,7 +149,7 @@ func TestEngineCancelShortCircuitsBeforeRemoteCall(t *testing.T) {
 // must return false, not panic. Cheap to assert since it doesn't touch
 // the DB.
 func TestEngineCancelUnknownTask(t *testing.T) {
-	eng := NewEngine(nil, nil, nil, nil)
+	eng := NewEngine(nil, nil, nil, nil, nil)
 	if eng.Cancel(99999) {
 		t.Errorf("Cancel(99999) returned true; want false for unregistered task")
 	}
